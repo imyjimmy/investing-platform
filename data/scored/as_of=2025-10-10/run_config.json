@@ -1,0 +1,93 @@
+{
+  "filters": {
+    "exclude_binary_event_names": true,
+    "exclude_biotech_pharma": true,
+    "exclude_chinese_adrs": true,
+    "exclude_earnings_week": true,
+    "exclude_etfs": true,
+    "exclude_leveraged_etfs": true,
+    "max_option_spread_pct": 0.15,
+    "min_daily_dollar_volume": 10000000,
+    "min_market_cap": 750000000,
+    "min_option_open_interest": 250,
+    "min_stock_price": 5.0
+  },
+  "providers": {
+    "options_provider": "mock",
+    "price_provider": "mock",
+    "provider_settings": {},
+    "reference_provider": "mock"
+  },
+  "runtime": {
+    "as_of_date": "2025-10-10",
+    "data_dir": "data",
+    "generate_plots": true,
+    "iv_history_lookback_days": 365,
+    "log_level": "INFO",
+    "lookback_days": 400,
+    "save_raw_snapshots": true,
+    "top_n": 10
+  },
+  "scoring": {
+    "beta": 0.18,
+    "implied_volatility": 0.17,
+    "iv_vs_realized": 0.18,
+    "option_liquidity": 0.16,
+    "penalty_event_risk": 0.1,
+    "penalty_microcap": 0.08,
+    "penalty_wide_spreads": 0.12,
+    "persistent_iv": 0.04,
+    "recurring_moves": 0.09,
+    "stock_liquidity": 0.1,
+    "theme_cluster": 0.0,
+    "tradability": 0.08
+  },
+  "strategy": {
+    "atr_window": 14,
+    "avg_dollar_volume_window": 20,
+    "beta_windows": [
+      60,
+      120
+    ],
+    "delta_abs_max": 0.3,
+    "delta_abs_min": 0.1,
+    "front_month_min_dte": 7,
+    "gap_lookback_days": 120,
+    "historical_vol_windows": [
+      20,
+      60,
+      90
+    ],
+    "liquid_expiration_min_contracts": 4,
+    "min_option_bid": 0.25,
+    "near_dated_moneyness_pct": 0.1,
+    "target_dte_max": 45,
+    "target_dte_min": 30
+  },
+  "universe": {
+    "benchmark_tickers": [
+      "SPY",
+      "QQQ"
+    ],
+    "tickers": [
+      "IREN",
+      "CIFR",
+      "MARA",
+      "RIOT",
+      "CLSK",
+      "WULF",
+      "BTDR",
+      "TSLA",
+      "PLTR",
+      "APP",
+      "SMR",
+      "OKLO",
+      "SOUN",
+      "RKLB",
+      "HIMS",
+      "NVDA"
+    ],
+    "universe_csv": null,
+    "universe_name": "demo_high_beta_optionable"
+  }
+}

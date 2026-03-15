@@ -1,0 +1,17 @@
+ticker,sector,industry,theme_cluster,market_cap,shares_outstanding,is_etf,is_leveraged_etf,is_chinese_adr,next_earnings_date,binary_event_risk
+IREN,Information Technology,Bitcoin Mining,BTC Miners,2000000000,185000000,False,False,False,2025-10-04,False
+CIFR,Information Technology,Bitcoin Mining,BTC Miners,1400000000,240000000,False,False,False,2025-09-30,False
+MARA,Information Technology,Bitcoin Mining,BTC Miners,6200000000,255000000,False,False,False,2025-09-27,False
+RIOT,Information Technology,Bitcoin Mining,BTC Miners,4300000000,307000000,False,False,False,2025-09-22,False
+CLSK,Information Technology,Bitcoin Mining,BTC Miners,3800000000,215000000,False,False,False,2025-09-28,False
+WULF,Information Technology,Bitcoin Mining,BTC Miners,1600000000,222000000,False,False,False,2025-10-06,False
+BTDR,Information Technology,Bitcoin Mining,BTC Miners,2600000000,192000000,False,False,True,2025-10-17,False
+TSLA,Consumer Discretionary,Auto Manufacturers,EV,705000000000,3200000000,False,False,False,2025-10-10,False
+PLTR,Technology,Software - Infrastructure,AI Infra,65000000000,2320000000,False,False,False,2025-10-02,False
+APP,Communication Services,Advertising Agencies,Ad Tech,43000000000,365000000,False,False,False,2025-09-29,False
+SMR,Industrials,Specialty Industrial Machinery,Nuclear,5100000000,230000000,False,False,False,2025-09-24,False
+OKLO,Utilities,Utilities - Regulated Electric,Nuclear,3700000000,142000000,False,False,False,2025-09-20,False
+SOUN,Technology,Software - Application,AI Infra,3200000000,355000000,False,False,False,2025-09-26,False
+RKLB,Industrials,Aerospace & Defense,Space,9500000000,505000000,False,False,False,2025-10-09,False
+HIMS,Healthcare,Health Information Services,Consumer Health,8100000000,225000000,False,False,False,2025-10-01,False
+NVDA,Technology,Semiconductors,AI Infra,1980000000000,2450000000,False,False,False,2025-10-03,False
