@@ -1,0 +1,81 @@
+universe:
+  universe_name: "demo_high_beta_optionable"
+  tickers:
+    - IREN
+    - CIFR
+    - MARA
+    - RIOT
+    - CLSK
+    - WULF
+    - BTDR
+    - TSLA
+    - PLTR
+    - APP
+    - SMR
+    - OKLO
+    - SOUN
+    - RKLB
+    - HIMS
+    - NVDA
+  benchmark_tickers:
+    - SPY
+    - QQQ
+
+filters:
+  min_market_cap: 750000000
+  min_daily_dollar_volume: 10000000
+  min_option_open_interest: 250
+  max_option_spread_pct: 0.15
+  min_stock_price: 5.0
+  exclude_earnings_week: true
+  exclude_biotech_pharma: true
+  exclude_chinese_adrs: true
+  exclude_etfs: true
+  exclude_leveraged_etfs: true
+  exclude_binary_event_names: true
+
+strategy:
+  target_dte_min: 30
+  target_dte_max: 45
+  front_month_min_dte: 7
+  delta_abs_min: 0.10
+  delta_abs_max: 0.30
+  min_option_bid: 0.25
+  near_dated_moneyness_pct: 0.10
+  atr_window: 14
+  avg_dollar_volume_window: 20
+  gap_lookback_days: 120
+  beta_windows: [60, 120]
+  historical_vol_windows: [20, 60, 90]
+  liquid_expiration_min_contracts: 4
+
+providers:
+  price_provider: "mock"
+  options_provider: "mock"
+  reference_provider: "mock"
+  allow_mock_providers: true
+  provider_settings: {}
+
+scoring:
+  beta: 0.18
+  implied_volatility: 0.17
+  iv_vs_realized: 0.18
+  option_liquidity: 0.16
+  stock_liquidity: 0.10
+  recurring_moves: 0.09
+  tradability: 0.08
+  persistent_iv: 0.04
+  theme_cluster: 0.00
+  penalty_wide_spreads: 0.12
+  penalty_microcap: 0.08
+  penalty_event_risk: 0.10
+
+runtime:
+  as_of_date: "2026-03-13"
+  data_dir: "data"
+  lookback_days: 400
+  top_n: 10
+  generate_plots: true
+  save_raw_snapshots: true
+  iv_history_lookback_days: 365
+  log_level: "INFO"
