@@ -16,6 +16,7 @@ The original options-scanner pipeline is still present under `src/options_scanne
 
 - Backend: Python + FastAPI + `ib_insync`
 - Frontend: React + TypeScript + Tailwind CSS
+- Desktop shell: Tauri 2
 - Charts: Recharts
 - Data mode: `mock` or `ibkr`
 
@@ -66,13 +67,30 @@ npm install
 cd ..
 ```
 
-6. Start both apps:
+6. Start the browser version:
 
 ```bash
 ./scripts/dev_dashboard.sh
 ```
 
 Then open [http://127.0.0.1:5173](http://127.0.0.1:5173).
+
+## Run the desktop app
+
+To launch the same workstation UI inside a native Tauri window instead of a browser tab:
+
+```bash
+./scripts/start_tauri.sh
+```
+
+This keeps the dashboard layout the same and wraps it in a desktop shell. The launcher builds the current React UI, opens the native Tauri window, and the Tauri runtime points the UI at the local FastAPI service on `127.0.0.1:8000`.
+
+For hot-reload desktop development instead of the one-shot launcher:
+
+```bash
+cd frontend
+npm run tauri:dev
+```
 
 ## Run pieces separately
 
@@ -86,6 +104,12 @@ Frontend only:
 
 ```bash
 ./scripts/start_frontend.sh
+```
+
+Desktop app only:
+
+```bash
+./scripts/start_tauri.sh
 ```
 
 ## API surface
@@ -133,6 +157,7 @@ Positions parser:
 ## Notes on live data
 
 - The app uses the **socket API**, not the Client Portal REST gateway.
+- The Tauri desktop shell uses the same React dashboard UI as the browser version.
 - If market data permissions are missing, some quotes and Greeks may be delayed, partial, or unavailable.
 - Collateral, assignment risk, and scenario outputs are deliberately labeled as heuristics where appropriate.
 - When the gateway is unavailable, the backend returns readable connection errors and will fall back to stale cached snapshots when it has them.
@@ -142,6 +167,7 @@ Positions parser:
 ```text
 options-platform/
   frontend/
+    src-tauri/
   scripts/
   src/
     options_dashboard/

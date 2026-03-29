@@ -7,7 +7,25 @@ import type {
   ScenarioResponse,
 } from "./types";
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
+function resolveApiBaseUrl() {
+  const configuredBaseUrl = import.meta.env.VITE_API_BASE_URL;
+  if (configuredBaseUrl) {
+    return configuredBaseUrl;
+  }
+
+  if (typeof window === "undefined") {
+    return "";
+  }
+
+  const protocol = window.location.protocol;
+  if (protocol === "http:" || protocol === "https:") {
+    return "";
+  }
+
+  return "http://127.0.0.1:8000";
+}
+
+const API_BASE = resolveApiBaseUrl();
 
 export async function fetchJson<T>(path: string): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`);
