@@ -63,7 +63,8 @@ class IBGatewayBrokerService(BrokerService):
         self._next_reconnect_attempt_at: datetime | None = None
         self._last_error: str | None = None
         self._resolved_account_id: str | None = self.settings.ib_account_id
-        self._portfolio_cache: CacheEntry[PortfolioSnapshot] | None = None
+        self._managed_accounts: list[str] = [self.settings.ib_account_id] if self.settings.ib_account_id else []
+        self._portfolio_cache: dict[str, CacheEntry[PortfolioSnapshot]] = {}
         self._quote_cache: dict[str, CacheEntry[UnderlyingQuote]] = {}
         self._chain_cache: dict[str, CacheEntry[OptionChainResponse]] = {}
         self._tasks: Queue[_PendingTask] = Queue()
@@ -88,6 +89,7 @@ class IBGatewayBrokerService(BrokerService):
                 port=self.settings.ib_port,
                 clientId=self.settings.ib_client_id,
                 accountId=self._resolved_account_id,
+                managedAccounts=self._managed_accounts,
                 marketDataType=self.settings.ib_market_data_type,
                 marketDataMode=_market_data_mode_label(self.settings.ib_market_data_type),
                 usingMockData=False,
@@ -97,20 +99,25 @@ class IBGatewayBrokerService(BrokerService):
                 lastError=self._last_error,
             )
 
-    def get_portfolio_snapshot(self) -> PortfolioSnapshot:
-        cached = self._portfolio_cache
+    def get_portfolio_snapshot(self, account_id: str | None = None) -> PortfolioSnapshot:
+        cache_key = self._portfolio_cache_key(account_id)
+        cached = self._portfolio_cache.get(cache_key)
         if cached and _age_seconds(cached.captured_at) <= self.settings.snapshot_cache_ttl_seconds:
             return cached.value
         try:
             snapshot = cast(
                 PortfolioSnapshot,
-                self._submit(self._fetch_portfolio_snapshot, timeout=self.settings.ib_request_timeout_seconds + 5.0),
+                self._submit(lambda ib: self._fetch_portfolio_snapshot(ib, account_id), timeout=self.settings.ib_request_timeout_seconds + 5.0),
             )
-            self._portfolio_cache = CacheEntry(snapshot, datetime.now(UTC))
+            resolved_key = snapshot.account.accountId or cache_key
+            cache_entry = CacheEntry(snapshot, datetime.now(UTC))
+            self._portfolio_cache[resolved_key] = cache_entry
+            self._portfolio_cache[cache_key] = cache_entry
             return snapshot
         except Exception as exc:
-            if self._portfolio_cache is not None:
-                stale = self._portfolio_cache.value
+            stale_entry = self._portfolio_cache.get(cache_key)
+            if stale_entry is not None:
+                stale = stale_entry.value
                 return PortfolioSnapshot(
                     account=stale.account.model_copy(update={"isStale": True}),
                     positions=stale.positions,
@@ -231,10 +238,10 @@ class IBGatewayBrokerService(BrokerService):
         self._remember_account_id(self._resolve_account_id(ib))
         self._mark_connected()
 
-    def _fetch_portfolio_snapshot(self, ib: Any) -> PortfolioSnapshot:
+    def _fetch_portfolio_snapshot(self, ib: Any, requested_account_id: str | None = None) -> PortfolioSnapshot:
         self._ensure_connected(ib)
         generated_at = datetime.now(UTC)
-        account_id = self._resolve_account_id(ib)
+        account_id = self._resolve_account_id(ib, requested_account_id)
         self._remember_account_id(account_id)
         account_summary_rows = list(ib.accountSummary(account_id))
         account_values = {item.tag: item.value for item in account_summary_rows}
@@ -692,19 +699,39 @@ class IBGatewayBrokerService(BrokerService):
                 f"Unable to connect to IB Gateway at {self.settings.ib_host}:{self.settings.ib_port}. Verify the gateway is running and socket API access is enabled."
             )
 
-    def _resolve_account_id(self, ib: Any) -> str:
+    def _resolve_account_id(self, ib: Any, requested_account_id: str | None = None) -> str:
+        if requested_account_id:
+            normalized = requested_account_id.strip().upper()
+            accounts = self._load_managed_accounts(ib)
+            if accounts and normalized not in accounts:
+                raise RuntimeError(f"Account {normalized} is not available in the current IB Gateway session.")
+            return normalized
         if self.settings.ib_account_id:
             return self.settings.ib_account_id
-        accounts = list(ib.managedAccounts())
+        accounts = self._load_managed_accounts(ib)
         if not accounts:
             raise RuntimeError("IB Gateway returned no managed accounts. Check your gateway session and account permissions.")
         return accounts[0]
+
+    def _load_managed_accounts(self, ib: Any) -> list[str]:
+        accounts = list(ib.managedAccounts())
+        normalized = [str(account).strip().upper() for account in accounts if str(account).strip()]
+        self._remember_managed_accounts(normalized)
+        return normalized
+
+    def _portfolio_cache_key(self, account_id: str | None) -> str:
+        return (account_id or self._resolved_account_id or self.settings.ib_account_id or "__default__").strip().upper()
 
     def _remember_account_id(self, account_id: str | None) -> None:
         if not account_id:
             return
         with self._status_lock:
             self._resolved_account_id = account_id
+
+    def _remember_managed_accounts(self, accounts: list[str]) -> None:
+        normalized = [account.strip().upper() for account in accounts if account.strip()]
+        with self._status_lock:
+            self._managed_accounts = normalized
 
     def _mark_connected(self) -> None:
         now = datetime.now(UTC)

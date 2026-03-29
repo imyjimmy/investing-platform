@@ -56,7 +56,7 @@ class BrokerService:
     def connection_status(self) -> ConnectionStatus:
         raise NotImplementedError
 
-    def get_portfolio_snapshot(self) -> PortfolioSnapshot:
+    def get_portfolio_snapshot(self, account_id: str | None = None) -> PortfolioSnapshot:
         raise NotImplementedError
 
     def get_underlying_quote(self, symbol: str) -> UnderlyingQuote:

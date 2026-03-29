@@ -46,6 +46,7 @@ class MockBrokerService(BrokerService):
             port=0,
             clientId=0,
             accountId="DU-MOCK",
+            managedAccounts=["DU-MOCK"],
             marketDataType=4,
             marketDataMode="MOCK",
             usingMockData=True,
@@ -55,13 +56,15 @@ class MockBrokerService(BrokerService):
             lastError=None,
         )
 
-    def get_portfolio_snapshot(self) -> PortfolioSnapshot:
+    def get_portfolio_snapshot(self, account_id: str | None = None) -> PortfolioSnapshot:
         today = date.today()
         generated_at = datetime.now(UTC)
         stock_positions = self._build_stock_positions(today)
         option_positions = self._build_option_positions(today)
         open_orders = self._build_open_orders(today, option_positions, stock_positions)
         account = self._build_account_snapshot(generated_at, stock_positions, option_positions, open_orders)
+        if account_id:
+            account.accountId = account_id
         return PortfolioSnapshot(
             account=account,
             positions=stock_positions,
