@@ -27,6 +27,14 @@ function resolveApiBaseUrl() {
 
 const API_BASE = resolveApiBaseUrl();
 
+function withAccountId(path: string, accountId?: string) {
+  if (!accountId) {
+    return path;
+  }
+  const separator = path.includes("?") ? "&" : "?";
+  return `${path}${separator}accountId=${encodeURIComponent(accountId)}`;
+}
+
 export async function fetchJson<T>(path: string): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`);
   if (!response.ok) {
@@ -48,13 +56,14 @@ export const api = {
   connectionStatus: () => fetchJson<ConnectionStatus>("/api/connection-status"),
   connect: () => fetchJson<ConnectionStatus>("/api/connect"),
   reconnect: () => fetchJson<ConnectionStatus>("/api/reconnect"),
-  riskSummary: () => fetchJson<RiskSummaryResponse>("/api/account/risk-summary"),
-  optionPositions: () => fetchJson<OptionPositionsResponse>("/api/account/options-positions"),
-  openOrders: () => fetchJson<OpenOrdersResponse>("/api/account/open-orders"),
+  riskSummary: (accountId?: string) => fetchJson<RiskSummaryResponse>(withAccountId("/api/account/risk-summary", accountId)),
+  optionPositions: (accountId?: string) =>
+    fetchJson<OptionPositionsResponse>(withAccountId("/api/account/options-positions", accountId)),
+  openOrders: (accountId?: string) => fetchJson<OpenOrdersResponse>(withAccountId("/api/account/open-orders", accountId)),
   chain: (symbol: string, expiry?: string) =>
     fetchJson<OptionChainResponse>(`/api/market/chain/${symbol}${expiry ? `?expiry=${expiry}` : ""}`),
-  scenario: (movePct: number, daysForward: number, ivShockPct: number) =>
+  scenario: (movePct: number, daysForward: number, ivShockPct: number, accountId?: string) =>
     fetchJson<ScenarioResponse>(
-      `/api/analytics/scenario?movePct=${movePct}&daysForward=${daysForward}&ivShockPct=${ivShockPct}`,
+      withAccountId(`/api/analytics/scenario?movePct=${movePct}&daysForward=${daysForward}&ivShockPct=${ivShockPct}`, accountId),
     ),
 };

@@ -87,8 +87,13 @@ function isPaperTradingAccountId(accountId: string | null | undefined) {
   return accountId.trim().toUpperCase().startsWith("DU");
 }
 
+function uniqueAccounts(accounts: Array<string | null | undefined>) {
+  return Array.from(new Set(accounts.map((accountId) => accountId?.trim().toUpperCase()).filter(Boolean) as string[]));
+}
+
 function App() {
   const [chainSymbol, setChainSymbol] = useState("NVDA");
+  const [selectedAccountId, setSelectedAccountId] = useState<string | undefined>(undefined);
   const [selectedExpiry, setSelectedExpiry] = useState<string | undefined>(undefined);
   const [tickerFilter, setTickerFilter] = useState("");
   const [rightFilter, setRightFilter] = useState<"ALL" | "C" | "P">("ALL");
@@ -112,20 +117,20 @@ function App() {
   });
 
   const riskSummaryQuery = useQuery({
-    queryKey: ["risk-summary"],
-    queryFn: api.riskSummary,
+    queryKey: ["risk-summary", selectedAccountId],
+    queryFn: () => api.riskSummary(selectedAccountId),
     refetchInterval: 15_000,
   });
 
   const optionPositionsQuery = useQuery({
-    queryKey: ["option-positions"],
-    queryFn: api.optionPositions,
+    queryKey: ["option-positions", selectedAccountId],
+    queryFn: () => api.optionPositions(selectedAccountId),
     refetchInterval: 15_000,
   });
 
   const openOrdersQuery = useQuery({
-    queryKey: ["open-orders"],
-    queryFn: api.openOrders,
+    queryKey: ["open-orders", selectedAccountId],
+    queryFn: () => api.openOrders(selectedAccountId),
     refetchInterval: 15_000,
   });
 
@@ -136,8 +141,8 @@ function App() {
   });
 
   const scenarioQuery = useQuery({
-    queryKey: ["scenario", movePct, daysForward, ivShockPct],
-    queryFn: () => api.scenario(movePct, daysForward, ivShockPct),
+    queryKey: ["scenario", selectedAccountId, movePct, daysForward, ivShockPct],
+    queryFn: () => api.scenario(movePct, daysForward, ivShockPct, selectedAccountId),
   });
 
   const connectMutation = useMutation({ mutationFn: api.connect });
@@ -150,11 +155,25 @@ function App() {
     }
   }, [chainQuery.data?.selectedExpiry, selectedExpiry]);
 
+  useEffect(() => {
+    const availableAccounts = uniqueAccounts([
+      ...(connectionQuery.data?.managedAccounts ?? []),
+      connectionQuery.data?.accountId,
+      riskSummaryQuery.data?.account.accountId,
+    ]);
+    if (availableAccounts.length === 0) {
+      return;
+    }
+    if (!selectedAccountId || !availableAccounts.includes(selectedAccountId)) {
+      setSelectedAccountId(availableAccounts[0]);
+    }
+  }, [connectionQuery.data?.accountId, connectionQuery.data?.managedAccounts, riskSummaryQuery.data?.account.accountId, selectedAccountId]);
+
   const risk = riskSummaryQuery.data;
   const optionPositions = optionPositionsQuery.data?.positions ?? [];
   const openOrders = openOrdersQuery.data?.orders ?? [];
   const accountId = risk?.account.accountId ?? connectionQuery.data?.accountId ?? null;
-  const isPaperTrading = isPaperTradingAccountId(accountId);
+  const accountTabs = uniqueAccounts([...(connectionQuery.data?.managedAccounts ?? []), accountId]);
   const watchlist = Array.from(new Set(["NVDA", ...(risk?.watchlist ?? []), ...optionPositions.map((position) => position.symbol)])).sort();
   const chainHasBidAsk = (chainQuery.data?.rows ?? []).some(
     (row) => row.callBid != null || row.callAsk != null || row.putBid != null || row.putAsk != null,
@@ -191,19 +210,46 @@ function App() {
     <div className="grid-shell min-h-screen px-4 py-6 text-text md:px-6 lg:px-8">
       <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-6">
         <header className="panel rounded-[28px] px-6 py-5">
+          <div className="-mt-2 mb-5 flex flex-wrap items-end gap-2">
+            {accountTabs.map((tabAccountId, index) => {
+              const isActive = (selectedAccountId ?? accountId ?? undefined) === tabAccountId;
+              const isPaperTab = isPaperTradingAccountId(tabAccountId);
+              return (
+                <button
+                  key={tabAccountId}
+                  className={`min-w-[220px] rounded-t-[18px] rounded-b-[10px] border px-4 py-3 text-left transition ${
+                    isActive
+                      ? "border-line bg-panelSoft text-text shadow-[0_10px_26px_rgba(0,0,0,0.24)]"
+                      : "border-line/70 bg-[rgba(14,28,31,0.88)] text-muted hover:border-accent/25 hover:text-text"
+                  }`}
+                  onClick={() => setSelectedAccountId(tabAccountId)}
+                  type="button"
+                >
+                  <div className={`text-[10px] uppercase tracking-[0.28em] ${isActive ? "text-accent" : "text-muted"}`}>
+                    {isActive ? "Van Aken Investments LLC" : `Account ${index + 1}`}
+                  </div>
+                  <div className="mt-2 flex items-center gap-2">
+                    <span className="text-sm font-semibold">{tabAccountId}</span>
+                    <span
+                      className={`rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.16em] ${
+                        isPaperTab ? "border-danger/50 text-danger" : "border-safe/40 text-safe"
+                      }`}
+                    >
+                      {isPaperTab ? "Paper" : "Live"}
+                    </span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
           <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
             <div>
-              <div className="mb-2 text-[11px] uppercase tracking-[0.32em] text-accent">Van Aken Investments LLC</div>
+              <div className="mb-2 text-[11px] uppercase tracking-[0.32em] text-accent">Shared Market Workspace</div>
               <div className="flex flex-wrap items-center gap-3">
                 <h1 className="text-3xl font-semibold tracking-tight text-text">IBKR Options Workstation</h1>
-                {isPaperTrading ? (
-                  <div className="inline-flex items-center rounded-full border-2 border-danger bg-panelSoft px-4 py-1 text-sm font-medium text-text">
-                    Paper Trading Acct
-                  </div>
-                ) : null}
               </div>
               <p className="mt-2 max-w-3xl text-sm text-muted">
-                Read free liquidity, option obligations, near-term expiry risk, and short-premium opportunity without bouncing between TWS windows.
+                Read account-specific liquidity and option obligations while reusing one gateway-backed market workspace for chains, expiries, and strikes.
               </p>
             </div>
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -232,8 +278,8 @@ function App() {
               <div className="mt-1 text-text">{connectionQuery.data ? `${connectionQuery.data.host}:${connectionQuery.data.port}` : "Loading"}</div>
             </div>
             <div className="panel-soft rounded-2xl px-4 py-3">
-              <div className="text-[11px] uppercase tracking-[0.2em]">Mode</div>
-              <div className="mt-1 text-text">{connectionQuery.data?.mode.toUpperCase() ?? "—"}</div>
+              <div className="text-[11px] uppercase tracking-[0.2em]">Active account</div>
+              <div className="mt-1 text-text">{accountId ?? "—"}</div>
             </div>
             <div className="panel-soft rounded-2xl px-4 py-3">
               <div className="text-[11px] uppercase tracking-[0.2em]">Data freshness</div>
