@@ -209,6 +209,9 @@ export interface OptionChainResponse {
   underlying: UnderlyingQuote;
   rows: ChainRow[];
   highlights: ChainHighlight[];
+  quoteSource: "streaming" | "historical" | "unavailable";
+  quoteAsOf: string | null;
+  quoteNotice: string | null;
   generatedAt: string;
   isStale: boolean;
 }

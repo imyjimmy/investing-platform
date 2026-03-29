@@ -16,6 +16,7 @@ class DashboardModel(BaseModel):
 
 RiskLevel = Literal["Low", "Moderate", "Elevated", "High"]
 StrategyTag = Literal["covered-call", "cash-secured-put", "short-option", "long-option", "stock", "other"]
+QuoteSource = Literal["streaming", "historical", "unavailable"]
 
 
 class ConnectionStatus(DashboardModel):
@@ -187,6 +188,9 @@ class OptionChainResponse(DashboardModel):
     underlying: UnderlyingQuote
     rows: list[ChainRow]
     highlights: list[ChainHighlight] = Field(default_factory=list)
+    quoteSource: QuoteSource = "unavailable"
+    quoteAsOf: datetime | None = None
+    quoteNotice: str | None = None
     generatedAt: datetime
     isStale: bool = False
 

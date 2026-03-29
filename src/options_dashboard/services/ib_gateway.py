@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from concurrent.futures import Future
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -61,6 +62,7 @@ class IBGatewayBrokerService(BrokerService):
         self._last_heartbeat_at: datetime | None = None
         self._next_reconnect_attempt_at: datetime | None = None
         self._last_error: str | None = None
+        self._resolved_account_id: str | None = self.settings.ib_account_id
         self._portfolio_cache: CacheEntry[PortfolioSnapshot] | None = None
         self._quote_cache: dict[str, CacheEntry[UnderlyingQuote]] = {}
         self._chain_cache: dict[str, CacheEntry[OptionChainResponse]] = {}
@@ -85,7 +87,7 @@ class IBGatewayBrokerService(BrokerService):
                 host=self.settings.ib_host,
                 port=self.settings.ib_port,
                 clientId=self.settings.ib_client_id,
-                accountId=self.settings.ib_account_id,
+                accountId=self._resolved_account_id,
                 marketDataType=self.settings.ib_market_data_type,
                 marketDataMode=_market_data_mode_label(self.settings.ib_market_data_type),
                 usingMockData=False,
@@ -137,7 +139,7 @@ class IBGatewayBrokerService(BrokerService):
         symbol = symbol.upper()
         cache_key = f"{symbol}:{expiry or 'AUTO'}"
         cached = self._chain_cache.get(cache_key)
-        if cached and _age_seconds(cached.captured_at) <= self.settings.chain_cache_ttl_seconds:
+        if cached and _age_seconds(cached.captured_at) <= _chain_cache_ttl_seconds(cached.value, self.settings.chain_cache_ttl_seconds):
             return cached.value
         try:
             chain = cast(
@@ -157,37 +159,46 @@ class IBGatewayBrokerService(BrokerService):
         return cast(TaskResultT, future.result(timeout=timeout))
 
     def _worker_main(self) -> None:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         ib = IB()
-        while not self._stop_event.is_set():
-            try:
-                self._auto_reconnect_if_needed(ib)
-                task = self._tasks.get(timeout=0.2)
-            except Empty:
-                task = None
-            if task is not None:
-                if task.future.cancelled():
-                    continue
+        try:
+            while not self._stop_event.is_set():
                 try:
-                    result = task.callback(ib)
-                except Exception as exc:  # pragma: no cover - exercised in runtime
-                    task.future.set_exception(exc)
-                    self._mark_error(str(exc))
-                else:
-                    task.future.set_result(result)
-            try:
-                if ib.isConnected():
-                    ib.sleep(0.05)
-                    self._mark_heartbeat()
-                else:
-                    time.sleep(0.05)
-            except Exception as exc:  # pragma: no cover - defensive
-                self._mark_error(str(exc))
+                    self._auto_reconnect_if_needed(ib)
+                    task = self._tasks.get(timeout=0.2)
+                except Empty:
+                    task = None
+                if task is not None:
+                    if task.future.cancelled():
+                        continue
+                    try:
+                        result = task.callback(ib)
+                    except Exception as exc:  # pragma: no cover - exercised in runtime
+                        task.future.set_exception(exc)
+                    else:
+                        task.future.set_result(result)
                 try:
                     if ib.isConnected():
-                        ib.disconnect()
-                except Exception:
-                    pass
-                time.sleep(0.2)
+                        ib.sleep(0.05)
+                        self._mark_heartbeat()
+                    else:
+                        time.sleep(0.05)
+                except Exception as exc:  # pragma: no cover - defensive
+                    self._mark_error(str(exc))
+                    try:
+                        if ib.isConnected():
+                            ib.disconnect()
+                    except Exception:
+                        pass
+                    time.sleep(0.2)
+        finally:
+            try:
+                if ib.isConnected():
+                    ib.disconnect()
+            finally:
+                asyncio.set_event_loop(None)
+                loop.close()
 
     def _auto_reconnect_if_needed(self, ib: Any) -> None:
         if ib.isConnected():
@@ -217,12 +228,14 @@ class IBGatewayBrokerService(BrokerService):
             account=self.settings.ib_account_id or "",
         )
         ib.reqMarketDataType(self.settings.ib_market_data_type)
+        self._remember_account_id(self._resolve_account_id(ib))
         self._mark_connected()
 
     def _fetch_portfolio_snapshot(self, ib: Any) -> PortfolioSnapshot:
         self._ensure_connected(ib)
         generated_at = datetime.now(UTC)
         account_id = self._resolve_account_id(ib)
+        self._remember_account_id(account_id)
         account_summary_rows = list(ib.accountSummary(account_id))
         account_values = {item.tag: item.value for item in account_summary_rows}
         portfolio_items = list(ib.portfolio(account_id))
@@ -395,11 +408,9 @@ class IBGatewayBrokerService(BrokerService):
         self._ensure_connected(ib)
         contract = Stock(symbol, self.settings.ib_underlying_exchange, self.settings.ib_currency)
         qualified = self._qualify_one(ib, contract)
-        ticker = self._req_tickers_in_batches(ib, [qualified])[0]
+        ticker, resolved_market_data_type = self._request_underlying_ticker(ib, qualified)
         generated_at = datetime.now(UTC)
         price = _ticker_market_price(ticker)
-        if not _is_valid_number(price):
-            raise RuntimeError(f"No market data returned for {symbol}. Check the symbol and market data permissions in IB Gateway.")
         return UnderlyingQuote(
             symbol=symbol,
             price=round(price, 4),
@@ -407,7 +418,7 @@ class IBGatewayBrokerService(BrokerService):
             ask=round(_safe_float(getattr(ticker, "ask", None)), 4) if _is_valid_number(_safe_float(getattr(ticker, "ask", None))) else None,
             last=round(_safe_float(getattr(ticker, "last", None)), 4) if _is_valid_number(_safe_float(getattr(ticker, "last", None))) else None,
             close=round(_safe_float(getattr(ticker, "close", None)), 4) if _is_valid_number(_safe_float(getattr(ticker, "close", None))) else None,
-            marketDataStatus=_market_data_mode_label(self.settings.ib_market_data_type),
+            marketDataStatus=_market_data_mode_label(resolved_market_data_type),
             generatedAt=generated_at,
         )
 
@@ -415,10 +426,8 @@ class IBGatewayBrokerService(BrokerService):
         self._ensure_connected(ib)
         generated_at = datetime.now(UTC)
         underlying_contract = self._qualify_one(ib, Stock(symbol, self.settings.ib_underlying_exchange, self.settings.ib_currency))
-        underlying_ticker = self._req_tickers_in_batches(ib, [underlying_contract])[0]
+        underlying_ticker, resolved_market_data_type = self._request_underlying_ticker(ib, underlying_contract)
         underlying_price = _ticker_market_price(underlying_ticker)
-        if not _is_valid_number(underlying_price):
-            raise RuntimeError(f"Could not determine an underlying price for {symbol}. IB Gateway may be missing live or delayed market data permissions.")
 
         definitions = ib.reqSecDefOptParams(symbol, "", underlying_contract.secType, underlying_contract.conId)
         if not definitions:
@@ -462,7 +471,17 @@ class IBGatewayBrokerService(BrokerService):
                 )
             )
         qualified_contracts = self._qualify_in_batches(ib, contracts)
-        tickers = self._req_tickers_in_batches(ib, qualified_contracts)
+        contracts_by_strike: dict[float, dict[str, Any]] = {}
+        for contract in qualified_contracts:
+            contracts_by_strike.setdefault(float(contract.strike), {})[contract.right] = contract
+        tickers = self._req_market_data_in_batches(ib, qualified_contracts, resolved_market_data_type)
+        quote_source = "streaming" if any(_ticker_has_quote_payload(ticker) for ticker in tickers) else "unavailable"
+        quote_as_of: datetime | None = None
+        historical_midpoints: dict[int, float] = {}
+        if quote_source == "unavailable":
+            historical_midpoints, quote_as_of = self._fetch_recent_option_midpoints(ib, qualified_contracts)
+            if historical_midpoints:
+                quote_source = "historical"
         by_strike: dict[float, dict[str, Any]] = {}
         for ticker in tickers:
             contract = ticker.contract
@@ -472,8 +491,20 @@ class IBGatewayBrokerService(BrokerService):
         for strike in sorted(by_strike):
             call_ticker = by_strike[strike].get("C")
             put_ticker = by_strike[strike].get("P")
-            call_mid = _midpoint(_safe_float(getattr(call_ticker, "bid", None)), _safe_float(getattr(call_ticker, "ask", None)))
-            put_mid = _midpoint(_safe_float(getattr(put_ticker, "bid", None)), _safe_float(getattr(put_ticker, "ask", None)))
+            call_contract = contracts_by_strike[strike].get("C")
+            put_contract = contracts_by_strike[strike].get("P")
+            call_historical_mid = historical_midpoints.get(int(call_contract.conId)) if call_contract is not None else None
+            put_historical_mid = historical_midpoints.get(int(put_contract.conId)) if put_contract is not None else None
+            call_mid = (
+                _midpoint(_safe_float(getattr(call_ticker, "bid", None)), _safe_float(getattr(call_ticker, "ask", None)))
+                or _ticker_option_mark(call_ticker)
+                or call_historical_mid
+            )
+            put_mid = (
+                _midpoint(_safe_float(getattr(put_ticker, "bid", None)), _safe_float(getattr(put_ticker, "ask", None)))
+                or _ticker_option_mark(put_ticker)
+                or put_historical_mid
+            )
             rows.append(
                 ChainRow(
                     strike=round(strike, 2),
@@ -502,7 +533,7 @@ class IBGatewayBrokerService(BrokerService):
             ask=_round_or_none(_safe_float(getattr(underlying_ticker, "ask", None)), 4),
             last=_round_or_none(_safe_float(getattr(underlying_ticker, "last", None)), 4),
             close=_round_or_none(_safe_float(getattr(underlying_ticker, "close", None)), 4),
-            marketDataStatus=_market_data_mode_label(self.settings.ib_market_data_type),
+            marketDataStatus=_market_data_mode_label(resolved_market_data_type),
             generatedAt=generated_at,
         )
         return OptionChainResponse(
@@ -512,6 +543,9 @@ class IBGatewayBrokerService(BrokerService):
             underlying=underlying,
             rows=rows,
             highlights=_chain_highlights(rows, selected_expiry),
+            quoteSource=quote_source,  # type: ignore[arg-type]
+            quoteAsOf=quote_as_of,
+            quoteNotice=_quote_notice(quote_source, quote_as_of),
             generatedAt=generated_at,
             isStale=False,
         )
@@ -587,6 +621,63 @@ class IBGatewayBrokerService(BrokerService):
             qualified.extend(result)
         return qualified
 
+    def _request_underlying_ticker(self, ib: Any, contract: Any) -> tuple[Any, int]:
+        last_ticker: Any | None = None
+        for market_data_type in _market_data_type_candidates(self.settings.ib_market_data_type):
+            ticker = self._req_market_data_snapshot(ib, contract, market_data_type)
+            last_ticker = ticker
+            if _is_valid_number(_ticker_market_price(ticker)):
+                return ticker, market_data_type
+        raise RuntimeError(
+            f"No market data returned for {contract.symbol}. Check the symbol and market data permissions in IB Gateway."
+        )
+
+    def _req_market_data_snapshot(self, ib: Any, contract: Any, market_data_type: int) -> Any:
+        ib.reqMarketDataType(market_data_type)
+        ticker = ib.reqMktData(contract, "", False, False)
+        try:
+            deadline = time.monotonic() + min(max(self.settings.ib_request_timeout_seconds / 4.0, 1.5), 4.0)
+            while time.monotonic() < deadline:
+                ib.sleep(0.2)
+                if _ticker_has_quote_payload(ticker):
+                    break
+            return ticker
+        finally:
+            try:
+                ib.cancelMktData(contract)
+            except Exception:
+                pass
+
+    def _req_market_data_in_batches(self, ib: Any, contracts: list[Any], market_data_type: int) -> list[Any]:
+        tickers: list[Any] = []
+        for batch in _batched(contracts, self.settings.chain_batch_size):
+            ib.reqMarketDataType(market_data_type)
+            batch_tickers = [ib.reqMktData(contract, "", False, False) for contract in batch]
+            deadline = time.monotonic() + min(max(self.settings.ib_request_timeout_seconds / 3.0, 1.5), 4.0)
+            while time.monotonic() < deadline:
+                ib.sleep(0.2)
+                if all(_ticker_has_quote_payload(ticker) for ticker in batch_tickers):
+                    break
+            tickers.extend(batch_tickers)
+            for contract in batch:
+                try:
+                    ib.cancelMktData(contract)
+                except Exception:
+                    pass
+        return tickers
+
+    def _fetch_recent_option_midpoints(self, ib: Any, contracts: list[Any]) -> tuple[dict[int, float], datetime | None]:
+        historical_midpoints: dict[int, float] = {}
+        latest_bar_at: datetime | None = None
+        for contract in contracts:
+            midpoint, bar_at = _latest_option_midpoint(ib, contract)
+            con_id = getattr(contract, "conId", None)
+            if con_id and _is_valid_number(midpoint):
+                historical_midpoints[int(con_id)] = round(float(midpoint), 4)
+            if bar_at is not None and (latest_bar_at is None or bar_at > latest_bar_at):
+                latest_bar_at = bar_at
+        return historical_midpoints, latest_bar_at
+
     def _req_tickers_in_batches(self, ib: Any, contracts: list[Any]) -> list[Any]:
         tickers: list[Any] = []
         for batch in _batched(contracts, self.settings.chain_batch_size):
@@ -608,6 +699,12 @@ class IBGatewayBrokerService(BrokerService):
         if not accounts:
             raise RuntimeError("IB Gateway returned no managed accounts. Check your gateway session and account permissions.")
         return accounts[0]
+
+    def _remember_account_id(self, account_id: str | None) -> None:
+        if not account_id:
+            return
+        with self._status_lock:
+            self._resolved_account_id = account_id
 
     def _mark_connected(self) -> None:
         now = datetime.now(UTC)
@@ -646,6 +743,15 @@ def _market_data_mode_label(market_data_type: int) -> str:
         3: "DELAYED",
         4: "DELAYED_FROZEN",
     }.get(market_data_type, "UNKNOWN")
+
+
+def _market_data_type_candidates(preferred_type: int) -> list[int]:
+    candidates = [preferred_type, 3, 4]
+    deduped: list[int] = []
+    for candidate in candidates:
+        if candidate not in deduped:
+            deduped.append(candidate)
+    return deduped
 
 
 def _extract_greek(ticker: Any, field_name: str, percent: bool = False) -> float | None:
@@ -699,6 +805,50 @@ def _ticker_option_mark(ticker: Any) -> float:
         if _is_valid_number(candidate):
             return float(candidate)
     return 0.0
+
+
+def _ticker_has_quote_payload(ticker: Any) -> bool:
+    if _is_valid_number(_ticker_market_price(ticker)):
+        return True
+    return any(
+        _is_valid_number(_extract_greek(ticker, field_name))
+        for field_name in ("delta", "gamma", "theta", "vega", "impliedVol")
+    )
+
+
+def _latest_option_midpoint(ib: Any, contract: Any) -> tuple[float | None, datetime | None]:
+    for what_to_show in ("MIDPOINT", "TRADES"):
+        try:
+            bars = ib.reqHistoricalData(
+                contract,
+                endDateTime="",
+                durationStr="2 D",
+                barSizeSetting="1 hour",
+                whatToShow=what_to_show,
+                useRTH=False,
+                formatDate=1,
+                keepUpToDate=False,
+            )
+        except Exception:
+            continue
+        if not bars:
+            continue
+        last_bar = bars[-1]
+        close_value = _safe_float(getattr(last_bar, "close", None))
+        if _is_valid_number(close_value):
+            return close_value, _coerce_bar_datetime(getattr(last_bar, "date", None))
+    return None, None
+
+
+def _coerce_bar_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    return None
 
 
 def _normalize_option_avg_cost(raw_avg_cost: float, multiplier: float, mark: float) -> float:
@@ -932,3 +1082,22 @@ def _round_or_none(value: float | None, precision: int) -> float | None:
 
 def _age_seconds(timestamp: datetime) -> float:
     return (datetime.now(UTC) - timestamp).total_seconds()
+
+
+def _quote_notice(quote_source: str, quote_as_of: datetime | None) -> str | None:
+    if quote_source == "historical":
+        timestamp = quote_as_of.astimezone().strftime("%Y-%m-%d %I:%M %p %Z") if quote_as_of is not None else "the latest completed session"
+        return (
+            f"Streaming option quotes are not available in this session, so the chain is showing the latest historical option midpoint data from IBKR as of {timestamp}."
+        )
+    if quote_source == "unavailable":
+        return (
+            "IB Gateway returned the real option chain structure, but the API user did not receive option quote lines for this session."
+        )
+    return None
+
+
+def _chain_cache_ttl_seconds(response: OptionChainResponse, default_ttl_seconds: float) -> float:
+    if response.quoteSource == "historical":
+        return max(default_ttl_seconds, 300.0)
+    return default_ttl_seconds

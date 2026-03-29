@@ -80,6 +80,13 @@ function orderRiskLabel(order: OpenOrderExposure) {
   return "Order capital";
 }
 
+function isPaperTradingAccountId(accountId: string | null | undefined) {
+  if (!accountId) {
+    return false;
+  }
+  return accountId.trim().toUpperCase().startsWith("DU");
+}
+
 function App() {
   const [chainSymbol, setChainSymbol] = useState("NVDA");
   const [selectedExpiry, setSelectedExpiry] = useState<string | undefined>(undefined);
@@ -146,7 +153,13 @@ function App() {
   const risk = riskSummaryQuery.data;
   const optionPositions = optionPositionsQuery.data?.positions ?? [];
   const openOrders = openOrdersQuery.data?.orders ?? [];
+  const accountId = risk?.account.accountId ?? connectionQuery.data?.accountId ?? null;
+  const isPaperTrading = isPaperTradingAccountId(accountId);
   const watchlist = Array.from(new Set(["NVDA", ...(risk?.watchlist ?? []), ...optionPositions.map((position) => position.symbol)])).sort();
+  const chainHasBidAsk = (chainQuery.data?.rows ?? []).some(
+    (row) => row.callBid != null || row.callAsk != null || row.putBid != null || row.putAsk != null,
+  );
+  const chainHasOptionMarks = (chainQuery.data?.rows ?? []).some((row) => row.callMid != null || row.putMid != null);
 
   const filteredPositions = optionPositions
     .filter((position) => position.symbol.toLowerCase().includes(deferredTickerFilter.trim().toLowerCase()))
@@ -181,7 +194,14 @@ function App() {
           <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
             <div>
               <div className="mb-2 text-[11px] uppercase tracking-[0.32em] text-accent">Van Aken Investments LLC</div>
-              <h1 className="text-3xl font-semibold tracking-tight text-text">IBKR Options Workstation</h1>
+              <div className="flex flex-wrap items-center gap-3">
+                <h1 className="text-3xl font-semibold tracking-tight text-text">IBKR Options Workstation</h1>
+                {isPaperTrading ? (
+                  <div className="inline-flex items-center rounded-full border-2 border-danger bg-panelSoft px-4 py-1 text-sm font-medium text-text">
+                    Paper Trading Acct
+                  </div>
+                ) : null}
+              </div>
               <p className="mt-2 max-w-3xl text-sm text-muted">
                 Read free liquidity, option obligations, near-term expiry risk, and short-premium opportunity without bouncing between TWS windows.
               </p>
@@ -521,6 +541,21 @@ function App() {
             <ErrorState message={chainQuery.error.message} />
           ) : chainQuery.data ? (
             <div className="grid gap-5">
+              {chainQuery.data.quoteNotice ? (
+                <div
+                  className={`rounded-2xl border px-4 py-3 text-sm ${
+                    chainQuery.data.quoteSource === "historical"
+                      ? "border-accent/25 bg-accent/8 text-accent"
+                      : "border-caution/25 bg-caution/8 text-caution"
+                  }`}
+                >
+                  {chainQuery.data.quoteNotice}
+                </div>
+              ) : !chainHasBidAsk && chainHasOptionMarks ? (
+                <div className="rounded-2xl border border-accent/25 bg-accent/8 px-4 py-3 text-sm text-accent">
+                  Weekend / off-hours session. The mids below are the latest available option marks from IBKR for this paper session, so live bid/ask, IV, and Greeks may remain blank until the market reopens and the API data entitlements are active.
+                </div>
+              ) : null}
               <div className="grid gap-4 lg:grid-cols-[1fr,320px]">
                 <div className="grid gap-3 md:grid-cols-4">
                   <MetricCard label="Underlying" value={fmtCurrencySmall(chainQuery.data.underlying.price)} />
