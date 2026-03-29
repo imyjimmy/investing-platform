@@ -1,0 +1,307 @@
+"""Pydantic models shared across the API layer."""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class DashboardModel(BaseModel):
+    """Base model with camel-friendly serialization support."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+RiskLevel = Literal["Low", "Moderate", "Elevated", "High"]
+StrategyTag = Literal["covered-call", "cash-secured-put", "short-option", "long-option", "stock", "other"]
+
+
+class ConnectionStatus(DashboardModel):
+    mode: Literal["mock", "ibkr"]
+    connected: bool
+    status: Literal["connected", "disconnected", "degraded"]
+    host: str
+    port: int
+    clientId: int
+    accountId: str | None = None
+    marketDataType: int
+    marketDataMode: str
+    usingMockData: bool
+    lastSuccessfulConnectAt: datetime | None = None
+    lastHeartbeatAt: datetime | None = None
+    nextReconnectAttemptAt: datetime | None = None
+    lastError: str | None = None
+
+
+class HealthResponse(DashboardModel):
+    ok: bool
+    service: str
+    version: str
+    timestamp: datetime
+    connection: ConnectionStatus
+
+
+class AlertItem(DashboardModel):
+    level: Literal["info", "warning", "critical"]
+    title: str
+    detail: str
+    symbol: str | None = None
+
+
+class AccountSnapshot(DashboardModel):
+    accountId: str | None = None
+    netLiquidation: float
+    availableFunds: float
+    excessLiquidity: float
+    buyingPower: float
+    initMarginReq: float
+    maintMarginReq: float
+    cashBalance: float | None = None
+    marginUsagePct: float
+    optionPositionsCount: int
+    openOrdersCount: int
+    estimatedPremiumExpiringThisWeek: float
+    estimatedCommittedCapital: float
+    estimatedFreeOptionSellingCapacity: float
+    generatedAt: datetime
+    isStale: bool = False
+
+
+class Position(DashboardModel):
+    symbol: str
+    secType: str
+    conId: int | None = None
+    quantity: float
+    avgCost: float
+    marketPrice: float
+    marketValue: float
+    unrealizedPnL: float
+    realizedPnL: float | None = None
+    currency: str = "USD"
+
+
+class OptionPosition(DashboardModel):
+    symbol: str
+    secType: str = "OPT"
+    conId: int | None = None
+    underlyingConId: int | None = None
+    expiry: str
+    strike: float
+    right: Literal["C", "P"]
+    multiplier: int = 100
+    quantity: int
+    shortOrLong: Literal["short", "long"]
+    avgCost: float
+    currentMid: float | None = None
+    bid: float | None = None
+    ask: float | None = None
+    marketPrice: float | None = None
+    marketValue: float | None = None
+    unrealizedPnL: float | None = None
+    realizedPnL: float | None = None
+    delta: float | None = None
+    gamma: float | None = None
+    theta: float | None = None
+    vega: float | None = None
+    impliedVol: float | None = None
+    dte: int
+    underlyingSpot: float | None = None
+    moneynessPct: float | None = None
+    distanceToStrikePct: float | None = None
+    collateralEstimate: float = 0.0
+    brokerMarginImpact: float | None = None
+    assignmentRiskLevel: RiskLevel
+    coveredStatus: Literal["covered", "partially-covered", "uncovered", "n/a"] = "n/a"
+    coveredContracts: int = 0
+    strategyTag: StrategyTag = "other"
+    premiumEstimate: float = 0.0
+    marketDataStatus: str = "UNKNOWN"
+
+
+class OpenOrderExposure(DashboardModel):
+    orderId: int
+    symbol: str
+    secType: str
+    orderType: str
+    side: str
+    quantity: float
+    limitPrice: float | None = None
+    estimatedCapitalImpact: float
+    estimatedCredit: float = 0.0
+    openingOrClosing: Literal["opening", "closing", "unknown"]
+    expiry: str | None = None
+    strike: float | None = None
+    right: Literal["C", "P"] | None = None
+    strategyTag: StrategyTag = "other"
+    note: str | None = None
+
+
+class UnderlyingQuote(DashboardModel):
+    symbol: str
+    price: float
+    bid: float | None = None
+    ask: float | None = None
+    last: float | None = None
+    close: float | None = None
+    currency: str = "USD"
+    marketDataStatus: str = "UNKNOWN"
+    generatedAt: datetime
+
+
+class ChainRow(DashboardModel):
+    strike: float
+    distanceFromSpotPct: float
+    callBid: float | None = None
+    callAsk: float | None = None
+    callMid: float | None = None
+    callIV: float | None = None
+    callDelta: float | None = None
+    callTheta: float | None = None
+    callAnnualizedYieldPct: float | None = None
+    putBid: float | None = None
+    putAsk: float | None = None
+    putMid: float | None = None
+    putIV: float | None = None
+    putDelta: float | None = None
+    putTheta: float | None = None
+    putAnnualizedYieldPct: float | None = None
+    conservativePutCollateral: float | None = None
+
+
+class ChainHighlight(DashboardModel):
+    label: str
+    right: Literal["C", "P"]
+    strike: float
+    expiry: str
+    metricLabel: str
+    metricValue: float
+    description: str
+
+
+class OptionChainResponse(DashboardModel):
+    symbol: str
+    selectedExpiry: str
+    expiries: list[str]
+    underlying: UnderlyingQuote
+    rows: list[ChainRow]
+    highlights: list[ChainHighlight] = Field(default_factory=list)
+    generatedAt: datetime
+    isStale: bool = False
+
+
+class PositionsResponse(DashboardModel):
+    positions: list[Position]
+    generatedAt: datetime
+    isStale: bool = False
+
+
+class OptionPositionsResponse(DashboardModel):
+    positions: list[OptionPosition]
+    generatedAt: datetime
+    isStale: bool = False
+
+
+class OpenOrdersResponse(DashboardModel):
+    orders: list[OpenOrderExposure]
+    totalCommittedCapital: float
+    putSellingCapital: float
+    stockOrderCapital: float
+    generatedAt: datetime
+    isStale: bool = False
+
+
+class CollateralSummary(DashboardModel):
+    conservativeCashSecuredPutEstimate: float
+    brokerReportedMarginImpact: float | None = None
+    openOrderCommittedCapital: float
+    safetyBuffer: float
+    availableFunds: float
+    excessLiquidity: float
+    estimatedFreeOptionSellingCapacity: float
+    generatedAt: datetime
+
+
+class PremiumSummary(DashboardModel):
+    estimatedPremiumExpiringThisWeek: float
+    coveredCallPremiumThisWeek: float
+    putPremiumThisWeek: float
+    estimatedOpenShortOptionPremium: float
+    methodology: str
+    generatedAt: datetime
+
+
+class TickerExposureRow(DashboardModel):
+    symbol: str
+    stockMarketValue: float
+    netStockShares: float
+    shortPutContracts: int
+    coveredCallContracts: int
+    netOptionContracts: int
+    shortPutCollateral: float
+    openOrderCapital: float
+    premiumExpiringThisWeek: float
+    assignmentExposure: float
+    concentrationPct: float
+    riskLevel: RiskLevel
+
+
+class ExpiryExposureRow(DashboardModel):
+    expiry: str
+    weekLabel: str
+    positionsCount: int
+    shortPutCollateral: float
+    coveredCallContracts: int
+    premiumExpiringThisWeek: float
+    assignmentRiskContracts: int
+
+
+class ExposureByTickerResponse(DashboardModel):
+    rows: list[TickerExposureRow]
+    generatedAt: datetime
+    isStale: bool = False
+
+
+class ExposureByExpiryResponse(DashboardModel):
+    rows: list[ExpiryExposureRow]
+    generatedAt: datetime
+    isStale: bool = False
+
+
+class RiskSummaryResponse(DashboardModel):
+    account: AccountSnapshot
+    collateral: CollateralSummary
+    premium: PremiumSummary
+    exposureByTicker: list[TickerExposureRow]
+    exposureByExpiry: list[ExpiryExposureRow]
+    positionsClosestToMoney: list[OptionPosition]
+    alerts: list[AlertItem]
+    watchlist: list[str]
+    generatedAt: datetime
+    isStale: bool = False
+
+
+class ScenarioTickerImpact(DashboardModel):
+    symbol: str
+    currentPrice: float
+    projectedPrice: float
+    stockPnL: float
+    optionIntrinsicPnL: float
+    totalApproxPnL: float
+    assignedPutNotional: float
+    callAwayNotional: float
+    note: str
+
+
+class ScenarioResponse(DashboardModel):
+    movePct: float
+    daysForward: int
+    ivShockPct: float
+    totalApproxPnL: float
+    totalAssignedPutNotional: float
+    totalCallAwayNotional: float
+    impacts: list[ScenarioTickerImpact]
+    methodology: str
+    generatedAt: datetime
+    isStale: bool = False

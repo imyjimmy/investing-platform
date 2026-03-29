@@ -1,0 +1,82 @@
+@import "@fontsource/ibm-plex-sans/400.css";
+@import "@fontsource/ibm-plex-sans/500.css";
+@import "@fontsource/ibm-plex-sans/600.css";
+@import "@fontsource/jetbrains-mono/400.css";
+@import "@fontsource/jetbrains-mono/500.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  --shell: #071012;
+  --panel: rgba(12, 23, 26, 0.9);
+  --panel-soft: rgba(16, 33, 38, 0.92);
+  --line: rgba(95, 144, 146, 0.2);
+  --text: #d8e7e5;
+  --muted: #8ea7a4;
+  --safe: #3bc48d;
+  --caution: #f7c85b;
+  --danger: #ef6b62;
+  --accent: #66d0bf;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+  background: var(--shell);
+  color: var(--text);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(143, 176, 172, 0.24);
+  border-radius: 999px;
+}
+
+.grid-shell {
+  background:
+    radial-gradient(circle at top left, rgba(102, 208, 191, 0.16), transparent 30%),
+    radial-gradient(circle at 88% 0%, rgba(247, 200, 91, 0.14), transparent 18%),
+    linear-gradient(180deg, #071012 0%, #091518 52%, #061114 100%);
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(14px);
+}
+
+.panel-soft {
+  background: var(--panel-soft);
+  border: 1px solid rgba(95, 144, 146, 0.16);
+}
+
+.mono {
+  font-family: "JetBrains Mono", "SFMono-Regular", monospace;
+}
+
+.section-anchor {
+  content-visibility: auto;
+  contain-intrinsic-size: 1px 1000px;
+}
