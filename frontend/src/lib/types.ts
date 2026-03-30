@@ -4,6 +4,7 @@ export interface ConnectionStatus {
   mode: "mock" | "ibkr";
   connected: boolean;
   status: "connected" | "disconnected" | "degraded";
+  executionMode: "disabled" | "paper";
   host: string;
   port: number;
   clientId: number;
@@ -255,4 +256,61 @@ export interface ScenarioResponse {
   methodology: string;
   generatedAt: string;
   isStale: boolean;
+}
+
+export interface OptionOrderRequest {
+  accountId: string;
+  symbol: string;
+  expiry: string;
+  strike: number;
+  right: "C" | "P";
+  action: "BUY" | "SELL";
+  quantity: number;
+  orderType: "LMT" | "MKT";
+  limitPrice: number | null;
+  tif: "DAY" | "GTC";
+  orderRef?: string | null;
+}
+
+export interface OptionOrderPreview {
+  accountId: string;
+  symbol: string;
+  expiry: string;
+  strike: number;
+  right: "C" | "P";
+  action: "BUY" | "SELL";
+  quantity: number;
+  orderType: "LMT" | "MKT";
+  limitPrice: number | null;
+  tif: "DAY" | "GTC";
+  orderRef: string;
+  openingOrClosing: "opening" | "closing" | "unknown";
+  marketReferencePrice: number | null;
+  estimatedGrossPremium: number | null;
+  conservativeCashImpact: number | null;
+  brokerInitialMarginChange: number | null;
+  brokerMaintenanceMarginChange: number | null;
+  commissionEstimate: number | null;
+  warningText: string | null;
+  note: string | null;
+  generatedAt: string;
+}
+
+export interface SubmittedOrder {
+  orderId: number;
+  permId: number | null;
+  clientId: number | null;
+  status: string;
+  filledQuantity: number;
+  remainingQuantity: number;
+  message: string | null;
+  submittedAt: string;
+}
+
+export interface OrderCancelResponse {
+  orderId: number;
+  accountId: string;
+  status: string;
+  message: string | null;
+  cancelledAt: string;
 }

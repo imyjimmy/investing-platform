@@ -10,9 +10,13 @@ from options_dashboard.models import (
     AccountSnapshot,
     ConnectionStatus,
     OpenOrderExposure,
+    OptionOrderPreview,
+    OptionOrderRequest,
     OptionChainResponse,
     OptionPosition,
+    OrderCancelResponse,
     Position,
+    SubmittedOrder,
     UnderlyingQuote,
 )
 
@@ -63,4 +67,13 @@ class BrokerService:
         raise NotImplementedError
 
     def get_option_chain(self, symbol: str, expiry: str | None = None) -> OptionChainResponse:
+        raise NotImplementedError
+
+    def preview_option_order(self, request: OptionOrderRequest) -> OptionOrderPreview:
+        raise NotImplementedError
+
+    def submit_option_order(self, request: OptionOrderRequest) -> SubmittedOrder:
+        raise NotImplementedError
+
+    def cancel_order(self, account_id: str, order_id: int) -> OrderCancelResponse:
         raise NotImplementedError

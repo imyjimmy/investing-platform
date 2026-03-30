@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, HTTPException, Query
 
 from options_dashboard import __version__
+from options_dashboard.models import OptionOrderRequest
 from options_dashboard.services.analytics import (
     build_collateral_summary,
     build_exposure_by_expiry,
@@ -213,3 +214,33 @@ def _portfolio_snapshot(account_id: str | None = None):
         return _service().get_portfolio_snapshot(account_id)
     except BrokerUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.post("/execution/options/preview")
+def preview_option_order(request: OptionOrderRequest) -> dict:
+    try:
+        return _service().preview_option_order(request).model_dump()
+    except BrokerUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/execution/options/submit", status_code=201)
+def submit_option_order(request: OptionOrderRequest) -> dict:
+    try:
+        return _service().submit_option_order(request).model_dump()
+    except BrokerUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/execution/orders/{order_id}/cancel")
+def cancel_order(order_id: int, accountId: str = Query(...)) -> dict:
+    try:
+        return _service().cancel_order(accountId, order_id).model_dump()
+    except BrokerUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

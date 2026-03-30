@@ -1,5 +1,5 @@
 import { useEffect, useState, useDeferredValue, startTransition } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Bar,
   BarChart,
@@ -11,7 +11,7 @@ import {
 } from "recharts";
 
 import { api } from "./lib/api";
-import type { OpenOrderExposure, OptionPosition } from "./lib/types";
+import type { OpenOrderExposure, OptionOrderRequest, OptionPosition } from "./lib/types";
 import { MetricCard } from "./components/MetricCard";
 import { Panel } from "./components/Panel";
 import { RiskBadge } from "./components/RiskBadge";
@@ -91,10 +91,30 @@ function uniqueAccounts(accounts: Array<string | null | undefined>) {
   return Array.from(new Set(accounts.map((accountId) => accountId?.trim().toUpperCase()).filter(Boolean) as string[]));
 }
 
+type TicketContractSide = "C" | "P";
+
+type TicketDraft = {
+  symbol: string;
+  expiry: string;
+  strike: number;
+  right: TicketContractSide;
+  referencePrice: number | null;
+  bid: number | null;
+  ask: number | null;
+};
+
 function App() {
+  const queryClient = useQueryClient();
   const [chainSymbol, setChainSymbol] = useState("NVDA");
   const [selectedAccountId, setSelectedAccountId] = useState<string | undefined>(undefined);
   const [selectedExpiry, setSelectedExpiry] = useState<string | undefined>(undefined);
+  const [ticketDraft, setTicketDraft] = useState<TicketDraft | null>(null);
+  const [ticketAction, setTicketAction] = useState<"BUY" | "SELL">("SELL");
+  const [ticketQuantity, setTicketQuantity] = useState(1);
+  const [ticketOrderType, setTicketOrderType] = useState<"LMT" | "MKT">("LMT");
+  const [ticketLimitPrice, setTicketLimitPrice] = useState("");
+  const [ticketTif, setTicketTif] = useState<"DAY" | "GTC">("DAY");
+  const [previewRequestKey, setPreviewRequestKey] = useState<string | null>(null);
   const [tickerFilter, setTickerFilter] = useState("");
   const [rightFilter, setRightFilter] = useState<"ALL" | "C" | "P">("ALL");
   const [shortOnly, setShortOnly] = useState(true);
@@ -147,6 +167,31 @@ function App() {
 
   const connectMutation = useMutation({ mutationFn: api.connect });
   const reconnectMutation = useMutation({ mutationFn: api.reconnect });
+  const previewMutation = useMutation({
+    mutationFn: api.previewOptionOrder,
+    onSuccess: (_data, variables) => setPreviewRequestKey(JSON.stringify(variables)),
+  });
+  const submitMutation = useMutation({
+    mutationFn: api.submitOptionOrder,
+    onSuccess: async (_data, variables) => {
+      setPreviewRequestKey(JSON.stringify(variables));
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["risk-summary", selectedAccountId] }),
+        queryClient.invalidateQueries({ queryKey: ["option-positions", selectedAccountId] }),
+        queryClient.invalidateQueries({ queryKey: ["open-orders", selectedAccountId] }),
+      ]);
+    },
+  });
+  const cancelMutation = useMutation({
+    mutationFn: ({ orderId, accountId }: { orderId: number; accountId: string }) => api.cancelOrder(orderId, accountId),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["risk-summary", selectedAccountId] }),
+        queryClient.invalidateQueries({ queryKey: ["option-positions", selectedAccountId] }),
+        queryClient.invalidateQueries({ queryKey: ["open-orders", selectedAccountId] }),
+      ]);
+    },
+  });
 
   useEffect(() => {
     const nextExpiry = chainQuery.data?.selectedExpiry;
@@ -169,6 +214,18 @@ function App() {
     }
   }, [connectionQuery.data?.accountId, connectionQuery.data?.managedAccounts, riskSummaryQuery.data?.account.accountId, selectedAccountId]);
 
+  useEffect(() => {
+    if (!ticketDraft) {
+      return;
+    }
+    if (ticketDraft.symbol !== chainSymbol) {
+      setTicketDraft(null);
+      setPreviewRequestKey(null);
+      previewMutation.reset();
+      submitMutation.reset();
+    }
+  }, [chainSymbol, previewMutation, submitMutation, ticketDraft]);
+
   const risk = riskSummaryQuery.data;
   const optionPositions = optionPositionsQuery.data?.positions ?? [];
   const openOrders = openOrdersQuery.data?.orders ?? [];
@@ -179,6 +236,42 @@ function App() {
     (row) => row.callBid != null || row.callAsk != null || row.putBid != null || row.putAsk != null,
   );
   const chainHasOptionMarks = (chainQuery.data?.rows ?? []).some((row) => row.callMid != null || row.putMid != null);
+  const paperExecutionEnabled = connectionQuery.data?.executionMode === "paper";
+  const selectedAccount = selectedAccountId ?? accountId ?? undefined;
+  const selectedAccountIsPaper = isPaperTradingAccountId(selectedAccount);
+  const parsedLimitPrice = ticketOrderType === "LMT" ? Number(ticketLimitPrice) : null;
+  const validLimitPrice =
+    ticketOrderType === "MKT" ? null : Number.isFinite(parsedLimitPrice) && parsedLimitPrice != null && parsedLimitPrice > 0 ? parsedLimitPrice : null;
+  const ticketRequest: OptionOrderRequest | null =
+    ticketDraft && selectedAccount && (ticketOrderType === "MKT" || validLimitPrice != null)
+      ? {
+          accountId: selectedAccount,
+          symbol: ticketDraft.symbol,
+          expiry: ticketDraft.expiry,
+          strike: ticketDraft.strike,
+          right: ticketDraft.right,
+          action: ticketAction,
+          quantity: Math.max(1, Math.floor(ticketQuantity || 1)),
+          orderType: ticketOrderType,
+          limitPrice: ticketOrderType === "LMT" ? validLimitPrice : null,
+          tif: ticketTif,
+        }
+      : null;
+  const ticketRequestKey = ticketRequest ? JSON.stringify(ticketRequest) : null;
+  const previewIsCurrent = Boolean(previewMutation.data && previewRequestKey && ticketRequestKey === previewRequestKey);
+  const submitIsCurrent = Boolean(submitMutation.data && previewRequestKey && ticketRequestKey === previewRequestKey);
+  const previewError = previewMutation.error instanceof Error ? previewMutation.error.message : null;
+  const submitError = submitMutation.error instanceof Error ? submitMutation.error.message : null;
+  const cancelError = cancelMutation.error instanceof Error ? cancelMutation.error.message : null;
+  const canPreviewTicket = paperExecutionEnabled && selectedAccountIsPaper && Boolean(ticketRequest);
+  const canSubmitTicket = canPreviewTicket && previewIsCurrent;
+  const executionBannerMessage = !paperExecutionEnabled
+    ? "Paper execution is disabled for this dashboard session."
+    : !selectedAccount
+      ? "Select an account tab to route a paper order."
+      : !selectedAccountIsPaper
+        ? "Paper execution is blocked on live accounts."
+        : null;
 
   const filteredPositions = optionPositions
     .filter((position) => position.symbol.toLowerCase().includes(deferredTickerFilter.trim().toLowerCase()))
@@ -202,6 +295,36 @@ function App() {
     })
     .slice()
     .sort((left, right) => comparePositions(left, right, sortKey, sortDirection));
+
+  function loadTicket(row: {
+    strike: number;
+    callBid: number | null;
+    callAsk: number | null;
+    callMid: number | null;
+    putBid: number | null;
+    putAsk: number | null;
+    putMid: number | null;
+  }, right: TicketContractSide) {
+    const referencePrice =
+      right === "C" ? row.callMid ?? row.callAsk ?? row.callBid ?? null : row.putMid ?? row.putAsk ?? row.putBid ?? null;
+    setTicketDraft({
+      symbol: chainSymbol,
+      expiry: selectedExpiry ?? chainQuery.data?.selectedExpiry ?? "",
+      strike: row.strike,
+      right,
+      referencePrice,
+      bid: right === "C" ? row.callBid : row.putBid,
+      ask: right === "C" ? row.callAsk : row.putAsk,
+    });
+    setTicketAction("SELL");
+    setTicketQuantity(1);
+    setTicketOrderType("LMT");
+    setTicketLimitPrice(referencePrice != null ? referencePrice.toFixed(2) : "");
+    setTicketTif("DAY");
+    previewMutation.reset();
+    submitMutation.reset();
+    setPreviewRequestKey(null);
+  }
 
   const connectError = connectMutation.error instanceof Error ? connectMutation.error.message : null;
   const reconnectError = reconnectMutation.error instanceof Error ? reconnectMutation.error.message : null;
@@ -518,6 +641,7 @@ function App() {
               <ErrorState message={openOrdersQuery.error.message} />
             ) : openOrdersQuery.data ? (
               <div className="grid gap-4">
+                {cancelError ? <ErrorState message={cancelError} /> : null}
                 <div className="grid gap-3 sm:grid-cols-3">
                   <MetricCard label="Committed capital" value={fmtCurrency(openOrdersQuery.data.totalCommittedCapital)} />
                   <MetricCard label="Put-selling reserve" value={fmtCurrency(openOrdersQuery.data.putSellingCapital)} />
@@ -535,9 +659,26 @@ function App() {
                             {order.side} {fmtNumber(order.quantity)} {order.orderType} {order.expiry ?? ""}
                           </div>
                         </div>
-                        <div className="text-right">
-                          <div className="text-sm font-medium text-text">{fmtCurrency(order.estimatedCapitalImpact)}</div>
-                          <div className="text-xs text-muted">{orderRiskLabel(order)}</div>
+                        <div className="flex items-start gap-3">
+                          {paperExecutionEnabled && selectedAccountIsPaper ? (
+                            <button
+                              className="rounded-full border border-danger/30 bg-danger/8 px-3 py-1.5 text-xs font-medium text-danger transition hover:border-danger/50"
+                              disabled={cancelMutation.isPending || !selectedAccount}
+                              onClick={() => {
+                                if (!selectedAccount) {
+                                  return;
+                                }
+                                cancelMutation.mutate({ orderId: order.orderId, accountId: selectedAccount });
+                              }}
+                              type="button"
+                            >
+                              {cancelMutation.isPending ? "Cancelling..." : "Cancel"}
+                            </button>
+                          ) : null}
+                          <div className="text-right">
+                            <div className="text-sm font-medium text-text">{fmtCurrency(order.estimatedCapitalImpact)}</div>
+                            <div className="text-xs text-muted">{orderRiskLabel(order)}</div>
+                          </div>
                         </div>
                       </div>
                       <div className="mt-3 grid gap-2 text-sm text-muted sm:grid-cols-3">
@@ -623,6 +764,171 @@ function App() {
                   </div>
                 </div>
                 <div className="grid gap-3">
+                  <div className="panel-soft rounded-2xl p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="text-[11px] uppercase tracking-[0.22em] text-muted">Execution</div>
+                        <div className="mt-2 text-lg font-semibold text-text">Paper trade ticket</div>
+                      </div>
+                      <span className="rounded-full border border-danger/45 px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.18em] text-danger">
+                        Paper only
+                      </span>
+                    </div>
+                    <div className="mt-3 space-y-3">
+                      {executionBannerMessage ? (
+                        <div className="rounded-2xl border border-danger/25 bg-danger/8 px-4 py-3 text-sm text-danger">
+                          {executionBannerMessage}
+                        </div>
+                      ) : ticketDraft ? (
+                        <>
+                          <div className="grid gap-3 sm:grid-cols-2">
+                            <div className="rounded-2xl border border-line/80 px-3 py-3">
+                              <div className="text-[11px] uppercase tracking-[0.18em] text-muted">Account</div>
+                              <div className="mt-2 text-sm font-medium text-text">{selectedAccount}</div>
+                            </div>
+                            <div className="rounded-2xl border border-line/80 px-3 py-3">
+                              <div className="text-[11px] uppercase tracking-[0.18em] text-muted">Contract</div>
+                              <div className="mt-2 text-sm font-medium text-text">
+                                {ticketDraft.symbol} {ticketDraft.expiry} {ticketDraft.right}{fmtCurrencySmall(ticketDraft.strike)}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="grid gap-3 sm:grid-cols-3">
+                            <div className="rounded-2xl border border-line/80 px-3 py-3">
+                              <div className="text-[11px] uppercase tracking-[0.18em] text-muted">Reference</div>
+                              <div className="mt-2 text-sm font-medium text-text">{fmtCurrencySmall(ticketDraft.referencePrice)}</div>
+                            </div>
+                            <div className="rounded-2xl border border-line/80 px-3 py-3">
+                              <div className="text-[11px] uppercase tracking-[0.18em] text-muted">Bid / ask</div>
+                              <div className="mt-2 text-sm font-medium text-text">
+                                {fmtCurrencySmall(ticketDraft.bid)} / {fmtCurrencySmall(ticketDraft.ask)}
+                              </div>
+                            </div>
+                            <div className="rounded-2xl border border-line/80 px-3 py-3">
+                              <div className="text-[11px] uppercase tracking-[0.18em] text-muted">Intent</div>
+                              <div className="mt-2 text-sm font-medium text-text">{ticketDraft.right === "P" ? "Short put / put buyback" : "Call sale / call buyback"}</div>
+                            </div>
+                          </div>
+                          <div className="grid gap-3 sm:grid-cols-2">
+                            <div className="space-y-2">
+                              <div className="text-[11px] uppercase tracking-[0.18em] text-muted">Action</div>
+                              <div className="flex gap-2">
+                                <ToggleChip checked={ticketAction === "SELL"} label="Sell" onToggle={() => setTicketAction("SELL")} />
+                                <ToggleChip checked={ticketAction === "BUY"} label="Buy" onToggle={() => setTicketAction("BUY")} />
+                              </div>
+                            </div>
+                            <label className="space-y-2">
+                              <div className="text-[11px] uppercase tracking-[0.18em] text-muted">Contracts</div>
+                              <input
+                                className="w-full rounded-2xl border border-line bg-panel px-3 py-2 text-sm text-text outline-none transition focus:border-accent/40"
+                                min={1}
+                                step={1}
+                                type="number"
+                                value={ticketQuantity}
+                                onChange={(event) => setTicketQuantity(Math.max(1, Number(event.target.value) || 1))}
+                              />
+                            </label>
+                          </div>
+                          <div className="grid gap-3 sm:grid-cols-3">
+                            <label className="space-y-2">
+                              <div className="text-[11px] uppercase tracking-[0.18em] text-muted">Order type</div>
+                              <select
+                                className="w-full rounded-2xl border border-line bg-panel px-3 py-2 text-sm text-text outline-none transition focus:border-accent/40"
+                                value={ticketOrderType}
+                                onChange={(event) => setTicketOrderType(event.target.value as "LMT" | "MKT")}
+                              >
+                                <option value="LMT">Limit</option>
+                                <option value="MKT">Market</option>
+                              </select>
+                            </label>
+                            <label className="space-y-2">
+                              <div className="text-[11px] uppercase tracking-[0.18em] text-muted">Time in force</div>
+                              <select
+                                className="w-full rounded-2xl border border-line bg-panel px-3 py-2 text-sm text-text outline-none transition focus:border-accent/40"
+                                value={ticketTif}
+                                onChange={(event) => setTicketTif(event.target.value as "DAY" | "GTC")}
+                              >
+                                <option value="DAY">DAY</option>
+                                <option value="GTC">GTC</option>
+                              </select>
+                            </label>
+                            <label className="space-y-2">
+                              <div className="text-[11px] uppercase tracking-[0.18em] text-muted">Limit price</div>
+                              <input
+                                className="w-full rounded-2xl border border-line bg-panel px-3 py-2 text-sm text-text outline-none transition focus:border-accent/40 disabled:cursor-not-allowed disabled:opacity-50"
+                                disabled={ticketOrderType === "MKT"}
+                                inputMode="decimal"
+                                placeholder={ticketDraft.referencePrice != null ? ticketDraft.referencePrice.toFixed(2) : "0.00"}
+                                type="text"
+                                value={ticketOrderType === "MKT" ? "Market" : ticketLimitPrice}
+                                onChange={(event) => setTicketLimitPrice(event.target.value)}
+                              />
+                            </label>
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              className="rounded-full border border-accent/35 bg-accent/10 px-4 py-2 text-sm font-medium text-accent transition hover:border-accent/50 disabled:cursor-not-allowed disabled:opacity-50"
+                              disabled={!canPreviewTicket || previewMutation.isPending}
+                              onClick={() => ticketRequest && previewMutation.mutate(ticketRequest)}
+                              type="button"
+                            >
+                              {previewMutation.isPending ? "Previewing..." : "Preview paper order"}
+                            </button>
+                            <button
+                              className="rounded-full border border-safe/35 bg-safe/10 px-4 py-2 text-sm font-medium text-safe transition hover:border-safe/50 disabled:cursor-not-allowed disabled:opacity-50"
+                              disabled={!canSubmitTicket || submitMutation.isPending}
+                              onClick={() => ticketRequest && submitMutation.mutate(ticketRequest)}
+                              type="button"
+                            >
+                              {submitMutation.isPending ? "Submitting..." : "Submit to paper account"}
+                            </button>
+                          </div>
+                          {previewError ? <ErrorState message={previewError} /> : null}
+                          {submitError ? <ErrorState message={submitError} /> : null}
+                          {previewIsCurrent && previewMutation.data ? (
+                            <div className="rounded-2xl border border-line/80 bg-panel px-4 py-3 text-sm">
+                              <div className="grid gap-3 sm:grid-cols-2">
+                                <div>
+                                  <div className="text-[11px] uppercase tracking-[0.18em] text-muted">Margin change</div>
+                                  <div className="mt-1 text-text">
+                                    Init {fmtCurrencySmall(previewMutation.data.brokerInitialMarginChange)} • Maint {fmtCurrencySmall(previewMutation.data.brokerMaintenanceMarginChange)}
+                                  </div>
+                                </div>
+                                <div>
+                                  <div className="text-[11px] uppercase tracking-[0.18em] text-muted">Premium / commission</div>
+                                  <div className="mt-1 text-text">
+                                    {fmtCurrencySmall(previewMutation.data.estimatedGrossPremium)} • {fmtCurrencySmall(previewMutation.data.commissionEstimate)}
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="mt-3 grid gap-2 text-sm text-muted">
+                                <div>
+                                  Opening/closing: <span className="text-text capitalize">{previewMutation.data.openingOrClosing}</span>
+                                </div>
+                                <div>
+                                  Conservative cash use: <span className="text-text">{fmtCurrency(previewMutation.data.conservativeCashImpact)}</span>
+                                </div>
+                                {previewMutation.data.warningText ? (
+                                  <div className="rounded-2xl border border-caution/25 bg-caution/8 px-3 py-2 text-caution">{previewMutation.data.warningText}</div>
+                                ) : null}
+                                {previewMutation.data.note ? <div>{previewMutation.data.note}</div> : null}
+                              </div>
+                            </div>
+                          ) : null}
+                          {submitIsCurrent && submitMutation.data ? (
+                            <div className="rounded-2xl border border-safe/25 bg-safe/8 px-4 py-3 text-sm text-safe">
+                              Order {submitMutation.data.orderId} accepted with status {submitMutation.data.status}.
+                              {submitMutation.data.message ? ` ${submitMutation.data.message}` : ""}
+                            </div>
+                          ) : null}
+                        </>
+                      ) : (
+                        <div className="rounded-2xl border border-line/80 px-4 py-3 text-sm text-muted">
+                          Select a call or put from the chain table below to load a paper order ticket.
+                        </div>
+                      )}
+                    </div>
+                  </div>
                   {chainQuery.data.highlights.map((highlight) => (
                     <div key={`${highlight.label}-${highlight.strike}`} className="panel-soft rounded-2xl p-4">
                       <div className="text-[11px] uppercase tracking-[0.22em] text-muted">{highlight.label}</div>
@@ -654,7 +960,9 @@ function App() {
                       <th className="pb-3 pr-4">Put IV</th>
                       <th className="pb-3 pr-4">Put mid</th>
                       <th className="pb-3 pr-4">Put ask</th>
-                      <th className="pb-3">Put bid</th>
+                      <th className="pb-3 pr-4">Put bid</th>
+                      <th className="pb-3 pr-4">Call ticket</th>
+                      <th className="pb-3">Put ticket</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -673,7 +981,25 @@ function App() {
                         <td className="py-3 pr-4">{fmtNumber(row.putIV, "%")}</td>
                         <td className="py-3 pr-4 text-caution">{fmtCurrencySmall(row.putMid)}</td>
                         <td className="py-3 pr-4">{fmtCurrencySmall(row.putAsk)}</td>
-                        <td className="py-3">{fmtCurrencySmall(row.putBid)}</td>
+                        <td className="py-3 pr-4">{fmtCurrencySmall(row.putBid)}</td>
+                        <td className="py-3 pr-4">
+                          <button
+                            className="rounded-full border border-accent/35 bg-accent/10 px-3 py-1 text-xs font-medium text-accent transition hover:border-accent/50"
+                            onClick={() => loadTicket(row, "C")}
+                            type="button"
+                          >
+                            Load call
+                          </button>
+                        </td>
+                        <td className="py-3">
+                          <button
+                            className="rounded-full border border-caution/35 bg-caution/10 px-3 py-1 text-xs font-medium text-caution transition hover:border-caution/50"
+                            onClick={() => loadTicket(row, "P")}
+                            type="button"
+                          >
+                            Load put
+                          </button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>

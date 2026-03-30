@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class DashboardModel(BaseModel):
@@ -17,12 +17,17 @@ class DashboardModel(BaseModel):
 RiskLevel = Literal["Low", "Moderate", "Elevated", "High"]
 StrategyTag = Literal["covered-call", "cash-secured-put", "short-option", "long-option", "stock", "other"]
 QuoteSource = Literal["streaming", "historical", "unavailable"]
+ExecutionMode = Literal["disabled", "paper"]
+OrderAction = Literal["BUY", "SELL"]
+OrderType = Literal["LMT", "MKT"]
+TimeInForce = Literal["DAY", "GTC"]
 
 
 class ConnectionStatus(DashboardModel):
     mode: Literal["mock", "ibkr"]
     connected: bool
     status: Literal["connected", "disconnected", "degraded"]
+    executionMode: ExecutionMode = "disabled"
     host: str
     port: int
     clientId: int
@@ -310,3 +315,99 @@ class ScenarioResponse(DashboardModel):
     methodology: str
     generatedAt: datetime
     isStale: bool = False
+
+
+class OptionOrderRequest(DashboardModel):
+    accountId: str
+    symbol: str
+    expiry: str
+    strike: float
+    right: Literal["C", "P"]
+    action: OrderAction
+    quantity: int = Field(gt=0)
+    orderType: OrderType = "LMT"
+    limitPrice: float | None = Field(default=None, ge=0.0)
+    tif: TimeInForce = "DAY"
+    orderRef: str | None = None
+
+    @field_validator("accountId")
+    @classmethod
+    def _normalize_account_id(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if not normalized:
+            raise ValueError("Account ID is required.")
+        return normalized
+
+    @field_validator("symbol")
+    @classmethod
+    def _normalize_symbol(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if not normalized:
+            raise ValueError("Symbol is required.")
+        return normalized
+
+    @field_validator("expiry")
+    @classmethod
+    def _normalize_expiry(cls, value: str) -> str:
+        normalized = value.strip()
+        if len(normalized) == 8 and normalized.isdigit():
+            return f"{normalized[:4]}-{normalized[4:6]}-{normalized[6:8]}"
+        return normalized
+
+    @field_validator("limitPrice")
+    @classmethod
+    def _validate_limit_price(cls, value: float | None, info) -> float | None:
+        order_type = info.data.get("orderType")
+        if order_type == "LMT" and value is None:
+            raise ValueError("Limit price is required for limit orders.")
+        if order_type == "MKT":
+            return None
+        return round(float(value), 4) if value is not None else value
+
+    @field_validator("strike")
+    @classmethod
+    def _normalize_strike(cls, value: float) -> float:
+        return round(float(value), 4)
+
+
+class OptionOrderPreview(DashboardModel):
+    accountId: str
+    symbol: str
+    expiry: str
+    strike: float
+    right: Literal["C", "P"]
+    action: OrderAction
+    quantity: int
+    orderType: OrderType
+    limitPrice: float | None = None
+    tif: TimeInForce
+    orderRef: str
+    openingOrClosing: Literal["opening", "closing", "unknown"]
+    marketReferencePrice: float | None = None
+    estimatedGrossPremium: float | None = None
+    conservativeCashImpact: float | None = None
+    brokerInitialMarginChange: float | None = None
+    brokerMaintenanceMarginChange: float | None = None
+    commissionEstimate: float | None = None
+    warningText: str | None = None
+    note: str | None = None
+    generatedAt: datetime
+
+
+class SubmittedOrder(DashboardModel):
+    orderId: int
+    permId: int | None = None
+    clientId: int | None = None
+    status: str
+    filledQuantity: float
+    remainingQuantity: float
+    message: str | None = None
+    submittedAt: datetime
+
+
+class OrderCancelResponse(DashboardModel):
+    orderId: int
+    accountId: str
+    status: str
+    message: str | None = None
+    cancelledAt: datetime

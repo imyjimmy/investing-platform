@@ -20,8 +20,12 @@ from options_dashboard.models import (
     ConnectionStatus,
     OpenOrderExposure,
     OptionChainResponse,
+    OptionOrderPreview,
+    OptionOrderRequest,
     OptionPosition,
+    OrderCancelResponse,
     Position,
+    SubmittedOrder,
     UnderlyingQuote,
 )
 from options_dashboard.services.analytics import build_collateral_summary
@@ -29,10 +33,12 @@ from options_dashboard.services.base import BrokerService, BrokerUnavailableErro
 
 
 try:
-    from ib_insync import IB, Contract, Option, Stock, Ticker
+    from ib_insync import IB, Contract, LimitOrder, MarketOrder, Option, Stock, Ticker
 except ImportError:  # pragma: no cover - runtime guard
     IB = object  # type: ignore[assignment]
     Contract = object  # type: ignore[assignment]
+    LimitOrder = object  # type: ignore[assignment]
+    MarketOrder = object  # type: ignore[assignment]
     Option = object  # type: ignore[assignment]
     Stock = object  # type: ignore[assignment]
     Ticker = object  # type: ignore[assignment]
@@ -85,6 +91,7 @@ class IBGatewayBrokerService(BrokerService):
                 mode="ibkr",
                 connected=self._connected,
                 status="connected" if self._connected else "disconnected",
+                executionMode=self.settings.execution_mode,
                 host=self.settings.ib_host,
                 port=self.settings.ib_port,
                 clientId=self.settings.ib_client_id,
@@ -160,6 +167,92 @@ class IBGatewayBrokerService(BrokerService):
                 return cached.value.model_copy(update={"isStale": True})
             raise BrokerUnavailableError(str(exc)) from exc
 
+    def _preview_option_order_on_thread(self, ib: Any, request: OptionOrderRequest) -> OptionOrderPreview:
+        self._ensure_connected(ib)
+        account_id = self._resolve_account_id(ib, request.accountId)
+        self._ensure_paper_execution_allowed(account_id)
+        contract, market_reference_price = self._resolve_order_contract(ib, request)
+        stock_qty, option_qty = self._position_maps_for_account(ib, account_id)
+        opening_or_closing = _order_open_or_close(contract, request.action, float(request.quantity), stock_qty, option_qty)
+        order = self._build_ib_order(request, account_id)
+        order_state = ib.whatIfOrder(contract, order)
+        return self._build_option_order_preview(
+            request=request,
+            account_id=account_id,
+            contract=contract,
+            order_state=order_state,
+            market_reference_price=market_reference_price,
+            opening_or_closing=opening_or_closing,
+        )
+
+    def _submit_option_order_on_thread(self, ib: Any, request: OptionOrderRequest) -> SubmittedOrder:
+        self._ensure_connected(ib)
+        account_id = self._resolve_account_id(ib, request.accountId)
+        self._ensure_paper_execution_allowed(account_id)
+        contract, _ = self._resolve_order_contract(ib, request)
+        order = self._build_ib_order(request, account_id)
+        trade = ib.placeOrder(contract, order)
+        order_status, message = self._await_trade_ack(ib, trade)
+        status = str(getattr(order_status, "status", "") or "Submitted")
+        if status in {"Cancelled", "ApiCancelled", "Inactive"}:
+            raise RuntimeError(message or f"IB Gateway did not accept the order. Final status: {status}.")
+        self._clear_portfolio_cache(account_id)
+        return SubmittedOrder(
+            orderId=int(getattr(trade.order, "orderId", 0)),
+            permId=_optional_int(getattr(order_status, "permId", None)),
+            clientId=_optional_int(getattr(order_status, "clientId", None)),
+            status=status,
+            filledQuantity=round(float(getattr(order_status, "filled", 0.0) or 0.0), 4),
+            remainingQuantity=round(float(getattr(order_status, "remaining", 0.0) or 0.0), 4),
+            message=message,
+            submittedAt=datetime.now(UTC),
+        )
+
+    def _cancel_order_on_thread(self, ib: Any, account_id: str, order_id: int) -> OrderCancelResponse:
+        self._ensure_connected(ib)
+        resolved_account_id = self._resolve_account_id(ib, account_id)
+        self._ensure_paper_execution_allowed(resolved_account_id)
+        trade = self._find_open_trade(ib, resolved_account_id, order_id)
+        if trade is None:
+            raise RuntimeError(f"Open order {order_id} was not found for account {resolved_account_id}.")
+        ib.cancelOrder(trade.order)
+        order_status, message = self._await_trade_ack(ib, trade)
+        self._clear_portfolio_cache(resolved_account_id)
+        return OrderCancelResponse(
+            orderId=order_id,
+            accountId=resolved_account_id,
+            status=str(getattr(order_status, "status", "") or "PendingCancel"),
+            message=message,
+            cancelledAt=datetime.now(UTC),
+        )
+
+    def preview_option_order(self, request: OptionOrderRequest) -> OptionOrderPreview:
+        return cast(
+            OptionOrderPreview,
+            self._submit(
+                lambda ib: self._preview_option_order_on_thread(ib, request),
+                timeout=self.settings.ib_request_timeout_seconds + 4.0,
+            ),
+        )
+
+    def submit_option_order(self, request: OptionOrderRequest) -> SubmittedOrder:
+        return cast(
+            SubmittedOrder,
+            self._submit(
+                lambda ib: self._submit_option_order_on_thread(ib, request),
+                timeout=self.settings.ib_request_timeout_seconds + self.settings.ib_order_ack_timeout_seconds + 4.0,
+            ),
+        )
+
+    def cancel_order(self, account_id: str, order_id: int) -> OrderCancelResponse:
+        return cast(
+            OrderCancelResponse,
+            self._submit(
+                lambda ib: self._cancel_order_on_thread(ib, account_id, order_id),
+                timeout=self.settings.ib_request_timeout_seconds + self.settings.ib_order_ack_timeout_seconds + 3.0,
+            ),
+        )
+
     def _submit(self, callback: Callable[[Any], TaskResultT], timeout: float) -> TaskResultT:
         future: Future[Any] = Future()
         self._tasks.put(_PendingTask(callback=callback, future=future))
@@ -230,7 +323,7 @@ class IBGatewayBrokerService(BrokerService):
             self.settings.ib_host,
             self.settings.ib_port,
             clientId=self.settings.ib_client_id,
-            readonly=True,
+            readonly=self.settings.execution_mode == "disabled",
             timeout=self.settings.ib_connect_timeout_seconds,
             account=self.settings.ib_account_id or "",
         )
@@ -556,6 +649,151 @@ class IBGatewayBrokerService(BrokerService):
             generatedAt=generated_at,
             isStale=False,
         )
+
+    def _resolve_order_contract(self, ib: Any, request: OptionOrderRequest) -> tuple[Any, float | None]:
+        underlying_contract = self._qualify_one(ib, Stock(request.symbol, self.settings.ib_underlying_exchange, self.settings.ib_currency))
+        definitions = ib.reqSecDefOptParams(request.symbol, "", underlying_contract.secType, underlying_contract.conId)
+        if not definitions:
+            raise RuntimeError(f"IB Gateway returned no option definitions for {request.symbol}.")
+        definition = _select_definition(definitions, self.settings.ib_option_exchange)
+        contract = self._qualify_one(
+            ib,
+            Option(
+                request.symbol,
+                request.expiry.replace("-", ""),
+                float(request.strike),
+                request.right,
+                self.settings.ib_option_exchange,
+                currency=self.settings.ib_currency,
+                tradingClass=definition.tradingClass,
+            ),
+        )
+        return contract, self._request_option_reference_price(ib, contract)
+
+    def _request_option_reference_price(self, ib: Any, contract: Any) -> float | None:
+        for market_data_type in _market_data_type_candidates(self.settings.ib_market_data_type):
+            ticker = self._req_market_data_snapshot(ib, contract, market_data_type)
+            mark = _ticker_option_mark(ticker)
+            if _is_valid_number(mark):
+                return round(float(mark), 4)
+        midpoint, _ = _latest_option_midpoint(ib, contract)
+        if _is_valid_number(midpoint):
+            return round(float(midpoint), 4)
+        return None
+
+    def _position_maps_for_account(
+        self,
+        ib: Any,
+        account_id: str,
+    ) -> tuple[dict[str, float], dict[tuple[str, str, str, float], int]]:
+        stock_qty: dict[str, float] = {}
+        option_qty: dict[tuple[str, str, str, float], int] = {}
+        for item in ib.portfolio(account_id):
+            contract = item.contract
+            quantity = float(item.position)
+            if contract.secType in {"STK", "ETF"}:
+                stock_qty[contract.symbol] = quantity
+            elif contract.secType == "OPT":
+                key = (
+                    contract.symbol,
+                    contract.right,
+                    _normalize_expiry(contract.lastTradeDateOrContractMonth),
+                    round(float(contract.strike), 2),
+                )
+                option_qty[key] = int(quantity)
+        return stock_qty, option_qty
+
+    def _build_ib_order(self, request: OptionOrderRequest, account_id: str) -> Any:
+        order_kwargs = {
+            "account": account_id,
+            "tif": request.tif,
+            "orderRef": request.orderRef or self._default_order_ref(request, account_id),
+            "transmit": True,
+        }
+        if request.orderType == "MKT":
+            return MarketOrder(request.action, request.quantity, **order_kwargs)
+        return LimitOrder(request.action, request.quantity, float(request.limitPrice or 0.0), **order_kwargs)
+
+    def _default_order_ref(self, request: OptionOrderRequest, account_id: str) -> str:
+        return (
+            f"options-dashboard:paper:{account_id}:{request.symbol}:"
+            f"{request.expiry}:{request.right}:{request.strike:.2f}:{request.action}:{request.quantity}"
+        )
+
+    def _build_option_order_preview(
+        self,
+        request: OptionOrderRequest,
+        account_id: str,
+        contract: Any,
+        order_state: Any,
+        market_reference_price: float | None,
+        opening_or_closing: str,
+    ) -> OptionOrderPreview:
+        estimated_gross_premium = None
+        if request.orderType == "LMT" and request.limitPrice is not None:
+            signed = 1.0 if request.action == "SELL" else -1.0
+            estimated_gross_premium = round(float(request.limitPrice) * 100.0 * request.quantity * signed, 2)
+        conservative_cash_impact = _conservative_cash_impact(request, opening_or_closing)
+        note = _option_order_note(request, opening_or_closing, contract)
+        warning_text = _string_or_none(getattr(order_state, "warningText", None))
+        return OptionOrderPreview(
+            accountId=account_id,
+            symbol=request.symbol,
+            expiry=request.expiry,
+            strike=round(float(contract.strike), 2),
+            right=request.right,
+            action=request.action,
+            quantity=request.quantity,
+            orderType=request.orderType,
+            limitPrice=request.limitPrice,
+            tif=request.tif,
+            orderRef=request.orderRef or self._default_order_ref(request, account_id),
+            openingOrClosing=opening_or_closing,  # type: ignore[arg-type]
+            marketReferencePrice=market_reference_price,
+            estimatedGrossPremium=estimated_gross_premium,
+            conservativeCashImpact=conservative_cash_impact,
+            brokerInitialMarginChange=_optional_float(getattr(order_state, "initMarginChange", None)),
+            brokerMaintenanceMarginChange=_optional_float(getattr(order_state, "maintMarginChange", None)),
+            commissionEstimate=_optional_float(getattr(order_state, "commission", None)),
+            warningText=warning_text,
+            note=note,
+            generatedAt=datetime.now(UTC),
+        )
+
+    def _ensure_paper_execution_allowed(self, account_id: str) -> None:
+        if self.settings.execution_mode != "paper":
+            raise RuntimeError("Trade execution is disabled for this dashboard session.")
+        if not _is_paper_account_id(account_id):
+            raise RuntimeError(f"Paper-only execution is enabled, so account {account_id} is blocked from order submission.")
+
+    def _clear_portfolio_cache(self, account_id: str) -> None:
+        resolved = account_id.strip().upper()
+        stale_keys = [key for key in self._portfolio_cache if key == resolved or key == "__default__"]
+        if self._resolved_account_id:
+            stale_keys.append(self._resolved_account_id.strip().upper())
+        for key in set(stale_keys):
+            self._portfolio_cache.pop(key, None)
+
+    def _find_open_trade(self, ib: Any, account_id: str, order_id: int) -> Any | None:
+        for trade in ib.openTrades():
+            trade_order_id = _optional_int(getattr(trade.order, "orderId", None))
+            trade_account = _string_or_none(getattr(trade.order, "account", None)) or account_id
+            if trade_order_id == order_id and trade_account.upper() == account_id:
+                return trade
+        return None
+
+    def _await_trade_ack(self, ib: Any, trade: Any) -> tuple[Any, str | None]:
+        deadline = time.monotonic() + self.settings.ib_order_ack_timeout_seconds
+        message = _latest_trade_message(trade)
+        while time.monotonic() < deadline:
+            ib.sleep(0.2)
+            status = str(getattr(trade.orderStatus, "status", "") or "")
+            message = _latest_trade_message(trade) or message
+            if status in {"PreSubmitted", "Submitted", "Filled", "Cancelled", "ApiCancelled", "Inactive", "PendingCancel"}:
+                break
+            if _optional_int(getattr(trade.orderStatus, "permId", None)):
+                break
+        return trade.orderStatus, message
 
     def _build_open_orders(
         self,
@@ -1105,6 +1343,69 @@ def _round_or_none(value: float | None, precision: int) -> float | None:
     if not _is_valid_number(value):
         return None
     return round(float(value), precision)
+
+
+def _optional_float(value: Any) -> float | None:
+    result = _safe_float(value)
+    if result is None or not isfinite(result) or abs(result) >= 1e307:
+        return None
+    return round(float(result), 2)
+
+
+def _optional_int(value: Any) -> int | None:
+    try:
+        result = int(value)
+    except (TypeError, ValueError):
+        return None
+    return result if result > 0 else None
+
+
+def _string_or_none(value: Any) -> str | None:
+    if value in {None, ""}:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _latest_trade_message(trade: Any) -> str | None:
+    logs = getattr(trade, "log", None) or []
+    for entry in reversed(logs):
+        message = _string_or_none(getattr(entry, "message", None))
+        if message:
+            return message
+    return _string_or_none(getattr(getattr(trade, "advancedError", None), "message", None))
+
+
+def _conservative_cash_impact(request: OptionOrderRequest, opening_or_closing: str) -> float | None:
+    multiplier = 100.0 * request.quantity
+    if request.action == "SELL" and request.right == "P" and opening_or_closing == "opening":
+        return round(request.strike * multiplier, 2)
+    if request.orderType == "LMT" and request.limitPrice is not None and request.action == "BUY":
+        return round(float(request.limitPrice) * multiplier, 2)
+    if request.action == "SELL" and request.right == "C" and opening_or_closing == "opening":
+        return 0.0
+    return None
+
+
+def _option_order_note(request: OptionOrderRequest, opening_or_closing: str, contract: Any) -> str | None:
+    if request.action == "SELL" and request.right == "P" and opening_or_closing == "opening":
+        reserve = round(request.strike * 100.0 * request.quantity, 2)
+        return f"Conservative cash-secured reserve: ${reserve:,.2f}."
+    if request.action == "SELL" and request.right == "C" and opening_or_closing == "opening":
+        return "Covered-call status is not enforced here. Confirm the selected account has enough shares before transmitting."
+    if request.action == "BUY" and opening_or_closing == "closing":
+        return "This looks like a closing buyback based on the current account position."
+    if request.action == "SELL" and opening_or_closing == "closing":
+        return "This looks like a closing sale against an existing long option position."
+    if request.orderType == "MKT":
+        return f"Market order preview for {contract.symbol} {request.expiry} {request.right}{request.strike:.2f}. Use sparingly on options."
+    return None
+
+
+def _is_paper_account_id(account_id: str | None) -> bool:
+    if not account_id:
+        return False
+    return account_id.strip().upper().startswith("DU")
 
 
 def _age_seconds(timestamp: datetime) -> float:

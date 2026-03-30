@@ -46,6 +46,7 @@ class DashboardSettings:
     """Environment-backed settings for the dashboard."""
 
     data_mode: Literal["mock", "ibkr"] = "mock"
+    execution_mode: Literal["disabled", "paper"] = "paper"
     ib_host: str = "127.0.0.1"
     ib_port: int = 4002
     ib_client_id: int = 17
@@ -53,6 +54,7 @@ class DashboardSettings:
     ib_market_data_type: int = 1
     ib_connect_timeout_seconds: float = 8.0
     ib_request_timeout_seconds: float = 12.0
+    ib_order_ack_timeout_seconds: float = 4.0
     ib_reconnect_interval_seconds: float = 5.0
     ib_underlying_exchange: str = "SMART"
     ib_option_exchange: str = "SMART"
@@ -75,6 +77,7 @@ class DashboardSettings:
     def load(cls) -> "DashboardSettings":
         return cls(
             data_mode=_env_str("OPTIONS_DASHBOARD_DATA_MODE", "mock").lower(),  # type: ignore[arg-type]
+            execution_mode=_env_str("OPTIONS_DASHBOARD_EXECUTION_MODE", "paper").lower(),  # type: ignore[arg-type]
             ib_host=_env_str("OPTIONS_DASHBOARD_IB_HOST", "127.0.0.1"),
             ib_port=_env_int("OPTIONS_DASHBOARD_IB_PORT", 4002),
             ib_client_id=_env_int("OPTIONS_DASHBOARD_IB_CLIENT_ID", 17),
@@ -82,6 +85,7 @@ class DashboardSettings:
             ib_market_data_type=_env_int("OPTIONS_DASHBOARD_IB_MARKET_DATA_TYPE", 1),
             ib_connect_timeout_seconds=_env_float("OPTIONS_DASHBOARD_IB_CONNECT_TIMEOUT_SECONDS", 8.0),
             ib_request_timeout_seconds=_env_float("OPTIONS_DASHBOARD_IB_REQUEST_TIMEOUT_SECONDS", 12.0),
+            ib_order_ack_timeout_seconds=_env_float("OPTIONS_DASHBOARD_IB_ORDER_ACK_TIMEOUT_SECONDS", 4.0),
             ib_reconnect_interval_seconds=_env_float("OPTIONS_DASHBOARD_IB_RECONNECT_INTERVAL_SECONDS", 5.0),
             ib_underlying_exchange=_env_str("OPTIONS_DASHBOARD_IB_UNDERLYING_EXCHANGE", "SMART"),
             ib_option_exchange=_env_str("OPTIONS_DASHBOARD_IB_OPTION_EXCHANGE", "SMART"),

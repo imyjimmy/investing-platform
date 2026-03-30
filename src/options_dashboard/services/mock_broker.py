@@ -13,12 +13,16 @@ from options_dashboard.models import (
     ConnectionStatus,
     OpenOrderExposure,
     OptionChainResponse,
+    OptionOrderPreview,
+    OptionOrderRequest,
     OptionPosition,
+    OrderCancelResponse,
     Position,
+    SubmittedOrder,
     UnderlyingQuote,
 )
 from options_dashboard.services.analytics import build_collateral_summary
-from options_dashboard.services.base import BrokerService, PortfolioSnapshot
+from options_dashboard.services.base import BrokerService, BrokerServiceError, PortfolioSnapshot
 from options_scanner.providers.mock_provider import MockOptionsChainProvider, MockPriceDataProvider
 
 
@@ -42,6 +46,7 @@ class MockBrokerService(BrokerService):
             mode="mock",
             connected=True,
             status="connected",
+            executionMode="disabled",
             host="localhost",
             port=0,
             clientId=0,
@@ -145,6 +150,15 @@ class MockBrokerService(BrokerService):
             generatedAt=generated_at,
             isStale=False,
         )
+
+    def preview_option_order(self, request: OptionOrderRequest) -> OptionOrderPreview:
+        raise BrokerServiceError("Trade execution is disabled in mock mode. Switch to the live IB Gateway adapter to preview or submit paper orders.")
+
+    def submit_option_order(self, request: OptionOrderRequest) -> SubmittedOrder:
+        raise BrokerServiceError("Trade execution is disabled in mock mode. Switch to the live IB Gateway adapter to submit paper orders.")
+
+    def cancel_order(self, account_id: str, order_id: int) -> OrderCancelResponse:
+        raise BrokerServiceError("Trade execution is disabled in mock mode. Switch to the live IB Gateway adapter to cancel paper orders.")
 
     def _build_stock_positions(self, today: date) -> list[Position]:
         allocations = [

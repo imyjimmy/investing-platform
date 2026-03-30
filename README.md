@@ -28,6 +28,9 @@ The original options-scanner pipeline is still present under `src/options_scanne
 - Normalizes option positions into short-put / covered-call views
 - Estimates collateral usage and free option-selling capacity
 - Fetches option chains for selected symbols, including **NVDA**
+- Previews paper option orders with IBKR `whatIf`
+- Submits paper option orders from the chain explorer with explicit account routing
+- Cancels open paper orders from the desktop dashboard
 - Shows exposure by ticker and expiry
 - Runs a simple portfolio shock scenario
 
@@ -51,6 +54,7 @@ cp .env.example .env
 
 ```env
 OPTIONS_DASHBOARD_DATA_MODE=ibkr
+OPTIONS_DASHBOARD_EXECUTION_MODE=paper
 OPTIONS_DASHBOARD_IB_HOST=127.0.0.1
 OPTIONS_DASHBOARD_IB_PORT=4002
 OPTIONS_DASHBOARD_IB_CLIENT_ID=17
@@ -58,6 +62,8 @@ OPTIONS_DASHBOARD_IB_MARKET_DATA_TYPE=1
 ```
 
 If you use paper **TWS** instead of **IB Gateway**, the paper socket port is commonly `7497` instead of `4002`.
+
+7. In IB Gateway or TWS, open `Configure` -> `Settings` -> `API` -> `Settings`, make sure `Enable ActiveX and Socket Clients` is checked, and uncheck `Read-Only API`.
 
 5. Install frontend dependencies:
 
@@ -133,6 +139,9 @@ The FastAPI service exposes the requested MVP endpoints:
 - `GET /api/analytics/exposure-by-expiry`
 - `GET /api/analytics/premium-summary`
 - `GET /api/analytics/scenario`
+- `POST /api/execution/options/preview`
+- `POST /api/execution/options/submit`
+- `POST /api/execution/orders/{orderId}/cancel`
 
 ## Helper scripts
 
@@ -158,6 +167,8 @@ Positions parser:
 
 - The app uses the **socket API**, not the Client Portal REST gateway.
 - The Tauri desktop shell uses the same React dashboard UI as the browser version.
+- Execution is intentionally **paper-only** right now. Live-account order routing is blocked in the backend.
+- Order submission is explicit-account only. Market data remains gateway-wide, but every order ticket routes to the selected account tab.
 - If market data permissions are missing, some quotes and Greeks may be delayed, partial, or unavailable.
 - Collateral, assignment risk, and scenario outputs are deliberately labeled as heuristics where appropriate.
 - When the gateway is unavailable, the backend returns readable connection errors and will fall back to stale cached snapshots when it has them.
