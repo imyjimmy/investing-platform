@@ -9,7 +9,6 @@ export interface ConnectionStatus {
   port: number;
   clientId: number;
   accountId: string | null;
-  managedAccounts: string[];
   marketDataType: number;
   marketDataMode: string;
   usingMockData: boolean;

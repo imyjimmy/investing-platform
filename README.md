@@ -168,7 +168,7 @@ Positions parser:
 - The app uses the **socket API**, not the Client Portal REST gateway.
 - The Tauri desktop shell uses the same React dashboard UI as the browser version.
 - Execution is intentionally **paper-only** right now. Live-account order routing is blocked in the backend.
-- Order submission is explicit-account only. Market data remains gateway-wide, but every order ticket routes to the selected account tab.
+- Order submission is explicit-account only. Market data remains gateway-wide, and the current connected account is used for the paper ticket.
 - If market data permissions are missing, some quotes and Greeks may be delayed, partial, or unavailable.
 - Collateral, assignment risk, and scenario outputs are deliberately labeled as heuristics where appropriate.
 - When the gateway is unavailable, the backend returns readable connection errors and will fall back to stale cached snapshots when it has them.

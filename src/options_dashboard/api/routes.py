@@ -65,14 +65,14 @@ def reconnect() -> dict:
 
 
 @router.get("/account/summary")
-def account_summary(accountId: str | None = Query(default=None)) -> dict:
-    snapshot = _portfolio_snapshot(accountId)
+def account_summary() -> dict:
+    snapshot = _portfolio_snapshot()
     return snapshot.account.model_dump()
 
 
 @router.get("/account/positions")
-def account_positions(accountId: str | None = Query(default=None)) -> dict:
-    snapshot = _portfolio_snapshot(accountId)
+def account_positions() -> dict:
+    snapshot = _portfolio_snapshot()
     return {
         "positions": [position.model_dump() for position in snapshot.positions],
         "generatedAt": snapshot.generated_at,
@@ -81,8 +81,8 @@ def account_positions(accountId: str | None = Query(default=None)) -> dict:
 
 
 @router.get("/account/options-positions")
-def account_option_positions(accountId: str | None = Query(default=None)) -> dict:
-    snapshot = _portfolio_snapshot(accountId)
+def account_option_positions() -> dict:
+    snapshot = _portfolio_snapshot()
     return {
         "positions": [position.model_dump() for position in snapshot.option_positions],
         "generatedAt": snapshot.generated_at,
@@ -91,8 +91,8 @@ def account_option_positions(accountId: str | None = Query(default=None)) -> dic
 
 
 @router.get("/account/open-orders")
-def open_orders(accountId: str | None = Query(default=None)) -> dict:
-    snapshot = _portfolio_snapshot(accountId)
+def open_orders() -> dict:
+    snapshot = _portfolio_snapshot()
     total_committed = sum(order.estimatedCapitalImpact for order in snapshot.open_orders if order.openingOrClosing != "closing")
     put_selling = sum(
         order.estimatedCapitalImpact
@@ -115,8 +115,8 @@ def open_orders(accountId: str | None = Query(default=None)) -> dict:
 
 
 @router.get("/account/risk-summary")
-def risk_summary(accountId: str | None = Query(default=None)) -> dict:
-    snapshot = _portfolio_snapshot(accountId)
+def risk_summary() -> dict:
+    snapshot = _portfolio_snapshot()
     payload = build_risk_summary(snapshot, _settings().safety_buffer, _settings().public_watchlist())
     return payload.model_dump()
 
@@ -167,14 +167,14 @@ def option_contract(
 
 
 @router.get("/analytics/collateral")
-def collateral(accountId: str | None = Query(default=None)) -> dict:
-    snapshot = _portfolio_snapshot(accountId)
+def collateral() -> dict:
+    snapshot = _portfolio_snapshot()
     return build_collateral_summary(snapshot, _settings().safety_buffer).model_dump()
 
 
 @router.get("/analytics/exposure-by-ticker")
-def exposure_by_ticker(accountId: str | None = Query(default=None)) -> dict:
-    snapshot = _portfolio_snapshot(accountId)
+def exposure_by_ticker() -> dict:
+    snapshot = _portfolio_snapshot()
     return {
         "rows": [row.model_dump() for row in build_exposure_by_ticker(snapshot)],
         "generatedAt": snapshot.generated_at,
@@ -183,8 +183,8 @@ def exposure_by_ticker(accountId: str | None = Query(default=None)) -> dict:
 
 
 @router.get("/analytics/exposure-by-expiry")
-def exposure_by_expiry(accountId: str | None = Query(default=None)) -> dict:
-    snapshot = _portfolio_snapshot(accountId)
+def exposure_by_expiry() -> dict:
+    snapshot = _portfolio_snapshot()
     return {
         "rows": [row.model_dump() for row in build_exposure_by_expiry(snapshot)],
         "generatedAt": snapshot.generated_at,
@@ -193,8 +193,8 @@ def exposure_by_expiry(accountId: str | None = Query(default=None)) -> dict:
 
 
 @router.get("/analytics/premium-summary")
-def premium_summary(accountId: str | None = Query(default=None)) -> dict:
-    snapshot = _portfolio_snapshot(accountId)
+def premium_summary() -> dict:
+    snapshot = _portfolio_snapshot()
     return build_premium_summary(snapshot).model_dump()
 
 
@@ -203,9 +203,8 @@ def scenario(
     movePct: float = Query(default=-10.0, ge=-80.0, le=80.0),
     daysForward: int = Query(default=7, ge=0, le=90),
     ivShockPct: float = Query(default=0.0, ge=-80.0, le=200.0),
-    accountId: str | None = Query(default=None),
 ) -> dict:
-    snapshot = _portfolio_snapshot(accountId)
+    snapshot = _portfolio_snapshot()
     return build_scenario(snapshot, movePct, daysForward, ivShockPct).model_dump()
 
 

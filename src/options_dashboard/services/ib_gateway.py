@@ -96,7 +96,6 @@ class IBGatewayBrokerService(BrokerService):
                 port=self.settings.ib_port,
                 clientId=self.settings.ib_client_id,
                 accountId=self._resolved_account_id,
-                managedAccounts=self._managed_accounts,
                 marketDataType=self.settings.ib_market_data_type,
                 marketDataMode=_market_data_mode_label(self.settings.ib_market_data_type),
                 usingMockData=False,
