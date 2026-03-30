@@ -72,6 +72,131 @@ body {
   border: 1px solid rgba(95, 144, 146, 0.16);
 }
 
+.account-workspace {
+  overflow: hidden;
+}
+
+.chrome-header-frame {
+  position: relative;
+}
+
+.chrome-header-body {
+  position: relative;
+  border-bottom: 1px solid rgba(95, 144, 146, 0.14);
+}
+
+.workspace-section {
+  padding-top: 1.5rem;
+  border-top: 1px solid rgba(95, 144, 146, 0.1);
+}
+
+.chrome-tabs-shell {
+  position: relative;
+  z-index: 3;
+  margin: 0 1.5rem -1px;
+  padding: 0;
+}
+
+.chrome-tab-strip {
+  display: flex;
+  align-items: flex-end;
+  gap: 0;
+  overflow-x: auto;
+  padding: 0;
+}
+
+.chrome-tab {
+  --tab-bg: rgba(23, 33, 37, 0.82);
+  position: relative;
+  z-index: 1;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.62rem;
+  min-width: 180px;
+  max-width: 240px;
+  height: 40px;
+  margin-bottom: 0;
+  margin-right: 0.35rem;
+  border: 1px solid rgba(95, 144, 146, 0.14);
+  border-bottom: 0;
+  border-radius: 8px 8px 0 0;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0)),
+    var(--tab-bg);
+  color: var(--muted);
+  padding: 0 0.85rem 0 0.9rem;
+  text-align: left;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.035),
+    0 8px 14px rgba(0, 0, 0, 0.12);
+  transition:
+    color 160ms ease,
+    background 160ms ease,
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease;
+}
+
+.chrome-tab:hover {
+  color: var(--text);
+  transform: translateY(-0.5px);
+}
+
+.chrome-tab.is-active {
+  --tab-bg: rgba(12, 23, 26, 0.98);
+  z-index: 3;
+  border-color: rgba(102, 208, 191, 0.18);
+  color: var(--text);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.045),
+    0 12px 22px rgba(0, 0, 0, 0.16);
+}
+
+.chrome-tab.is-disabled {
+  cursor: default;
+  color: rgba(216, 231, 229, 0.62);
+}
+
+.chrome-tab-title {
+  letter-spacing: 0.01em;
+}
+
+.chrome-tab-dot {
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.4);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.05);
+}
+
+.chrome-tab-dot.is-paper {
+  background: var(--danger);
+}
+
+.chrome-tab-dot.is-live {
+  background: var(--safe);
+}
+
+.chrome-tab-dot.is-muted {
+  background: rgba(216, 231, 229, 0.34);
+}
+
+.chrome-tab-badge {
+  margin-left: auto;
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(216, 231, 229, 0.52);
+  white-space: nowrap;
+}
+
+.account-workspace-body > .workspace-section:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
 .mono {
   font-family: "JetBrains Mono", "SFMono-Regular", monospace;
 }

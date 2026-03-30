@@ -87,6 +87,10 @@ function isPaperTradingAccountId(accountId: string | null | undefined) {
   return accountId.trim().toUpperCase().startsWith("DU");
 }
 
+function uniqueAccounts(accounts: Array<string | null | undefined>) {
+  return Array.from(new Set(accounts.map((accountId) => accountId?.trim().toUpperCase()).filter(Boolean) as string[]));
+}
+
 type TicketContractSide = "C" | "P";
 
 type TicketDraft = {
@@ -102,6 +106,7 @@ type TicketDraft = {
 function App() {
   const queryClient = useQueryClient();
   const [chainSymbol, setChainSymbol] = useState("NVDA");
+  const [selectedAccountId, setSelectedAccountId] = useState<string | undefined>(undefined);
   const [selectedExpiry, setSelectedExpiry] = useState<string | undefined>(undefined);
   const [ticketDraft, setTicketDraft] = useState<TicketDraft | null>(null);
   const [ticketAction, setTicketAction] = useState<"BUY" | "SELL">("SELL");
@@ -132,20 +137,20 @@ function App() {
   });
 
   const riskSummaryQuery = useQuery({
-    queryKey: ["risk-summary"],
-    queryFn: api.riskSummary,
+    queryKey: ["risk-summary", selectedAccountId],
+    queryFn: () => api.riskSummary(selectedAccountId),
     refetchInterval: 15_000,
   });
 
   const optionPositionsQuery = useQuery({
-    queryKey: ["option-positions"],
-    queryFn: api.optionPositions,
+    queryKey: ["option-positions", selectedAccountId],
+    queryFn: () => api.optionPositions(selectedAccountId),
     refetchInterval: 15_000,
   });
 
   const openOrdersQuery = useQuery({
-    queryKey: ["open-orders"],
-    queryFn: api.openOrders,
+    queryKey: ["open-orders", selectedAccountId],
+    queryFn: () => api.openOrders(selectedAccountId),
     refetchInterval: 15_000,
   });
 
@@ -156,8 +161,8 @@ function App() {
   });
 
   const scenarioQuery = useQuery({
-    queryKey: ["scenario", movePct, daysForward, ivShockPct],
-    queryFn: () => api.scenario(movePct, daysForward, ivShockPct),
+    queryKey: ["scenario", selectedAccountId, movePct, daysForward, ivShockPct],
+    queryFn: () => api.scenario(movePct, daysForward, ivShockPct, selectedAccountId),
   });
 
   const connectMutation = useMutation({ mutationFn: api.connect });
@@ -171,9 +176,9 @@ function App() {
     onSuccess: async (_data, variables) => {
       setPreviewRequestKey(JSON.stringify(variables));
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["risk-summary"] }),
-        queryClient.invalidateQueries({ queryKey: ["option-positions"] }),
-        queryClient.invalidateQueries({ queryKey: ["open-orders"] }),
+        queryClient.invalidateQueries({ queryKey: ["risk-summary", selectedAccountId] }),
+        queryClient.invalidateQueries({ queryKey: ["option-positions", selectedAccountId] }),
+        queryClient.invalidateQueries({ queryKey: ["open-orders", selectedAccountId] }),
       ]);
     },
   });
@@ -181,9 +186,9 @@ function App() {
     mutationFn: ({ orderId, accountId }: { orderId: number; accountId: string }) => api.cancelOrder(orderId, accountId),
     onSuccess: async () => {
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["risk-summary"] }),
-        queryClient.invalidateQueries({ queryKey: ["option-positions"] }),
-        queryClient.invalidateQueries({ queryKey: ["open-orders"] }),
+        queryClient.invalidateQueries({ queryKey: ["risk-summary", selectedAccountId] }),
+        queryClient.invalidateQueries({ queryKey: ["option-positions", selectedAccountId] }),
+        queryClient.invalidateQueries({ queryKey: ["open-orders", selectedAccountId] }),
       ]);
     },
   });
@@ -194,6 +199,20 @@ function App() {
       setSelectedExpiry(nextExpiry);
     }
   }, [chainQuery.data?.selectedExpiry, selectedExpiry]);
+
+  useEffect(() => {
+    const availableAccounts = uniqueAccounts([
+      ...(connectionQuery.data?.managedAccounts ?? []),
+      connectionQuery.data?.accountId,
+      riskSummaryQuery.data?.account.accountId,
+    ]);
+    if (availableAccounts.length === 0) {
+      return;
+    }
+    if (!selectedAccountId || !availableAccounts.includes(selectedAccountId)) {
+      setSelectedAccountId(availableAccounts[0]);
+    }
+  }, [connectionQuery.data?.accountId, connectionQuery.data?.managedAccounts, riskSummaryQuery.data?.account.accountId, selectedAccountId]);
 
   useEffect(() => {
     if (!ticketDraft) {
@@ -211,13 +230,15 @@ function App() {
   const optionPositions = optionPositionsQuery.data?.positions ?? [];
   const openOrders = openOrdersQuery.data?.orders ?? [];
   const accountId = risk?.account.accountId ?? connectionQuery.data?.accountId ?? null;
+  const accountTabs = uniqueAccounts([...(connectionQuery.data?.managedAccounts ?? []), accountId]);
+  const renderedAccountTabs = accountTabs.length > 0 ? accountTabs : ["Disconnected"];
   const watchlist = Array.from(new Set(["NVDA", ...(risk?.watchlist ?? []), ...optionPositions.map((position) => position.symbol)])).sort();
   const chainHasBidAsk = (chainQuery.data?.rows ?? []).some(
     (row) => row.callBid != null || row.callAsk != null || row.putBid != null || row.putAsk != null,
   );
   const chainHasOptionMarks = (chainQuery.data?.rows ?? []).some((row) => row.callMid != null || row.putMid != null);
   const paperExecutionEnabled = connectionQuery.data?.executionMode === "paper";
-  const selectedAccount = accountId ?? undefined;
+  const selectedAccount = selectedAccountId ?? accountId ?? undefined;
   const selectedAccountIsPaper = isPaperTradingAccountId(selectedAccount);
   const parsedLimitPrice = ticketOrderType === "LMT" ? Number(ticketLimitPrice) : null;
   const validLimitPrice =
@@ -248,7 +269,7 @@ function App() {
   const executionBannerMessage = !paperExecutionEnabled
     ? "Paper execution is disabled for this dashboard session."
     : !selectedAccount
-      ? "Connect the dashboard to a paper account to route a paper order."
+      ? "Select an account tab to route a paper order."
       : !selectedAccountIsPaper
         ? "Paper execution is blocked on live accounts."
         : null;
@@ -310,9 +331,38 @@ function App() {
   const reconnectError = reconnectMutation.error instanceof Error ? reconnectMutation.error.message : null;
 
   return (
-    <div className="grid-shell min-h-screen px-4 py-6 text-text md:px-6 lg:px-8">
-      <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-6">
-        <header className="panel rounded-[28px] px-6 py-5">
+    <div className="grid-shell min-h-screen px-0 py-6 text-text">
+      <div className="mx-auto w-full max-w-[1600px]">
+        <div className="chrome-header-frame">
+          <div className="chrome-tabs-shell">
+            <div className="chrome-tab-strip">
+              {renderedAccountTabs.map((tabAccountId) => {
+                const isPlaceholder = accountTabs.length === 0;
+                const isActive = isPlaceholder ? true : (selectedAccountId ?? accountId ?? undefined) === tabAccountId;
+                const isPaperTab = isPaperTradingAccountId(tabAccountId);
+                return (
+                  <button
+                    key={tabAccountId}
+                    aria-disabled={isPlaceholder}
+                    className={`chrome-tab ${isActive ? "is-active" : ""} ${isPlaceholder ? "is-disabled" : ""}`}
+                    onClick={() => {
+                      if (isPlaceholder) {
+                        return;
+                      }
+                      setSelectedAccountId(tabAccountId);
+                    }}
+                    type="button"
+                  >
+                    <span className={`chrome-tab-dot ${isPlaceholder ? "is-muted" : isPaperTab ? "is-paper" : "is-live"}`} />
+                    <span className="chrome-tab-title truncate text-sm font-medium">{tabAccountId}</span>
+                    {!isPlaceholder ? <span className="chrome-tab-badge">{isPaperTab ? "Paper" : "Live"}</span> : null}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          <div className="account-workspace panel rounded-[16px]">
+          <header className="chrome-header-body px-10 py-5 lg:px-12">
           <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
             <div>
               <div className="mb-2 text-[11px] uppercase tracking-[0.32em] text-accent">Van Aken Investments LLC</div>
@@ -354,8 +404,8 @@ function App() {
               <div className="mt-1 text-text">{connectionQuery.data ? `${connectionQuery.data.host}:${connectionQuery.data.port}` : "Loading"}</div>
             </div>
             <div className="panel-soft rounded-2xl px-4 py-3">
-              <div className="text-[11px] uppercase tracking-[0.2em]">Mode</div>
-              <div className="mt-1 text-text">{connectionQuery.data?.mode.toUpperCase() ?? "—"}</div>
+              <div className="text-[11px] uppercase tracking-[0.2em]">Active account</div>
+              <div className="mt-1 text-text">{selectedAccount ?? "—"}</div>
             </div>
             <div className="panel-soft rounded-2xl px-4 py-3">
               <div className="text-[11px] uppercase tracking-[0.2em]">Data freshness</div>
@@ -371,7 +421,8 @@ function App() {
               {connectError ?? reconnectError ?? connectionQuery.data?.lastError}
             </div>
           ) : null}
-        </header>
+          </header>
+          <div className="account-workspace-body flex flex-col gap-6 px-10 pb-6 lg:px-12">
 
         <Panel title="Portfolio Overview" eyebrow="Home Screen">
           {riskSummaryQuery.isLoading ? (
@@ -1115,6 +1166,9 @@ function App() {
             </div>
           ) : null}
         </Panel>
+          </div>
+          </div>
+        </div>
       </div>
     </div>
   );
