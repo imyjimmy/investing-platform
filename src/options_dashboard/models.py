@@ -32,6 +32,7 @@ class ConnectionStatus(DashboardModel):
     port: int
     clientId: int
     accountId: str | None = None
+    managedAccounts: list[str] = Field(default_factory=list)
     marketDataType: int
     marketDataMode: str
     usingMockData: bool

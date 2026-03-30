@@ -51,6 +51,7 @@ class MockBrokerService(BrokerService):
             port=0,
             clientId=0,
             accountId="DU-MOCK",
+            managedAccounts=["DU-MOCK"],
             marketDataType=4,
             marketDataMode="MOCK",
             usingMockData=True,
