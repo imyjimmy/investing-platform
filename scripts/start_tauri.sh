@@ -12,7 +12,4 @@ if [[ ! -d node_modules ]]; then
   npm install
 fi
 
-npm run build
-
-cd "${FRONTEND_DIR}/src-tauri"
-cargo run
+npm run tauri:dev
