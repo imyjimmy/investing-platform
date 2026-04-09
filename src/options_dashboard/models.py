@@ -22,6 +22,7 @@ OrderAction = Literal["BUY", "SELL"]
 OrderType = Literal["LMT", "MKT"]
 TimeInForce = Literal["DAY", "GTC"]
 EdgarDownloadMode = Literal["primary-document", "all-attachments", "metadata-only", "full-filing-bundle"]
+EdgarPdfLayout = Literal["nested", "by-filing", "both"]
 
 
 class ConnectionStatus(DashboardModel):
@@ -432,6 +433,8 @@ class EdgarDownloadRequest(DashboardModel):
     startDate: date | None = None
     endDate: date | None = None
     downloadMode: EdgarDownloadMode = "primary-document"
+    pdfLayout: EdgarPdfLayout = "both"
+    pdfFolderFormat: str | None = None
     outputDir: str | None = None
     includeExhibits: bool = True
     resume: bool = True
@@ -489,13 +492,18 @@ class EdgarDownloadResponse(DashboardModel):
     matchedFilings: int
     metadataFilesSynced: int
     downloadedFiles: int
+    generatedPdfs: int
     skippedFiles: int
     failedFiles: int
     downloadMode: EdgarDownloadMode
+    pdfLayout: EdgarPdfLayout
+    pdfFolderFormat: str | None = None
     includeExhibits: bool
     resume: bool
     researchRootPath: str
     stockPath: str
+    filingsPath: str
+    pdfsPath: str
     edgarPath: str
     exportsJsonPath: str
     exportsCsvPath: str

@@ -333,6 +333,8 @@ export interface EdgarDownloadRequest {
   startDate?: string;
   endDate?: string;
   downloadMode?: "primary-document" | "all-attachments" | "metadata-only" | "full-filing-bundle";
+  pdfLayout?: "nested" | "by-filing" | "both";
+  pdfFolderFormat?: string;
   outputDir?: string;
   includeExhibits?: boolean;
   resume?: boolean;
@@ -348,13 +350,18 @@ export interface EdgarDownloadResponse {
   matchedFilings: number;
   metadataFilesSynced: number;
   downloadedFiles: number;
+  generatedPdfs: number;
   skippedFiles: number;
   failedFiles: number;
   downloadMode: "primary-document" | "all-attachments" | "metadata-only" | "full-filing-bundle";
+  pdfLayout: "nested" | "by-filing" | "both";
+  pdfFolderFormat?: string | null;
   includeExhibits: boolean;
   resume: boolean;
   researchRootPath: string;
   stockPath: string;
+  filingsPath: string;
+  pdfsPath: string;
   edgarPath: string;
   exportsJsonPath: string;
   exportsCsvPath: string;

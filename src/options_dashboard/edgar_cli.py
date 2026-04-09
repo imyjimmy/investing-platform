@@ -25,6 +25,18 @@ def build_parser() -> argparse.ArgumentParser:
         default="primary-document",
         help="Download mode to apply to matched filings.",
     )
+    parser.add_argument(
+        "--pdf-layout",
+        dest="pdf_layout",
+        choices=["nested", "by-filing", "both"],
+        default="both",
+        help="Where generated PDFs should live: beside the filing files, under pdfs/[filing]/, or both.",
+    )
+    parser.add_argument(
+        "--pdf-folder-format",
+        dest="pdf_folder_format",
+        help="Relative PDF library format under the stock folder, for example pdfs/[date]_[filing-type]_[sequence].",
+    )
     parser.add_argument("--output", dest="output_dir", help="Research root override. Downloads land under [output]/stocks/[ticker].")
     parser.add_argument(
         "--include-exhibits",
@@ -56,6 +68,8 @@ def main(argv: list[str] | None = None) -> int:
             startDate=args.start_date,
             endDate=args.end_date,
             downloadMode=args.download_mode,
+            pdfLayout=args.pdf_layout,
+            pdfFolderFormat=args.pdf_folder_format,
             outputDir=args.output_dir,
             includeExhibits=args.include_exhibits,
             resume=args.resume,

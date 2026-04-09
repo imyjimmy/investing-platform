@@ -11,7 +11,8 @@ import {
 } from "recharts";
 
 import { api } from "./lib/api";
-import type { EdgarDownloadResponse, OpenOrderExposure, OptionOrderRequest, OptionPosition } from "./lib/types";
+import type { EdgarDownloadRequest, EdgarDownloadResponse, OpenOrderExposure, OptionOrderRequest, OptionPosition } from "./lib/types";
+import { EdgarWorkspace } from "./components/EdgarWorkspace";
 import { MetricCard } from "./components/MetricCard";
 import { Panel } from "./components/Panel";
 import { RiskBadge } from "./components/RiskBadge";
@@ -133,6 +134,9 @@ function App() {
   const [movePct, setMovePct] = useState(-10);
   const [daysForward, setDaysForward] = useState(7);
   const [ivShockPct, setIvShockPct] = useState(0);
+  const [edgarSyncing, setEdgarSyncing] = useState(false);
+  const [edgarSyncResult, setEdgarSyncResult] = useState<EdgarDownloadResponse | undefined>(undefined);
+  const [edgarSyncError, setEdgarSyncError] = useState<string | null>(null);
 
   const deferredTickerFilter = useDeferredValue(tickerFilter);
 
@@ -179,8 +183,8 @@ function App() {
   const reconnectMutation = useMutation({ mutationFn: api.reconnect });
   const edgarDownloadMutation = useMutation({
     mutationFn: api.edgarDownload,
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["edgar-status"] });
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["edgar-status"] });
     },
   });
   const previewMutation = useMutation({
@@ -368,15 +372,26 @@ function App() {
     ? `${connectionEndpoint} · ${connectionQuery.data.marketDataMode}`
     : `${connectionEndpoint} · waiting for gateway`;
   const edgarStatusError = edgarStatusQuery.error instanceof Error ? edgarStatusQuery.error.message : null;
-  const edgarSyncError = edgarDownloadMutation.error instanceof Error ? edgarDownloadMutation.error.message : null;
-  const edgarSyncResult: EdgarDownloadResponse | undefined = edgarDownloadMutation.data;
   const edgarSourceTone: SourceTone = edgarStatusQuery.data?.available ? "live" : edgarStatusError ? "off" : "off";
-  const edgarBadge = edgarDownloadMutation.isPending ? "Syncing" : edgarStatusQuery.data?.available ? "Ready" : "Off";
+  const edgarBadge = edgarSyncing ? "Syncing" : edgarStatusQuery.data?.available ? "Ready" : "Off";
   const edgarMeta = "SEC API";
   const dataModeLabel = connectionQuery.data?.mode === "ibkr" ? "IBKR live session" : "Mock snapshot";
   const executionModeLabel = paperExecutionEnabled ? "Paper execution" : "Disabled";
   const refreshCadenceLabel = "Conn 10s · Risk 15s · Chain 20s";
   const heartbeatLabel = connectionQuery.data?.lastHeartbeatAt ? formatTimestamp(connectionQuery.data.lastHeartbeatAt) : "No heartbeat";
+
+  async function runEdgarDownload(request: EdgarDownloadRequest) {
+    setEdgarSyncing(true);
+    setEdgarSyncError(null);
+    try {
+      const result = await edgarDownloadMutation.mutateAsync(request);
+      setEdgarSyncResult(result);
+    } catch (error) {
+      setEdgarSyncError(error instanceof Error ? error.message : "EDGAR sync failed.");
+    } finally {
+      setEdgarSyncing(false);
+    }
+  }
 
   return (
     <div className={`app-shell grid-shell min-h-screen text-text ${sidebarOpen ? "is-sidebar-open" : ""}`}>
@@ -490,19 +505,16 @@ function App() {
             <div className="mx-auto w-full max-w-[1600px]">
               {activeWorkspace === "edgar" ? (
                 <EdgarWorkspace
-                  ready={Boolean(edgarStatusQuery.data?.available)}
+                  defaultTicker={chainSymbol}
+                  onRun={(request) => {
+                    void runEdgarDownload(request);
+                  }}
+                  status={edgarStatusQuery.data}
+                  statusLoading={edgarStatusQuery.isLoading}
                   statusError={edgarStatusError}
                   syncError={edgarSyncError}
                   syncResult={edgarSyncResult}
-                  syncing={edgarDownloadMutation.isPending}
-                  symbol={chainSymbol}
-                  onSync={() =>
-                    edgarDownloadMutation.mutate({
-                      ticker: chainSymbol,
-                      downloadMode: "primary-document",
-                      resume: true,
-                    })
-                  }
+                  syncing={edgarSyncing}
                 />
               ) : null}
               <div className={activeWorkspace === "edgar" ? "hidden" : ""}>
@@ -1383,89 +1395,6 @@ function ShellSourceRow({
       </div>
       {children ? <div className="shell-source-extra">{children}</div> : null}
     </section>
-  );
-}
-
-function EdgarWorkspace({
-  ready,
-  statusError,
-  syncError,
-  syncResult,
-  syncing,
-  symbol,
-  onSync,
-}: {
-  ready: boolean;
-  statusError: string | null;
-  syncError: string | null;
-  syncResult?: EdgarDownloadResponse;
-  syncing: boolean;
-  symbol: string;
-  onSync: () => void;
-}) {
-  const summary = syncResult
-    ? syncResult.downloadedFiles > 0
-      ? `${syncResult.downloadedFiles} file downloaded for ${syncResult.ticker}.`
-      : syncResult.skippedFiles > 0
-        ? `${syncResult.ticker} is already up to date.`
-        : `${syncResult.matchedFilings} filings matched for ${syncResult.ticker}.`
-    : ready
-      ? `Ready to pull SEC filings for ${symbol}.`
-      : "SEC access needs configuration before downloads can run.";
-
-  return (
-    <div className="grid gap-6">
-      <div className="chrome-header-frame">
-        <div className="account-workspace panel rounded-[16px]">
-          <header className="chrome-header-body px-10 py-7 lg:px-12">
-            <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
-              <div>
-                <div className="mb-2 text-[11px] uppercase tracking-[0.32em] text-accent">Source Workspace</div>
-                <div className="flex flex-wrap items-center gap-3">
-                  <h1 className="text-3xl font-semibold tracking-tight text-text">EDGAR</h1>
-                  <div className="inline-flex items-center rounded-full border border-line bg-panelSoft px-4 py-1 text-sm font-medium text-text">
-                    {ready ? "Ready" : "Unavailable"}
-                  </div>
-                </div>
-                <p className="mt-2 max-w-3xl text-sm text-muted">
-                  A clean landing page for SEC filings, issuer submissions, and document sync.
-                </p>
-              </div>
-            </div>
-          </header>
-        </div>
-      </div>
-
-      <Panel
-        title="Blank Workspace"
-        eyebrow="Coming Next"
-        action={
-          <button
-            className="rounded-full border border-accent/35 bg-accent/10 px-4 py-2 text-sm font-medium text-accent transition hover:border-accent/50 hover:text-white disabled:cursor-default disabled:opacity-45"
-            disabled={!ready || syncing}
-            onClick={onSync}
-            type="button"
-          >
-            {syncing ? `Syncing ${symbol}...` : `Sync ${symbol}`}
-          </button>
-        }
-      >
-        {syncError ? <ErrorState message={syncError} /> : null}
-        {!syncError && statusError ? <ErrorState message={statusError} /> : null}
-        {!syncError && !statusError ? (
-          <div className="panel-soft rounded-[24px] px-8 py-14 text-center">
-            <div className="mx-auto mb-5 inline-flex h-14 w-14 items-center justify-center rounded-[18px] bg-accent/10 text-accent">
-              <DocumentIcon />
-            </div>
-            <div className="text-xl font-semibold text-text">Nothing noisy here yet.</div>
-            <p className="mx-auto mt-3 max-w-2xl text-sm text-muted">{summary}</p>
-            <div className="mt-6 text-xs uppercase tracking-[0.18em] text-muted">
-              {syncResult ? `Saved under /stocks/${syncResult.ticker}/edgar` : `Files will save under /stocks/${symbol}/edgar`}
-            </div>
-          </div>
-        ) : null}
-      </Panel>
-    </div>
   );
 }
 

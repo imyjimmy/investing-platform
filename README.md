@@ -34,7 +34,7 @@ The original options-scanner pipeline is still present under `src/options_scanne
 - Cancels open paper orders from the desktop dashboard
 - Shows exposure by ticker and expiry
 - Runs a simple portfolio shock scenario
-- Syncs SEC EDGAR metadata, exports, and primary filing documents into `/stocks/[ticker]/edgar`
+- Syncs SEC EDGAR machine state into `/stocks/[ticker]/.edgar`, filing folders into `/stocks/[ticker]/`, and generated PDFs into a user-selectable layout such as `/stocks/[ticker]/pdfs/[filing]/`
 
 ## Quick start
 
@@ -188,7 +188,7 @@ SEC EDGAR download helper:
 - The Tauri desktop shell uses the same React dashboard UI as the browser version.
 - Execution is intentionally **paper-only** right now. Live-account order routing is blocked in the backend.
 - Order submission is explicit-account only. Market data remains gateway-wide, and the current connected account is used for the paper ticket.
-- EDGAR downloads use checksum-based resume and land under `[research root]/stocks/[ticker]/edgar/`.
+- EDGAR downloads use checksum-based resume with machine state under `[research root]/stocks/[ticker]/.edgar/`, filing folders under `[research root]/stocks/[ticker]/`, and generated PDFs in a configurable layout such as `[research root]/stocks/[ticker]/pdfs/[filing]/`.
 - If market data permissions are missing, some quotes and Greeks may be delayed, partial, or unavailable.
 - Collateral, assignment risk, and scenario outputs are deliberately labeled as heuristics where appropriate.
 - When the gateway is unavailable, the backend returns readable connection errors and will fall back to stale cached snapshots when it has them.

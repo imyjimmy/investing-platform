@@ -263,3 +263,14 @@ def edgar_download(request: EdgarDownloadRequest) -> dict:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post("/sources/edgar/last-sync")
+def edgar_last_sync(request: EdgarDownloadRequest) -> dict | None:
+    try:
+        result = _edgar().last_sync(request)
+        return result.model_dump() if result else None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc

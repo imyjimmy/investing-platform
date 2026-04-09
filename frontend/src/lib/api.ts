@@ -89,6 +89,7 @@ export const api = {
     ),
   edgarStatus: () => fetchJson<EdgarSourceStatus>("/api/sources/edgar/status"),
   edgarDownload: (request: EdgarDownloadRequest) => postJson<EdgarDownloadResponse>("/api/sources/edgar/download", request),
+  edgarLastSync: (request: EdgarDownloadRequest) => postJson<EdgarDownloadResponse | null>("/api/sources/edgar/last-sync", request),
   previewOptionOrder: (request: OptionOrderRequest) => postJson<OptionOrderPreview>("/api/execution/options/preview", request),
   submitOptionOrder: (request: OptionOrderRequest) => postJson<SubmittedOrder>("/api/execution/options/submit", request),
   cancelOrder: (orderId: number, accountId: string) =>
