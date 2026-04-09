@@ -314,3 +314,50 @@ export interface OrderCancelResponse {
   message: string | null;
   cancelledAt: string;
 }
+
+export interface EdgarSourceStatus {
+  available: boolean;
+  status: "ready" | "degraded";
+  researchRootPath: string;
+  stocksRootPath: string;
+  edgarUserAgent: string;
+  maxRequestsPerSecond: number;
+  timeoutSeconds: number;
+}
+
+export interface EdgarDownloadRequest {
+  ticker?: string;
+  companyName?: string;
+  cik?: string;
+  formTypes?: string[];
+  startDate?: string;
+  endDate?: string;
+  downloadMode?: "primary-document" | "all-attachments" | "metadata-only" | "full-filing-bundle";
+  outputDir?: string;
+  includeExhibits?: boolean;
+  resume?: boolean;
+  maxRequestsPerSecond?: number;
+  userAgent?: string;
+}
+
+export interface EdgarDownloadResponse {
+  companyName: string;
+  ticker: string;
+  cik: string;
+  totalFilingsConsidered: number;
+  matchedFilings: number;
+  metadataFilesSynced: number;
+  downloadedFiles: number;
+  skippedFiles: number;
+  failedFiles: number;
+  downloadMode: "primary-document" | "all-attachments" | "metadata-only" | "full-filing-bundle";
+  includeExhibits: boolean;
+  resume: boolean;
+  researchRootPath: string;
+  stockPath: string;
+  edgarPath: string;
+  exportsJsonPath: string;
+  exportsCsvPath: string;
+  manifestPath: string;
+  syncedAt: string;
+}

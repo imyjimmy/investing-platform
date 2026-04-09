@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class DashboardModel(BaseModel):
@@ -21,6 +21,7 @@ ExecutionMode = Literal["disabled", "paper"]
 OrderAction = Literal["BUY", "SELL"]
 OrderType = Literal["LMT", "MKT"]
 TimeInForce = Literal["DAY", "GTC"]
+EdgarDownloadMode = Literal["primary-document", "all-attachments", "metadata-only", "full-filing-bundle"]
 
 
 class ConnectionStatus(DashboardModel):
@@ -411,3 +412,92 @@ class OrderCancelResponse(DashboardModel):
     status: str
     message: str | None = None
     cancelledAt: datetime
+
+
+class EdgarSourceStatus(DashboardModel):
+    available: bool
+    status: Literal["ready", "degraded"]
+    researchRootPath: str
+    stocksRootPath: str
+    edgarUserAgent: str
+    maxRequestsPerSecond: float
+    timeoutSeconds: float
+
+
+class EdgarDownloadRequest(DashboardModel):
+    ticker: str | None = None
+    companyName: str | None = None
+    cik: str | None = None
+    formTypes: list[str] = Field(default_factory=list)
+    startDate: date | None = None
+    endDate: date | None = None
+    downloadMode: EdgarDownloadMode = "primary-document"
+    outputDir: str | None = None
+    includeExhibits: bool = True
+    resume: bool = True
+    maxRequestsPerSecond: float | None = Field(default=None, gt=0)
+    userAgent: str | None = None
+
+    @field_validator("ticker")
+    @classmethod
+    def _normalize_ticker(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip().upper()
+        return normalized or None
+
+    @field_validator("companyName")
+    @classmethod
+    def _normalize_company_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @field_validator("cik")
+    @classmethod
+    def _normalize_cik(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        digits = "".join(character for character in value if character.isdigit())
+        return digits or None
+
+    @field_validator("formTypes")
+    @classmethod
+    def _normalize_form_types(cls, value: list[str]) -> list[str]:
+        deduped: list[str] = []
+        for form_type in value:
+            normalized = form_type.strip().upper()
+            if normalized and normalized not in deduped:
+                deduped.append(normalized)
+        return deduped
+
+    @model_validator(mode="after")
+    def _validate_identifier(self) -> "EdgarDownloadRequest":
+        if not any([self.ticker, self.companyName, self.cik]):
+            raise ValueError("Provide a ticker, company name, or CIK.")
+        if self.startDate and self.endDate and self.startDate > self.endDate:
+            raise ValueError("startDate must be on or before endDate.")
+        return self
+
+
+class EdgarDownloadResponse(DashboardModel):
+    companyName: str
+    ticker: str
+    cik: str
+    totalFilingsConsidered: int
+    matchedFilings: int
+    metadataFilesSynced: int
+    downloadedFiles: int
+    skippedFiles: int
+    failedFiles: int
+    downloadMode: EdgarDownloadMode
+    includeExhibits: bool
+    resume: bool
+    researchRootPath: str
+    stockPath: str
+    edgarPath: str
+    exportsJsonPath: str
+    exportsCsvPath: str
+    manifestPath: str
+    syncedAt: datetime

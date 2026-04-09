@@ -1,5 +1,8 @@
 import type {
     ConnectionStatus,
+    EdgarDownloadRequest,
+    EdgarDownloadResponse,
+    EdgarSourceStatus,
     OpenOrdersResponse,
     OptionOrderPreview,
     OptionOrderRequest,
@@ -84,6 +87,8 @@ export const api = {
     fetchJson<ScenarioResponse>(
       withAccountId(`/api/analytics/scenario?movePct=${movePct}&daysForward=${daysForward}&ivShockPct=${ivShockPct}`, accountId),
     ),
+  edgarStatus: () => fetchJson<EdgarSourceStatus>("/api/sources/edgar/status"),
+  edgarDownload: (request: EdgarDownloadRequest) => postJson<EdgarDownloadResponse>("/api/sources/edgar/download", request),
   previewOptionOrder: (request: OptionOrderRequest) => postJson<OptionOrderPreview>("/api/execution/options/preview", request),
   submitOptionOrder: (request: OptionOrderRequest) => postJson<SubmittedOrder>("/api/execution/options/submit", request),
   cancelOrder: (orderId: number, accountId: string) =>

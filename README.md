@@ -10,6 +10,7 @@ The original options-scanner pipeline is still present under `src/options_scanne
 - NVDA-first chain exploration
 - expiry stack and ticker concentration
 - simple assignment-risk and collateral heuristics
+- SEC EDGAR metadata and filing document sync into a local research library
 - offline fake-data mode for UI work
 
 ## Stack
@@ -33,6 +34,7 @@ The original options-scanner pipeline is still present under `src/options_scanne
 - Cancels open paper orders from the desktop dashboard
 - Shows exposure by ticker and expiry
 - Runs a simple portfolio shock scenario
+- Syncs SEC EDGAR metadata, exports, and primary filing documents into `/stocks/[ticker]/edgar`
 
 ## Quick start
 
@@ -59,6 +61,14 @@ OPTIONS_DASHBOARD_IB_HOST=127.0.0.1
 OPTIONS_DASHBOARD_IB_PORT=4002
 OPTIONS_DASHBOARD_IB_CLIENT_ID=17
 OPTIONS_DASHBOARD_IB_MARKET_DATA_TYPE=1
+```
+
+For the EDGAR source, also set your research root and a descriptive SEC user agent:
+
+```env
+OPTIONS_DASHBOARD_RESEARCH_ROOT=~/Documents/Finances/research
+OPTIONS_DASHBOARD_EDGAR_USER_AGENT=Your Name your_email@example.com
+OPTIONS_DASHBOARD_EDGAR_MAX_REQUESTS_PER_SECOND=5
 ```
 
 If you use paper **TWS** instead of **IB Gateway**, the paper socket port is commonly `7497` instead of `4002`.
@@ -142,6 +152,8 @@ The FastAPI service exposes the requested MVP endpoints:
 - `POST /api/execution/options/preview`
 - `POST /api/execution/options/submit`
 - `POST /api/execution/orders/{orderId}/cancel`
+- `GET /api/sources/edgar/status`
+- `POST /api/sources/edgar/download`
 
 ## Helper scripts
 
@@ -163,12 +175,20 @@ Positions parser:
 ./scripts/venv.sh run -- python scripts/parse_positions.py
 ```
 
+SEC EDGAR download helper:
+
+```bash
+./scripts/sec-download --ticker AEHR --form 8-K --mode primary-document
+./scripts/sec-download --ticker NVDA --start-date 2026-01-01 --mode metadata-only
+```
+
 ## Notes on live data
 
 - The app uses the **socket API**, not the Client Portal REST gateway.
 - The Tauri desktop shell uses the same React dashboard UI as the browser version.
 - Execution is intentionally **paper-only** right now. Live-account order routing is blocked in the backend.
 - Order submission is explicit-account only. Market data remains gateway-wide, and the current connected account is used for the paper ticket.
+- EDGAR downloads use checksum-based resume and land under `[research root]/stocks/[ticker]/edgar/`.
 - If market data permissions are missing, some quotes and Greeks may be delayed, partial, or unavailable.
 - Collateral, assignment risk, and scenario outputs are deliberately labeled as heuristics where appropriate.
 - When the gateway is unavailable, the backend returns readable connection errors and will fall back to stale cached snapshots when it has them.

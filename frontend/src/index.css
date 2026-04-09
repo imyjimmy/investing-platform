@@ -91,6 +91,10 @@ body {
   padding: 0 18px;
 }
 
+.shell-topbar-spacer {
+  flex: 1;
+}
+
 .shell-frame {
   display: grid;
   grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
@@ -147,6 +151,15 @@ body {
 .shell-toggle:focus-visible {
   outline: 2px solid rgba(102, 208, 191, 0.3);
   outline-offset: 2px;
+}
+
+.shell-home-button {
+  margin-left: 8px;
+}
+
+.shell-home-button svg {
+  width: 26px;
+  height: 26px;
 }
 
 .shell-sidebar-body {
@@ -300,7 +313,15 @@ body {
   margin-top: 8px;
   font-size: 12px;
   line-height: 1.45;
+  color: rgba(216, 231, 229, 0.62);
+}
+
+.shell-source-note.is-danger {
   color: #f0928a;
+}
+
+.shell-source-note.is-success {
+  color: #76dbad;
 }
 
 .shell-sidebar-footer {
@@ -321,7 +342,7 @@ body {
 }
 
 .shell-settings-panel.is-open {
-  max-height: 260px;
+  max-height: 320px;
   margin-bottom: 8px;
   opacity: 1;
   transform: translateY(0);
@@ -347,6 +368,7 @@ body {
   font-size: 12px;
   font-weight: 500;
   text-align: right;
+  word-break: break-word;
   color: var(--text);
 }
 

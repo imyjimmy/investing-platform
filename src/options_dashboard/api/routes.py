@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, HTTPException, Query
 
 from options_dashboard import __version__
-from options_dashboard.models import OptionOrderRequest
+from options_dashboard.models import EdgarDownloadRequest, OptionOrderRequest
 from options_dashboard.services.analytics import (
     build_collateral_summary,
     build_exposure_by_expiry,
@@ -16,7 +16,7 @@ from options_dashboard.services.analytics import (
     build_risk_summary,
     build_scenario,
 )
-from options_dashboard.services.app_state import get_broker_service, get_settings
+from options_dashboard.services.app_state import get_broker_service, get_edgar_service, get_settings
 from options_dashboard.services.base import BrokerUnavailableError
 
 
@@ -29,6 +29,10 @@ def _service():
 
 def _settings():
     return get_settings()
+
+
+def _edgar():
+    return get_edgar_service()
 
 
 @router.get("/health")
@@ -244,3 +248,18 @@ def cancel_order(order_id: int, accountId: str = Query(...)) -> dict:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/sources/edgar/status")
+def edgar_status() -> dict:
+    return _edgar().source_status().model_dump()
+
+
+@router.post("/sources/edgar/download")
+def edgar_download(request: EdgarDownloadRequest) -> dict:
+    try:
+        return _edgar().download(request).model_dump()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc

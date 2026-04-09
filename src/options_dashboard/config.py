@@ -34,6 +34,12 @@ def _env_optional_str(name: str) -> str | None:
     return value if value not in {None, ""} else None
 
 
+def _env_path(name: str, default: str) -> Path:
+    value = os.environ.get(name)
+    raw = value if value not in {None, ""} else default
+    return Path(raw).expanduser()
+
+
 def _env_list(name: str, default: list[str]) -> list[str]:
     value = os.environ.get(name)
     if value in {None, ""}:
@@ -69,6 +75,11 @@ class DashboardSettings:
     watchlist_symbols: list[str] = field(
         default_factory=lambda: ["NVDA", "IREN", "AXTI", "PYPL", "GLD", "IAU", "VOO"]
     )
+    research_root: Path = Path("~/Documents/Finances/research").expanduser()
+    edgar_user_agent: str = "Options Dashboard support@example.com"
+    edgar_max_requests_per_second: float = 5.0
+    edgar_timeout_seconds: float = 30.0
+    edgar_retry_limit: int = 5
     backend_host: str = "127.0.0.1"
     backend_port: int = 8000
     frontend_port: int = 5173
@@ -101,6 +112,11 @@ class DashboardSettings:
                 "OPTIONS_DASHBOARD_WATCHLIST",
                 ["NVDA", "IREN", "AXTI", "PYPL", "GLD", "IAU", "VOO"],
             ),
+            research_root=_env_path("OPTIONS_DASHBOARD_RESEARCH_ROOT", "~/Documents/Finances/research"),
+            edgar_user_agent=_env_str("OPTIONS_DASHBOARD_EDGAR_USER_AGENT", "Options Dashboard support@example.com"),
+            edgar_max_requests_per_second=_env_float("OPTIONS_DASHBOARD_EDGAR_MAX_REQUESTS_PER_SECOND", 5.0),
+            edgar_timeout_seconds=_env_float("OPTIONS_DASHBOARD_EDGAR_TIMEOUT_SECONDS", 30.0),
+            edgar_retry_limit=_env_int("OPTIONS_DASHBOARD_EDGAR_RETRY_LIMIT", 5),
             backend_host=_env_str("OPTIONS_DASHBOARD_BACKEND_HOST", "127.0.0.1"),
             backend_port=_env_int("OPTIONS_DASHBOARD_BACKEND_PORT", 8000),
             frontend_port=_env_int("OPTIONS_DASHBOARD_FRONTEND_PORT", 5173),
@@ -109,6 +125,10 @@ class DashboardSettings:
     @property
     def frontend_origin(self) -> str:
         return f"http://127.0.0.1:{self.frontend_port}"
+
+    @property
+    def stocks_root(self) -> Path:
+        return self.research_root / "stocks"
 
     def public_watchlist(self) -> list[str]:
         deduped: list[str] = []

@@ -11,7 +11,7 @@ import {
 } from "recharts";
 
 import { api } from "./lib/api";
-import type { OpenOrderExposure, OptionOrderRequest, OptionPosition } from "./lib/types";
+import type { EdgarDownloadResponse, OpenOrderExposure, OptionOrderRequest, OptionPosition } from "./lib/types";
 import { MetricCard } from "./components/MetricCard";
 import { Panel } from "./components/Panel";
 import { RiskBadge } from "./components/RiskBadge";
@@ -104,11 +104,13 @@ type TicketDraft = {
 };
 
 type SourceTone = "live" | "off" | "planned";
+type WorkspaceSurface = "ibkr" | "edgar";
 
 function App() {
   const queryClient = useQueryClient();
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceSurface>("ibkr");
   const [chainSymbol, setChainSymbol] = useState("NVDA");
   const [selectedAccountId, setSelectedAccountId] = useState<string | undefined>(undefined);
   const [selectedExpiry, setSelectedExpiry] = useState<string | undefined>(undefined);
@@ -168,9 +170,19 @@ function App() {
     queryKey: ["scenario", selectedAccountId, movePct, daysForward, ivShockPct],
     queryFn: () => api.scenario(movePct, daysForward, ivShockPct, selectedAccountId),
   });
+  const edgarStatusQuery = useQuery({
+    queryKey: ["edgar-status"],
+    queryFn: api.edgarStatus,
+  });
 
   const connectMutation = useMutation({ mutationFn: api.connect });
   const reconnectMutation = useMutation({ mutationFn: api.reconnect });
+  const edgarDownloadMutation = useMutation({
+    mutationFn: api.edgarDownload,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["edgar-status"] });
+    },
+  });
   const previewMutation = useMutation({
     mutationFn: api.previewOptionOrder,
     onSuccess: (_data, variables) => setPreviewRequestKey(JSON.stringify(variables)),
@@ -355,6 +367,12 @@ function App() {
   const sourceMeta = connectionQuery.data?.connected
     ? `${connectionEndpoint} · ${connectionQuery.data.marketDataMode}`
     : `${connectionEndpoint} · waiting for gateway`;
+  const edgarStatusError = edgarStatusQuery.error instanceof Error ? edgarStatusQuery.error.message : null;
+  const edgarSyncError = edgarDownloadMutation.error instanceof Error ? edgarDownloadMutation.error.message : null;
+  const edgarSyncResult: EdgarDownloadResponse | undefined = edgarDownloadMutation.data;
+  const edgarSourceTone: SourceTone = edgarStatusQuery.data?.available ? "live" : edgarStatusError ? "off" : "off";
+  const edgarBadge = edgarDownloadMutation.isPending ? "Syncing" : edgarStatusQuery.data?.available ? "Ready" : "Off";
+  const edgarMeta = "SEC API";
   const dataModeLabel = connectionQuery.data?.mode === "ibkr" ? "IBKR live session" : "Mock snapshot";
   const executionModeLabel = paperExecutionEnabled ? "Paper execution" : "Disabled";
   const refreshCadenceLabel = "Conn 10s · Risk 15s · Chain 20s";
@@ -373,6 +391,15 @@ function App() {
           >
             <SidebarToggleIcon open={sidebarOpen} />
           </button>
+          <button
+            aria-label="Go to dashboard"
+            className="shell-toggle shell-home-button"
+            onClick={() => setActiveWorkspace("ibkr")}
+            type="button"
+          >
+            <HomeIcon />
+          </button>
+          <div className="shell-topbar-spacer" />
         </div>
 
         <div className="shell-frame">
@@ -382,10 +409,11 @@ function App() {
                 <div className="shell-sidebar-scroll">
                   <div className="shell-source-list">
                     <ShellSourceRow
-                      active
+                      active={activeWorkspace === "ibkr"}
                       badge={sourceBadge}
                       icon={<BrokerIcon />}
                       meta={sourceMeta}
+                      onSelect={() => setActiveWorkspace("ibkr")}
                       title="Interactive Brokers"
                       tone={sourceTone}
                     >
@@ -407,15 +435,17 @@ function App() {
                           {reconnectMutation.isPending ? "Refreshing..." : "Reconnect"}
                         </button>
                       </div>
-                      {sourceError ? <div className="shell-source-note">{sourceError}</div> : null}
+                      {sourceError ? <div className="shell-source-note is-danger">{sourceError}</div> : null}
                     </ShellSourceRow>
 
                     <ShellSourceRow
-                      badge="Planned"
+                      active={activeWorkspace === "edgar"}
+                      badge={edgarBadge}
                       icon={<DocumentIcon />}
-                      meta="Regulatory filings and issuer context"
+                      meta={edgarMeta}
+                      onSelect={() => setActiveWorkspace("edgar")}
                       title="EDGAR"
-                      tone="planned"
+                      tone={edgarSourceTone}
                     />
 
                     <ShellSourceRow
@@ -435,6 +465,10 @@ function App() {
                     <ShellSettingRow label="Endpoint" value={connectionEndpoint} />
                     <ShellSettingRow label="Refresh" value={refreshCadenceLabel} />
                     <ShellSettingRow label="Last heartbeat" value={heartbeatLabel} />
+                    <ShellSettingRow
+                      label="Research root"
+                      value={edgarStatusQuery.data ? shortenPath(edgarStatusQuery.data.researchRootPath) : "Loading"}
+                    />
                   </div>
 
                   <button
@@ -454,6 +488,24 @@ function App() {
 
           <div className="shell-stage">
             <div className="mx-auto w-full max-w-[1600px]">
+              {activeWorkspace === "edgar" ? (
+                <EdgarWorkspace
+                  ready={Boolean(edgarStatusQuery.data?.available)}
+                  statusError={edgarStatusError}
+                  syncError={edgarSyncError}
+                  syncResult={edgarSyncResult}
+                  syncing={edgarDownloadMutation.isPending}
+                  symbol={chainSymbol}
+                  onSync={() =>
+                    edgarDownloadMutation.mutate({
+                      ticker: chainSymbol,
+                      downloadMode: "primary-document",
+                      resume: true,
+                    })
+                  }
+                />
+              ) : null}
+              <div className={activeWorkspace === "edgar" ? "hidden" : ""}>
               <div className="chrome-header-frame">
           <div className="chrome-tabs-shell">
             <div className="chrome-tab-strip">
@@ -1274,6 +1326,7 @@ function App() {
           </div>
           </div>
               </div>
+              </div>
             </div>
           </div>
         </div>
@@ -1290,6 +1343,7 @@ function ShellSourceRow({
   tone,
   active = false,
   children,
+  onSelect,
 }: {
   title: string;
   meta: string;
@@ -1298,9 +1352,27 @@ function ShellSourceRow({
   tone: SourceTone;
   active?: boolean;
   children?: ReactNode;
+  onSelect?: () => void;
 }) {
+  const interactiveProps = onSelect
+    ? {
+        onClick: onSelect,
+        onKeyDown: (event: React.KeyboardEvent<HTMLElement>) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            onSelect();
+          }
+        },
+        role: "button" as const,
+        tabIndex: 0,
+      }
+    : {};
+
   return (
-    <section className={`shell-source-row ${active ? "is-active" : ""} is-${tone}`}>
+    <section
+      className={`shell-source-row ${active ? "is-active" : ""} is-${tone} ${onSelect ? "is-selectable" : ""}`}
+      {...interactiveProps}
+    >
       <div className="shell-source-top">
         <span className="shell-row-icon">{icon}</span>
         <div className="shell-source-copy">
@@ -1311,6 +1383,89 @@ function ShellSourceRow({
       </div>
       {children ? <div className="shell-source-extra">{children}</div> : null}
     </section>
+  );
+}
+
+function EdgarWorkspace({
+  ready,
+  statusError,
+  syncError,
+  syncResult,
+  syncing,
+  symbol,
+  onSync,
+}: {
+  ready: boolean;
+  statusError: string | null;
+  syncError: string | null;
+  syncResult?: EdgarDownloadResponse;
+  syncing: boolean;
+  symbol: string;
+  onSync: () => void;
+}) {
+  const summary = syncResult
+    ? syncResult.downloadedFiles > 0
+      ? `${syncResult.downloadedFiles} file downloaded for ${syncResult.ticker}.`
+      : syncResult.skippedFiles > 0
+        ? `${syncResult.ticker} is already up to date.`
+        : `${syncResult.matchedFilings} filings matched for ${syncResult.ticker}.`
+    : ready
+      ? `Ready to pull SEC filings for ${symbol}.`
+      : "SEC access needs configuration before downloads can run.";
+
+  return (
+    <div className="grid gap-6">
+      <div className="chrome-header-frame">
+        <div className="account-workspace panel rounded-[16px]">
+          <header className="chrome-header-body px-10 py-7 lg:px-12">
+            <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+              <div>
+                <div className="mb-2 text-[11px] uppercase tracking-[0.32em] text-accent">Source Workspace</div>
+                <div className="flex flex-wrap items-center gap-3">
+                  <h1 className="text-3xl font-semibold tracking-tight text-text">EDGAR</h1>
+                  <div className="inline-flex items-center rounded-full border border-line bg-panelSoft px-4 py-1 text-sm font-medium text-text">
+                    {ready ? "Ready" : "Unavailable"}
+                  </div>
+                </div>
+                <p className="mt-2 max-w-3xl text-sm text-muted">
+                  A clean landing page for SEC filings, issuer submissions, and document sync.
+                </p>
+              </div>
+            </div>
+          </header>
+        </div>
+      </div>
+
+      <Panel
+        title="Blank Workspace"
+        eyebrow="Coming Next"
+        action={
+          <button
+            className="rounded-full border border-accent/35 bg-accent/10 px-4 py-2 text-sm font-medium text-accent transition hover:border-accent/50 hover:text-white disabled:cursor-default disabled:opacity-45"
+            disabled={!ready || syncing}
+            onClick={onSync}
+            type="button"
+          >
+            {syncing ? `Syncing ${symbol}...` : `Sync ${symbol}`}
+          </button>
+        }
+      >
+        {syncError ? <ErrorState message={syncError} /> : null}
+        {!syncError && statusError ? <ErrorState message={statusError} /> : null}
+        {!syncError && !statusError ? (
+          <div className="panel-soft rounded-[24px] px-8 py-14 text-center">
+            <div className="mx-auto mb-5 inline-flex h-14 w-14 items-center justify-center rounded-[18px] bg-accent/10 text-accent">
+              <DocumentIcon />
+            </div>
+            <div className="text-xl font-semibold text-text">Nothing noisy here yet.</div>
+            <p className="mx-auto mt-3 max-w-2xl text-sm text-muted">{summary}</p>
+            <div className="mt-6 text-xs uppercase tracking-[0.18em] text-muted">
+              {syncResult ? `Saved under /stocks/${syncResult.ticker}/edgar` : `Files will save under /stocks/${symbol}/edgar`}
+            </div>
+          </div>
+        ) : null}
+      </Panel>
+    </div>
   );
 }
 
@@ -1383,6 +1538,28 @@ function GearIcon() {
   );
 }
 
+function HomeIcon() {
+  return (
+    <svg aria-hidden="true" fill="none" height="24" viewBox="0 0 24 24" width="24">
+      <path
+        d="M3.9 10.6 12 4.1l8.1 6.5"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="2"
+      />
+      <path
+        d="M5.55 10v9h12.9v-9"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="2"
+      />
+      <path d="M9.25 19v-5.3h5.5V19" stroke="currentColor" strokeLinejoin="round" strokeWidth="2" />
+    </svg>
+  );
+}
+
 function ToggleChip({ checked, label, onToggle }: { checked: boolean; label: string; onToggle: () => void }) {
   return (
     <button
@@ -1440,6 +1617,14 @@ function formatTimestamp(value: string) {
     hour: "numeric",
     minute: "2-digit",
   });
+}
+
+function shortenPath(value: string, maxLength = 42) {
+  if (value.length <= maxLength) {
+    return value;
+  }
+  const edge = Math.max(12, Math.floor((maxLength - 1) / 2));
+  return `${value.slice(0, edge)}…${value.slice(-edge)}`;
 }
 
 function comparePositions(
