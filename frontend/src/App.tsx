@@ -1324,9 +1324,9 @@ function ShellSettingRow({ label, value }: { label: string; value: string }) {
 }
 
 function SidebarToggleIcon({ open }: { open: boolean }) {
-  const dividerX = open ? 8.65 : 8.65;
-  const dividerY = open ? 5.5 : 5.5;
-  const dividerHeight = open ? 13 : 13;
+  const dividerX = open ? 7.8 : 9.45;
+  const dividerY = open ? 5.9 : 3.5;
+  const dividerHeight = open ? 12.2 : 17;
 
   return (
     <svg aria-hidden="true" fill="none" height="24" viewBox="0 0 24 24" width="24">
