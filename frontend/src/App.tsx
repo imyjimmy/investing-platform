@@ -1,4 +1,4 @@
-import { useEffect, useState, useDeferredValue, startTransition } from "react";
+import { useEffect, useState, useDeferredValue, startTransition, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Bar,
@@ -103,8 +103,12 @@ type TicketDraft = {
   ask: number | null;
 };
 
+type SourceTone = "live" | "off" | "planned";
+
 function App() {
   const queryClient = useQueryClient();
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [chainSymbol, setChainSymbol] = useState("NVDA");
   const [selectedAccountId, setSelectedAccountId] = useState<string | undefined>(undefined);
   const [selectedExpiry, setSelectedExpiry] = useState<string | undefined>(undefined);
@@ -226,6 +230,21 @@ function App() {
     }
   }, [chainSymbol, previewMutation, submitMutation, ticketDraft]);
 
+  useEffect(() => {
+    if (!sidebarOpen) {
+      return;
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setSidebarOpen(false);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [sidebarOpen]);
+
   const risk = riskSummaryQuery.data;
   const optionPositions = optionPositionsQuery.data?.positions ?? [];
   const openOrders = openOrdersQuery.data?.orders ?? [];
@@ -329,11 +348,113 @@ function App() {
 
   const connectError = connectMutation.error instanceof Error ? connectMutation.error.message : null;
   const reconnectError = reconnectMutation.error instanceof Error ? reconnectMutation.error.message : null;
+  const connectionEndpoint = connectionQuery.data ? `${connectionQuery.data.host}:${connectionQuery.data.port}` : "127.0.0.1:4002";
+  const sourceError = connectError ?? reconnectError ?? connectionQuery.data?.lastError ?? null;
+  const sourceTone: SourceTone = connectionQuery.data?.connected ? "live" : "off";
+  const sourceBadge = connectionQuery.data?.connected ? (connectionQuery.data?.mode === "mock" ? "Mock" : "Live") : "Off";
+  const sourceMeta = connectionQuery.data?.connected
+    ? `${connectionEndpoint} · ${connectionQuery.data.marketDataMode}`
+    : `${connectionEndpoint} · waiting for gateway`;
+  const dataModeLabel = connectionQuery.data?.mode === "ibkr" ? "IBKR live session" : "Mock snapshot";
+  const executionModeLabel = paperExecutionEnabled ? "Paper execution" : "Disabled";
+  const refreshCadenceLabel = "Conn 10s · Risk 15s · Chain 20s";
+  const heartbeatLabel = connectionQuery.data?.lastHeartbeatAt ? formatTimestamp(connectionQuery.data.lastHeartbeatAt) : "No heartbeat";
 
   return (
-    <div className="grid-shell min-h-screen px-0 py-6 text-text">
-      <div className="mx-auto w-full max-w-[1600px]">
-        <div className="chrome-header-frame">
+    <div className={`app-shell grid-shell min-h-screen text-text ${sidebarOpen ? "is-sidebar-open" : ""}`}>
+      <div className="mx-auto w-full max-w-[1880px]">
+        <div className="shell-topbar">
+          <button
+            aria-expanded={sidebarOpen}
+            aria-label={sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
+            className="shell-toggle"
+            onClick={() => setSidebarOpen((value) => !value)}
+            type="button"
+          >
+            <SidebarToggleIcon open={sidebarOpen} />
+          </button>
+        </div>
+
+        <div className="shell-frame">
+          <div className="shell-sidebar-wrap">
+            <aside aria-label="App shell" className="shell-sidebar">
+              <div className="shell-sidebar-body">
+                <div className="shell-sidebar-scroll">
+                  <div className="shell-source-list">
+                    <ShellSourceRow
+                      active
+                      badge={sourceBadge}
+                      icon={<BrokerIcon />}
+                      meta={sourceMeta}
+                      title="Interactive Brokers"
+                      tone={sourceTone}
+                    >
+                      <div className="shell-source-actions">
+                        <button
+                          className="shell-inline-action"
+                          disabled={connectMutation.isPending}
+                          onClick={() => connectMutation.mutate()}
+                          type="button"
+                        >
+                          {connectMutation.isPending ? "Connecting..." : "Connect"}
+                        </button>
+                        <button
+                          className="shell-inline-action"
+                          disabled={reconnectMutation.isPending}
+                          onClick={() => reconnectMutation.mutate()}
+                          type="button"
+                        >
+                          {reconnectMutation.isPending ? "Refreshing..." : "Reconnect"}
+                        </button>
+                      </div>
+                      {sourceError ? <div className="shell-source-note">{sourceError}</div> : null}
+                    </ShellSourceRow>
+
+                    <ShellSourceRow
+                      badge="Planned"
+                      icon={<DocumentIcon />}
+                      meta="Regulatory filings and issuer context"
+                      title="EDGAR"
+                      tone="planned"
+                    />
+
+                    <ShellSourceRow
+                      badge="Planned"
+                      icon={<FolderIcon />}
+                      meta="Watch local research and export folders"
+                      title="Local folders"
+                      tone="planned"
+                    />
+                  </div>
+                </div>
+
+                <div className="shell-sidebar-footer">
+                  <div className={`shell-settings-panel ${settingsOpen ? "is-open" : ""}`}>
+                    <ShellSettingRow label="Data mode" value={dataModeLabel} />
+                    <ShellSettingRow label="Execution" value={executionModeLabel} />
+                    <ShellSettingRow label="Endpoint" value={connectionEndpoint} />
+                    <ShellSettingRow label="Refresh" value={refreshCadenceLabel} />
+                    <ShellSettingRow label="Last heartbeat" value={heartbeatLabel} />
+                  </div>
+
+                  <button
+                    className={`shell-settings-row ${settingsOpen ? "is-active" : ""}`}
+                    onClick={() => setSettingsOpen((value) => !value)}
+                    type="button"
+                  >
+                    <span className="shell-row-icon">
+                      <GearIcon />
+                    </span>
+                    <span className="shell-settings-label">Settings</span>
+                  </button>
+                </div>
+              </div>
+            </aside>
+          </div>
+
+          <div className="shell-stage">
+            <div className="mx-auto w-full max-w-[1600px]">
+              <div className="chrome-header-frame">
           <div className="chrome-tabs-shell">
             <div className="chrome-tab-strip">
               {renderedAccountTabs.map((tabAccountId) => {
@@ -380,22 +501,6 @@ function App() {
             </div>
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
               <StatusBadge status={connectionQuery.data} />
-              <div className="flex gap-2">
-                <button
-                  className="rounded-full border border-line bg-panelSoft px-4 py-2 text-sm font-medium text-text transition hover:border-accent/40 hover:text-accent"
-                  onClick={() => connectMutation.mutate()}
-                  type="button"
-                >
-                  Connect
-                </button>
-                <button
-                  className="rounded-full border border-line bg-panelSoft px-4 py-2 text-sm font-medium text-text transition hover:border-caution/40 hover:text-caution"
-                  onClick={() => reconnectMutation.mutate()}
-                  type="button"
-                >
-                  Reconnect
-                </button>
-              </div>
             </div>
           </div>
           <div className="mt-4 grid gap-3 text-sm text-muted md:grid-cols-4">
@@ -1168,9 +1273,113 @@ function App() {
         </Panel>
           </div>
           </div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
+  );
+}
+
+function ShellSourceRow({
+  title,
+  meta,
+  badge,
+  icon,
+  tone,
+  active = false,
+  children,
+}: {
+  title: string;
+  meta: string;
+  badge: string;
+  icon: ReactNode;
+  tone: SourceTone;
+  active?: boolean;
+  children?: ReactNode;
+}) {
+  return (
+    <section className={`shell-source-row ${active ? "is-active" : ""} is-${tone}`}>
+      <div className="shell-source-top">
+        <span className="shell-row-icon">{icon}</span>
+        <div className="shell-source-copy">
+          <div className="shell-source-title">{title}</div>
+          <div className="shell-source-meta">{meta}</div>
+        </div>
+        <span className={`shell-source-badge is-${tone}`}>{badge}</span>
+      </div>
+      {children ? <div className="shell-source-extra">{children}</div> : null}
+    </section>
+  );
+}
+
+function ShellSettingRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="shell-setting-row">
+      <span className="shell-setting-label">{label}</span>
+      <span className="shell-setting-value">{value}</span>
+    </div>
+  );
+}
+
+function SidebarToggleIcon({ open }: { open: boolean }) {
+  const dividerX = open ? 8.65 : 8.65;
+  const dividerY = open ? 5.5 : 5.5;
+  const dividerHeight = open ? 13 : 13;
+
+  return (
+    <svg aria-hidden="true" fill="none" height="24" viewBox="0 0 24 24" width="24">
+      <rect height="17" rx="4.5" stroke="currentColor" strokeWidth="1.75" width="17" x="3.5" y="3.5" />
+      <rect fill="currentColor" height={dividerHeight} rx="0.8" width="1.55" x={dividerX} y={dividerY} />
+    </svg>
+  );
+}
+
+function BrokerIcon() {
+  return (
+    <svg aria-hidden="true" fill="none" height="18" viewBox="0 0 20 20" width="18">
+      <path d="M4 14.5h12" opacity="0.5" stroke="currentColor" strokeLinecap="round" strokeWidth="1.4" />
+      <path d="M5 12V8.5M10 12V5.5M15 12V7" stroke="currentColor" strokeLinecap="round" strokeWidth="1.7" />
+    </svg>
+  );
+}
+
+function DocumentIcon() {
+  return (
+    <svg aria-hidden="true" fill="none" height="18" viewBox="0 0 20 20" width="18">
+      <path d="M6.5 3.75h4.8l2.7 2.7v9.8H6.5z" stroke="currentColor" strokeLinejoin="round" strokeWidth="1.5" />
+      <path d="M11.3 3.75v2.9h2.7" stroke="currentColor" strokeLinejoin="round" strokeWidth="1.5" />
+      <path d="M8.3 10h4.8M8.3 12.8h4.1" opacity="0.55" stroke="currentColor" strokeLinecap="round" strokeWidth="1.4" />
+    </svg>
+  );
+}
+
+function FolderIcon() {
+  return (
+    <svg aria-hidden="true" fill="none" height="18" viewBox="0 0 20 20" width="18">
+      <path
+        d="M3.75 6.75h4.1l1.3 1.3h7.1v5.7a1.5 1.5 0 0 1-1.5 1.5H5.25a1.5 1.5 0 0 1-1.5-1.5z"
+        stroke="currentColor"
+        strokeLinejoin="round"
+        strokeWidth="1.5"
+      />
+      <path d="M3.75 6.75v-.5a1.5 1.5 0 0 1 1.5-1.5H7.2l1.15 1.2" opacity="0.55" stroke="currentColor" strokeLinejoin="round" strokeWidth="1.5" />
+    </svg>
+  );
+}
+
+function GearIcon() {
+  return (
+    <svg aria-hidden="true" fill="none" height="20" viewBox="0 0 20 20" width="20">
+      <path
+        d="M8.1 3.2h3.8l.45 1.75a5.9 5.9 0 0 1 1.15.67l1.67-.86 1.9 3.28-1.35 1.25c.04.24.06.47.06.71s-.02.47-.06.71l1.35 1.25-1.9 3.28-1.67-.86a5.9 5.9 0 0 1-1.15.67l-.45 1.75H8.1l-.45-1.75a5.9 5.9 0 0 1-1.15-.67l-1.67.86-1.9-3.28 1.35-1.25A4.8 4.8 0 0 1 4.2 10c0-.24.02-.47.06-.71L2.91 8.04l1.9-3.28 1.67.86c.36-.27.74-.5 1.15-.67z"
+        stroke="currentColor"
+        strokeLinejoin="round"
+        strokeWidth="1.35"
+      />
+      <circle cx="10" cy="10" r="2.35" stroke="currentColor" strokeWidth="1.35" />
+    </svg>
   );
 }
 
