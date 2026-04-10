@@ -12,6 +12,7 @@ import {
 
 import { api } from "./lib/api";
 import type {
+  CoinbasePortfolioResponse,
   ConnectionStatus,
   EdgarDownloadRequest,
   EdgarDownloadResponse,
@@ -172,6 +173,17 @@ function App() {
     queryKey: ["connection-status"],
     queryFn: api.connectionStatus,
     refetchInterval: 10_000,
+  });
+  const coinbaseStatusQuery = useQuery({
+    queryKey: ["coinbase-status"],
+    queryFn: api.coinbaseStatus,
+    refetchInterval: 30_000,
+  });
+  const coinbasePortfolioQuery = useQuery({
+    queryKey: ["coinbase-portfolio"],
+    queryFn: api.coinbasePortfolio,
+    enabled: coinbaseStatusQuery.data?.available ?? false,
+    refetchInterval: 30_000,
   });
 
   const riskSummaryQuery = useQuery({
@@ -420,6 +432,44 @@ function App() {
   const sourceMeta = connectionQuery.data?.connected
     ? `${connectionEndpoint} · ${connectionQuery.data.marketDataMode}`
     : `${connectionEndpoint} · waiting for gateway`;
+  const coinbaseStatusError = coinbaseStatusQuery.error instanceof Error ? coinbaseStatusQuery.error.message : null;
+  const coinbasePortfolioError = coinbasePortfolioQuery.error instanceof Error ? coinbasePortfolioQuery.error.message : null;
+  const coinbaseSourceTone: SourceTone = coinbaseStatusQuery.isLoading ? "planned" : coinbaseStatusQuery.data?.available ? "live" : "off";
+  const coinbaseBadge = coinbaseStatusQuery.isLoading
+    ? "Checking"
+    : coinbasePortfolioQuery.isLoading
+      ? "Syncing"
+      : coinbaseStatusQuery.data?.available
+        ? coinbasePortfolioQuery.data?.isStale
+          ? "Stale"
+          : "Ready"
+        : "Off";
+  const coinbaseMeta = coinbasePortfolioQuery.data
+    ? coinbasePortfolioSummary(coinbasePortfolioQuery.data)
+    : coinbaseStatusQuery.data?.detail ?? "Coinbase App balances";
+  const coinbaseConnectorTone: ConnectionHealthTone = coinbaseStatusQuery.isLoading
+    ? "caution"
+    : coinbaseStatusQuery.data?.available
+      ? coinbasePortfolioQuery.data?.isStale || Boolean(coinbasePortfolioError)
+        ? "caution"
+        : "safe"
+      : "danger";
+  const coinbaseConnectorStatus = coinbaseStatusQuery.isLoading
+    ? "Checking"
+    : coinbasePortfolioQuery.isLoading
+      ? "Syncing"
+      : coinbaseStatusQuery.data?.available
+        ? coinbasePortfolioQuery.data?.isStale
+          ? "Connected · stale snapshot"
+          : "Connected"
+        : coinbaseStatusQuery.data?.authMode === "missing"
+          ? "Needs setup"
+          : "Degraded";
+  const coinbaseConnectorDetail = coinbaseStatusQuery.isLoading
+    ? "Loading Coinbase connector status"
+    : coinbasePortfolioQuery.data
+      ? coinbasePortfolioSummary(coinbasePortfolioQuery.data)
+      : coinbasePortfolioError ?? coinbaseStatusError ?? coinbaseStatusQuery.data?.detail ?? "Coinbase balances connector";
   const edgarStatusError = edgarStatusQuery.error instanceof Error ? edgarStatusQuery.error.message : null;
   const edgarSourceTone: SourceTone = edgarStatusQuery.data?.available ? "live" : edgarStatusError ? "off" : "off";
   const edgarBadge = edgarSyncing ? "Syncing" : edgarStatusQuery.data?.available ? "Ready" : "Off";
@@ -476,10 +526,10 @@ function App() {
     {
       id: "coinbase",
       title: "Coinbase",
-      status: "Planned",
-      detail: "Future crypto exchange balances and activity feed",
-      tone: "planned",
-      countsTowardHealth: false,
+      status: coinbaseConnectorStatus,
+      detail: coinbaseConnectorDetail,
+      tone: coinbaseConnectorTone,
+      countsTowardHealth: true,
       icon: <CoinbaseIcon />,
     },
     {
@@ -640,11 +690,11 @@ function App() {
                     />
 
                     <ShellSourceRow
-                      badge="Planned"
+                      badge={coinbaseBadge}
                       icon={<CoinbaseIcon />}
-                      meta="Future crypto exchange balances connector"
+                      meta={coinbaseMeta}
                       title="Coinbase"
-                      tone="planned"
+                      tone={coinbaseSourceTone}
                     />
 
                     <ShellSourceRow
@@ -938,6 +988,119 @@ function App() {
               <ErrorState message={riskSummaryQuery.error instanceof Error ? riskSummaryQuery.error.message : "Overview unavailable."} />
             )
           ) : null}
+        </Panel>
+
+        <Panel
+          action={
+            <AccountStatusBadge
+              label={
+                coinbaseStatusQuery.isLoading
+                  ? "Checking Coinbase"
+                  : coinbaseStatusQuery.data?.available
+                    ? coinbasePortfolioQuery.data?.isStale
+                      ? "Stale snapshot"
+                      : "Live balances"
+                    : coinbaseStatusQuery.data?.authMode === "missing"
+                      ? "Needs setup"
+                      : "Needs attention"
+              }
+              tone={coinbaseConnectorTone}
+            />
+          }
+          title="Coinbase Holdings"
+          eyebrow="Van Aken Coinbase"
+        >
+          {coinbaseStatusQuery.isLoading ? (
+            <div className="text-sm text-muted">Checking Coinbase connector...</div>
+          ) : !coinbaseStatusQuery.data?.available ? (
+            <div className="grid gap-4">
+              <div className="grid gap-4 md:grid-cols-3">
+                <MetricCard
+                  label="Connector"
+                  value={coinbaseStatusQuery.data?.authMode === "missing" ? "Not configured" : "Unavailable"}
+                />
+                <MetricCard
+                  label="Auth mode"
+                  value={coinbaseStatusQuery.data?.authMode ? coinbaseStatusQuery.data.authMode.toUpperCase() : "—"}
+                />
+                <MetricCard label="API base" value={coinbaseStatusQuery.data?.apiBaseUrl ?? "https://api.coinbase.com"} />
+              </div>
+              <ErrorState message={coinbaseStatusError ?? coinbaseStatusQuery.data?.detail ?? "Coinbase connector is unavailable."} />
+            </div>
+          ) : coinbasePortfolioQuery.isLoading ? (
+            <div className="text-sm text-muted">Loading Coinbase balances...</div>
+          ) : coinbasePortfolioQuery.error instanceof Error ? (
+            <ErrorState message={coinbasePortfolioQuery.error.message} />
+          ) : coinbasePortfolioQuery.data ? (
+            <div className="grid gap-4">
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                <MetricCard label="Total value" value={fmtCurrency(coinbasePortfolioQuery.data.totalUsdValue)} />
+                <MetricCard label="Cash-like" value={fmtCurrency(coinbasePortfolioQuery.data.cashLikeUsdValue)} />
+                <MetricCard label="Crypto" value={fmtCurrency(coinbasePortfolioQuery.data.cryptoUsdValue)} />
+                <MetricCard
+                  hint={`${coinbasePortfolioQuery.data.totalAccountsCount} total accounts returned`}
+                  label="Visible holdings"
+                  value={fmtNumber(coinbasePortfolioQuery.data.visibleHoldingsCount)}
+                />
+              </div>
+              {coinbasePortfolioQuery.data.sourceNotice ? (
+                <div
+                  className={`rounded-2xl border px-4 py-3 text-sm ${
+                    coinbasePortfolioQuery.data.isStale
+                      ? "border-caution/25 bg-caution/8 text-caution"
+                      : "border-line/80 bg-panelSoft text-muted"
+                  }`}
+                >
+                  {coinbasePortfolioQuery.data.sourceNotice}
+                </div>
+              ) : null}
+              <div className="overflow-x-auto">
+                <table className="min-w-[900px] text-left text-sm">
+                  <thead className="text-[11px] uppercase tracking-[0.16em] text-muted">
+                    <tr>
+                      <th className="pb-3 pr-4">Asset</th>
+                      <th className="pb-3 pr-4">Account</th>
+                      <th className="pb-3 pr-4">Type</th>
+                      <th className="pb-3 pr-4">Balance</th>
+                      <th className="pb-3 pr-4">USD rate</th>
+                      <th className="pb-3 pr-4">Value</th>
+                      <th className="pb-3">Allocation</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {coinbasePortfolioQuery.data.holdings.map((holding) => (
+                      <tr key={`${holding.accountId}-${holding.currencyCode}`} className="border-t border-line/70 align-top">
+                        <td className="py-3 pr-4">
+                          <div className="font-medium text-text">{holding.currencyCode}</div>
+                          <div className="mt-1 text-xs text-muted">{holding.currencyName ?? "Coinbase asset"}</div>
+                        </td>
+                        <td className="py-3 pr-4">
+                          <div className="text-text">{holding.accountName}</div>
+                          <div className="mt-1 text-xs text-muted">
+                            {holding.primary ? "Primary" : "Secondary"}
+                            {holding.ready === false ? " · Pending" : ""}
+                          </div>
+                        </td>
+                        <td className="py-3 pr-4">
+                          <div className="text-text capitalize">{holding.accountType}</div>
+                          <div className="mt-1 text-xs text-muted">{holding.isCashLike ? "Cash-like" : holding.currencyType ?? "Crypto"}</div>
+                        </td>
+                        <td className="py-3 pr-4">
+                          {fmtNumber(holding.balance)}
+                          <div className="mt-1 text-xs text-muted">{holding.currencyCode}</div>
+                        </td>
+                        <td className="py-3 pr-4">{fmtCurrencySmall(holding.usdRate)}</td>
+                        <td className="py-3 pr-4 font-medium text-text">{fmtCurrency(holding.usdValue)}</td>
+                        <td className="py-3">{fmtNumber(holding.allocationPct, "%")}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : (
+            <ErrorState message="Coinbase balances are unavailable." />
+          )}
         </Panel>
 
         {!ibkrConnectorCollapsed ? (
@@ -2059,6 +2222,10 @@ function RangeField({
       />
     </div>
   );
+}
+
+function coinbasePortfolioSummary(portfolio: CoinbasePortfolioResponse) {
+  return `${fmtCurrency(portfolio.totalUsdValue)} · ${portfolio.visibleHoldingsCount} holdings`;
 }
 
 function ErrorState({ message }: { message: string }) {

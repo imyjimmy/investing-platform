@@ -34,6 +34,13 @@ def _env_optional_str(name: str) -> str | None:
     return value if value not in {None, ""} else None
 
 
+def _env_optional_path(name: str) -> Path | None:
+    value = os.environ.get(name)
+    if value in {None, ""}:
+        return None
+    return Path(value).expanduser()
+
+
 def _env_path(name: str, default: str) -> Path:
     value = os.environ.get(name)
     raw = value if value not in {None, ""} else default
@@ -80,6 +87,13 @@ class DashboardSettings:
     edgar_max_requests_per_second: float = 5.0
     edgar_timeout_seconds: float = 30.0
     edgar_retry_limit: int = 5
+    coinbase_api_base_url: str = "https://api.coinbase.com"
+    coinbase_api_key: str | None = None
+    coinbase_api_key_name: str | None = None
+    coinbase_api_private_key: str | None = None
+    coinbase_api_key_file: Path | None = None
+    coinbase_timeout_seconds: float = 15.0
+    coinbase_snapshot_cache_ttl_seconds: float = 30.0
     backend_host: str = "127.0.0.1"
     backend_port: int = 8000
     frontend_port: int = 5173
@@ -117,6 +131,13 @@ class DashboardSettings:
             edgar_max_requests_per_second=_env_float("OPTIONS_DASHBOARD_EDGAR_MAX_REQUESTS_PER_SECOND", 5.0),
             edgar_timeout_seconds=_env_float("OPTIONS_DASHBOARD_EDGAR_TIMEOUT_SECONDS", 30.0),
             edgar_retry_limit=_env_int("OPTIONS_DASHBOARD_EDGAR_RETRY_LIMIT", 5),
+            coinbase_api_base_url=_env_str("COINBASE_API_BASE_URL", "https://api.coinbase.com"),
+            coinbase_api_key=_env_optional_str("COINBASE_API_KEY"),
+            coinbase_api_key_name=_env_optional_str("COINBASE_API_KEY_NAME"),
+            coinbase_api_private_key=_env_optional_str("COINBASE_API_PRIVATE_KEY"),
+            coinbase_api_key_file=_env_optional_path("COINBASE_API_KEY_FILE"),
+            coinbase_timeout_seconds=_env_float("COINBASE_TIMEOUT_SECONDS", 15.0),
+            coinbase_snapshot_cache_ttl_seconds=_env_float("COINBASE_SNAPSHOT_CACHE_TTL_SECONDS", 30.0),
             backend_host=_env_str("OPTIONS_DASHBOARD_BACKEND_HOST", "127.0.0.1"),
             backend_port=_env_int("OPTIONS_DASHBOARD_BACKEND_PORT", 8000),
             frontend_port=_env_int("OPTIONS_DASHBOARD_FRONTEND_PORT", 5173),

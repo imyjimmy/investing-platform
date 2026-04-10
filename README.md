@@ -5,6 +5,7 @@ This repo now includes a local-first trader dashboard for **Van Aken Investments
 The original options-scanner pipeline is still present under `src/options_scanner/`, but the new MVP is built around a FastAPI service plus a React workstation UI for:
 
 - account summary and liquidity
+- Coinbase account balances and USD-valued crypto holdings
 - short puts and covered calls
 - open order capital commitments
 - NVDA-first chain exploration
@@ -26,6 +27,7 @@ The original options-scanner pipeline is still present under `src/options_scanne
 - Connects to local IB Gateway on `127.0.0.1`
 - Defaults to the IB Gateway paper port `4002` when running live mode
 - Pulls account summary, portfolio positions, and open orders
+- Pulls Coinbase account balances into a separate Van Aken dashboard section
 - Normalizes option positions into short-put / covered-call views
 - Estimates collateral usage and free option-selling capacity
 - Fetches option chains for selected symbols, including **NVDA**
@@ -70,6 +72,17 @@ OPTIONS_DASHBOARD_RESEARCH_ROOT=~/Documents/Finances/research
 OPTIONS_DASHBOARD_EDGAR_USER_AGENT=Your Name your_email@example.com
 OPTIONS_DASHBOARD_EDGAR_MAX_REQUESTS_PER_SECOND=5
 ```
+
+For Coinbase App account access, add either a bearer token or an ECDSA key name + PEM private key from the CDP portal:
+
+```env
+COINBASE_API_KEY=
+COINBASE_API_KEY_NAME=organizations/{org_id}/apiKeys/{key_id}
+COINBASE_API_PRIVATE_KEY="-----BEGIN EC PRIVATE KEY-----\n...\n-----END EC PRIVATE KEY-----\n"
+COINBASE_API_KEY_FILE=
+```
+
+Coinbase’s current docs note that Coinbase App account APIs require an **ECDSA / ES256** key. A raw Ed25519 secret by itself is not enough to read `/v2/accounts`.
 
 If you use paper **TWS** instead of **IB Gateway**, the paper socket port is commonly `7497` instead of `4002`.
 
@@ -136,6 +149,8 @@ The FastAPI service exposes the requested MVP endpoints:
 - `GET /api/connection-status`
 - `POST /api/connect`
 - `POST /api/reconnect`
+- `GET /api/sources/coinbase/status`
+- `GET /api/sources/coinbase/portfolio`
 - `GET /api/account/summary`
 - `GET /api/account/positions`
 - `GET /api/account/options-positions`
@@ -189,6 +204,7 @@ SEC EDGAR download helper:
 - Execution is intentionally **paper-only** right now. Live-account order routing is blocked in the backend.
 - Order submission is explicit-account only. Market data remains gateway-wide, and the current connected account is used for the paper ticket.
 - EDGAR downloads use checksum-based resume with machine state under `[research root]/stocks/[ticker]/.edgar/`, filing folders under `[research root]/stocks/[ticker]/`, and generated PDFs in a configurable layout such as `[research root]/stocks/[ticker]/pdfs/[filing]/`.
+- Coinbase account access follows the current Coinbase App auth flow from the CDP docs: bearer token or per-request JWT signed with an ECDSA private key.
 - If market data permissions are missing, some quotes and Greeks may be delayed, partial, or unavailable.
 - Collateral, assignment risk, and scenario outputs are deliberately labeled as heuristics where appropriate.
 - When the gateway is unavailable, the backend returns readable connection errors and will fall back to stale cached snapshots when it has them.

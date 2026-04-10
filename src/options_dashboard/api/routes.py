@@ -16,7 +16,13 @@ from options_dashboard.services.analytics import (
     build_risk_summary,
     build_scenario,
 )
-from options_dashboard.services.app_state import get_broker_service, get_edgar_service, get_investor_pdf_service, get_settings
+from options_dashboard.services.app_state import (
+    get_broker_service,
+    get_coinbase_service,
+    get_edgar_service,
+    get_investor_pdf_service,
+    get_settings,
+)
 from options_dashboard.services.base import BrokerUnavailableError
 
 
@@ -37,6 +43,10 @@ def _edgar():
 
 def _investor_pdfs():
     return get_investor_pdf_service()
+
+
+def _coinbase():
+    return get_coinbase_service()
 
 
 @router.get("/health")
@@ -257,6 +267,19 @@ def cancel_order(order_id: int, accountId: str = Query(...)) -> dict:
 @router.get("/sources/edgar/status")
 def edgar_status() -> dict:
     return _edgar().source_status().model_dump()
+
+
+@router.get("/sources/coinbase/status")
+def coinbase_status() -> dict:
+    return _coinbase().source_status().model_dump()
+
+
+@router.get("/sources/coinbase/portfolio")
+def coinbase_portfolio() -> dict:
+    try:
+        return _coinbase().get_portfolio().model_dump()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.post("/sources/edgar/download")

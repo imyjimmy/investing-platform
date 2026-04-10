@@ -6,6 +6,7 @@ from functools import lru_cache
 
 from options_dashboard.config import DashboardSettings
 from options_dashboard.services.base import BrokerService
+from options_dashboard.services.coinbase import CoinbaseService
 from options_dashboard.services.edgar import EdgarDownloader
 from options_dashboard.services.ib_gateway import IBGatewayBrokerService
 from options_dashboard.services.investor_pdfs import InvestorPdfDownloader
@@ -33,3 +34,8 @@ def get_edgar_service() -> EdgarDownloader:
 @lru_cache(maxsize=1)
 def get_investor_pdf_service() -> InvestorPdfDownloader:
     return InvestorPdfDownloader(get_settings())
+
+
+@lru_cache(maxsize=1)
+def get_coinbase_service() -> CoinbaseService:
+    return CoinbaseService(get_settings())

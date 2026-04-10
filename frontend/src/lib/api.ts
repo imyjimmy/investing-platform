@@ -1,4 +1,6 @@
 import type {
+    CoinbasePortfolioResponse,
+    CoinbaseSourceStatus,
     ConnectionStatus,
     EdgarDownloadRequest,
     EdgarDownloadResponse,
@@ -119,6 +121,8 @@ export const api = {
   connectionStatus: () => fetchJson<ConnectionStatus>("/api/connection-status"),
   connect: () => fetchJson<ConnectionStatus>("/api/connect"),
   reconnect: () => fetchJson<ConnectionStatus>("/api/reconnect"),
+  coinbaseStatus: () => fetchJson<CoinbaseSourceStatus>("/api/sources/coinbase/status"),
+  coinbasePortfolio: () => fetchJson<CoinbasePortfolioResponse>("/api/sources/coinbase/portfolio"),
   riskSummary: (accountId?: string) => fetchJson<RiskSummaryResponse>(withAccountId("/api/account/risk-summary", accountId)),
   optionPositions: (accountId?: string) =>
     fetchJson<OptionPositionsResponse>(withAccountId("/api/account/options-positions", accountId)),

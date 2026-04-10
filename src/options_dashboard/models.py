@@ -416,6 +416,45 @@ class OrderCancelResponse(DashboardModel):
     cancelledAt: datetime
 
 
+class CoinbaseSourceStatus(DashboardModel):
+    available: bool
+    status: Literal["ready", "degraded"]
+    authMode: Literal["jwt", "bearer", "missing", "unsupported"]
+    apiBaseUrl: str
+    detail: str
+    lastSuccessfulSyncAt: datetime | None = None
+    lastError: str | None = None
+
+
+class CoinbaseHolding(DashboardModel):
+    accountId: str
+    accountName: str
+    accountType: str
+    primary: bool = False
+    ready: bool | None = None
+    currencyCode: str
+    currencyName: str | None = None
+    currencyType: str | None = None
+    balance: float
+    usdRate: float | None = None
+    usdValue: float | None = None
+    allocationPct: float | None = None
+    isCashLike: bool = False
+    updatedAt: datetime | None = None
+
+
+class CoinbasePortfolioResponse(DashboardModel):
+    totalUsdValue: float
+    cryptoUsdValue: float
+    cashLikeUsdValue: float
+    visibleHoldingsCount: int
+    totalAccountsCount: int
+    holdings: list[CoinbaseHolding]
+    sourceNotice: str | None = None
+    generatedAt: datetime
+    isStale: bool = False
+
+
 class EdgarSourceStatus(DashboardModel):
     available: bool
     status: Literal["ready", "degraded"]

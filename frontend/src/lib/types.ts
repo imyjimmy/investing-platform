@@ -315,6 +315,45 @@ export interface OrderCancelResponse {
   cancelledAt: string;
 }
 
+export interface CoinbaseSourceStatus {
+  available: boolean;
+  status: "ready" | "degraded";
+  authMode: "jwt" | "bearer" | "missing" | "unsupported";
+  apiBaseUrl: string;
+  detail: string;
+  lastSuccessfulSyncAt: string | null;
+  lastError: string | null;
+}
+
+export interface CoinbaseHolding {
+  accountId: string;
+  accountName: string;
+  accountType: string;
+  primary: boolean;
+  ready: boolean | null;
+  currencyCode: string;
+  currencyName: string | null;
+  currencyType: string | null;
+  balance: number;
+  usdRate: number | null;
+  usdValue: number | null;
+  allocationPct: number | null;
+  isCashLike: boolean;
+  updatedAt: string | null;
+}
+
+export interface CoinbasePortfolioResponse {
+  totalUsdValue: number;
+  cryptoUsdValue: number;
+  cashLikeUsdValue: number;
+  visibleHoldingsCount: number;
+  totalAccountsCount: number;
+  holdings: CoinbaseHolding[];
+  sourceNotice: string | null;
+  generatedAt: string;
+  isStale: boolean;
+}
+
 export interface EdgarSourceStatus {
   available: boolean;
   status: "ready" | "degraded";
