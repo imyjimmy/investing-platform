@@ -525,7 +525,7 @@ class InvestorPdfDownloadRequest(DashboardModel):
     ticker: str | None = None
     companyName: str | None = None
     cik: str | None = None
-    lookbackYears: int = Field(default=5, ge=1, le=25)
+    lookbackYears: int = Field(default=5, ge=1, le=50)
     startDate: date | None = None
     endDate: date | None = None
     outputDir: str | None = None

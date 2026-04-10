@@ -73,6 +73,7 @@ KNOWN_PUBLIC_PDF_HOST_SUFFIXES = (
     "stocklight.com",
     "q4cdn.com",
     "gcs-web.com",
+    "cdn-website.com",
     "sec.gov",
 )
 SEARCH_QUERY_PLANS: tuple[tuple[InvestorPdfCategory, str], ...] = (
@@ -93,6 +94,17 @@ SHORT_FY_RE = re.compile(r"(?:FY|F|Q\d)(\d{2})", re.IGNORECASE)
 NON_COMPANY_WORD_RE = re.compile(r"[^A-Z0-9]+")
 SEC_PDF_PRIORITY_FORMS = {"8-K", "10-K", "10-Q", "DEF 14A", "6-K", "20-F"}
 SEC_PDF_INSPECTION_LIMIT = 40
+COMPANY_SITE_PRIORITY_FORMS = {"8-K", "10-K", "10-Q", "6-K", "20-F"}
+COMPANY_SITE_FILING_INSPECTION_LIMIT = 18
+COMPANY_SITE_HINT_PATHS = (
+    "",
+    "/investors",
+    "/investor-relations",
+    "/quarterly-results",
+    "/annual-reports",
+    "/financial-reports",
+    "/presentations",
+)
 DROP_COMPANY_TOKENS = {
     "INC",
     "CORP",
@@ -356,7 +368,6 @@ class InvestorPdfDownloader:
         start_date: date,
         end_date: date,
     ) -> list[PdfCandidate]:
-        del request
         candidates: dict[str, PdfCandidate] = {}
         for slug in self._slug_variants(resolved.company_name):
             for candidate in self._discover_stocklight_annual_reports(resolved, slug, options):
@@ -367,6 +378,13 @@ class InvestorPdfDownloader:
                 if self._candidate_matches_window(candidate, start_date, end_date):
                     key = f"{candidate.category}:{candidate.year}" if candidate.category == "annual-report" and candidate.year else candidate.source_url
                     candidates.setdefault(key, candidate)
+        for candidate in self._discover_company_site_pdf_candidates(resolved, options, start_date, end_date):
+            key = f"{candidate.category}:{candidate.year}" if candidate.category == "annual-report" and candidate.year else candidate.source_url
+            candidates.setdefault(key, candidate)
+        if not candidates:
+            for candidate in self._discover_search_candidates(resolved, request, options, start_date, end_date):
+                key = f"{candidate.category}:{candidate.year}" if candidate.category == "annual-report" and candidate.year else candidate.source_url
+                candidates.setdefault(key, candidate)
         return list(candidates.values())
 
     def _discover_stocklight_annual_reports(
@@ -547,6 +565,64 @@ class InvestorPdfDownloader:
                 )
         return candidates
 
+    def _discover_company_site_pdf_candidates(
+        self,
+        resolved: ResolvedIssuer,
+        options: InvestorPdfRuntimeOptions,
+        start_date: date,
+        end_date: date,
+    ) -> list[PdfCandidate]:
+        payloads = [resolved.submissions_payload]
+        for older_reference in resolved.submissions_payload.get("filings", {}).get("files", []):
+            name = str(older_reference.get("name") or "").strip()
+            if not name:
+                continue
+            payloads.append(self._get_sec_json(OLDER_SUBMISSIONS_URL_TEMPLATE.format(name=name), options))
+
+        filings = self._build_filing_rows(payloads, resolved)
+        company_page_urls: set[str] = set()
+        inspected_filings = 0
+        for filing in filings:
+            filing_date = date.fromisoformat(str(filing.get("filingDate") or "1900-01-01"))
+            if filing_date < start_date or filing_date > end_date:
+                continue
+            if str(filing.get("form") or "").upper() not in COMPANY_SITE_PRIORITY_FORMS:
+                continue
+            if inspected_filings >= COMPANY_SITE_FILING_INSPECTION_LIMIT:
+                break
+            primary_doc_url = str(filing.get("primaryDocUrl") or "")
+            if not primary_doc_url:
+                continue
+            inspected_filings += 1
+            try:
+                response = self._sec_request("GET", primary_doc_url, options, stream=False)
+            except RuntimeError:
+                continue
+            try:
+                filing_text = response.text
+            finally:
+                response.close()
+
+            for url in self._extract_company_site_urls(filing_text, resolved):
+                company_page_urls.update(self._expand_company_site_urls(url))
+
+        candidates: dict[str, PdfCandidate] = {}
+        for page_url in sorted(company_page_urls):
+            try:
+                crawled_candidates = self._crawl_for_pdf_links(
+                    url=page_url,
+                    category="company-report",
+                    resolved=resolved,
+                    options=options,
+                    start_date=start_date,
+                    end_date=end_date,
+                )
+            except RuntimeError:
+                continue
+            for candidate in crawled_candidates:
+                candidates.setdefault(candidate.source_url, candidate)
+        return list(candidates.values())
+
     def _crawl_for_pdf_links(
         self,
         *,
@@ -684,13 +760,16 @@ class InvestorPdfDownloader:
 
     def _infer_published_markers(self, url: str, title: str) -> tuple[str | None, int | None]:
         haystack = f"{url} {title}"
-        years = [int(match) for match in YEAR_RE.findall(haystack) if 1990 <= int(match) <= 2099]
+        max_reasonable_year = date.today().year + 1
+        years = [int(match) for match in YEAR_RE.findall(haystack) if 1990 <= int(match) <= max_reasonable_year]
         if years:
             year = max(years)
             return f"{year}", year
         short_year_match = SHORT_FY_RE.search(haystack)
         if short_year_match:
             year = 2000 + int(short_year_match.group(1))
+            if year > max_reasonable_year:
+                return None, None
             return f"{year}", year
         return None, None
 
@@ -788,11 +867,15 @@ class InvestorPdfDownloader:
                 if not accession_number or accession_number in deduped:
                     continue
                 accession_no_dashes = accession_number.replace("-", "")
+                primary_document = str(row.get("primaryDocument") or "").strip()
+                archive_base_url = ARCHIVE_BASE_URL_TEMPLATE.format(cik=resolved.cik, accession=accession_no_dashes)
                 deduped[accession_number] = {
                     "form": str(row.get("form") or "").strip().upper(),
                     "filingDate": str(row.get("filingDate") or "").strip(),
+                    "primaryDocument": primary_document,
+                    "primaryDocUrl": f"{archive_base_url}/{primary_document}" if primary_document else "",
                     "accessionNumberNoDashes": accession_no_dashes,
-                    "archiveBaseUrl": ARCHIVE_BASE_URL_TEMPLATE.format(cik=resolved.cik, accession=accession_no_dashes),
+                    "archiveBaseUrl": archive_base_url,
                 }
         return sorted(
             deduped.values(),
@@ -867,7 +950,7 @@ class InvestorPdfDownloader:
     def _should_crawl_result(self, result: SearchResult, resolved: ResolvedIssuer) -> bool:
         if self._is_direct_pdf_like_url(result.url):
             return False
-        return result.host.endswith("annualreports.com") and self._allow_public_pdf_host(result.host, resolved)
+        return self._allow_public_pdf_host(result.host, resolved)
 
     def _allow_public_pdf_host(self, host: str, resolved: ResolvedIssuer) -> bool:
         lowered_host = host.lower()
@@ -919,6 +1002,31 @@ class InvestorPdfDownloader:
 
     def _hostname(self, url: str) -> str:
         return urlparse(url).hostname or ""
+
+    def _extract_company_site_urls(self, filing_text: str, resolved: ResolvedIssuer) -> list[str]:
+        urls = sorted(set(re.findall(r"https?://[^\s\"'<>]+", filing_text)))
+        company_urls: list[str] = []
+        for url in urls:
+            host = self._hostname(url).lower()
+            if not host or host.endswith("sec.gov"):
+                continue
+            if not self._allow_public_pdf_host(host, resolved):
+                continue
+            company_urls.append(url.rstrip(".,);"))
+        return company_urls
+
+    def _expand_company_site_urls(self, url: str) -> list[str]:
+        parsed = urlparse(url)
+        if not parsed.scheme or not parsed.netloc:
+            return []
+        base_root = f"{parsed.scheme}://{parsed.netloc}"
+        expanded: list[str] = []
+        for path in (parsed.path or "", *COMPANY_SITE_HINT_PATHS):
+            normalized_path = path if path.startswith("/") else f"/{path}" if path else ""
+            candidate = f"{base_root}{normalized_path}".rstrip("/")
+            if candidate and candidate not in expanded:
+                expanded.append(candidate)
+        return expanded
 
     def _is_direct_pdf_like_url(self, url: str) -> bool:
         parsed = urlparse(url)

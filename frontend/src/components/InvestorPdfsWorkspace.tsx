@@ -5,6 +5,7 @@ import { api } from "../lib/api";
 import type { InvestorPdfDownloadRequest, InvestorPdfDownloadResponse, InvestorPdfSourceStatus } from "../lib/types";
 
 type LookupMode = "ticker" | "companyName" | "cik";
+type WindowMode = "rolling" | "exact";
 
 interface InvestorPdfsWorkspaceProps {
   defaultTicker: string;
@@ -21,6 +22,11 @@ const lookupOptions: Array<{ label: string; value: LookupMode }> = [
   { value: "ticker", label: "Ticker" },
   { value: "companyName", label: "Company" },
   { value: "cik", label: "CIK" },
+];
+
+const windowOptions: Array<{ label: string; value: WindowMode }> = [
+  { value: "rolling", label: "Rolling window" },
+  { value: "exact", label: "Exact dates" },
 ];
 
 const inputClassName =
@@ -40,35 +46,51 @@ export function InvestorPdfsWorkspace({
   const [tickerValue, setTickerValue] = useState(defaultTicker);
   const [companyNameValue, setCompanyNameValue] = useState("");
   const [cikValue, setCikValue] = useState("");
+  const [windowMode, setWindowMode] = useState<WindowMode>("rolling");
   const [lookbackYears, setLookbackYears] = useState("5");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [includeSecExhibits, setIncludeSecExhibits] = useState(true);
   const [resume, setResume] = useState(true);
-  const [outputDir, setOutputDir] = useState("");
+  const [stockFolderTemplate, setStockFolderTemplate] = useState("");
 
   useEffect(() => {
-    if (outputDir || !status?.researchRootPath) {
+    if (stockFolderTemplate || !status?.stocksRootPath) {
       return;
     }
-    setOutputDir(status.researchRootPath);
-  }, [outputDir, status?.researchRootPath]);
+    setStockFolderTemplate(`${status.stocksRootPath}/[ticker]`);
+  }, [stockFolderTemplate, status?.stocksRootPath]);
 
   const normalizedTicker = tickerValue.trim().toUpperCase();
   const normalizedCompanyName = companyNameValue.trim();
   const normalizedCik = cikValue.trim();
   const identifierValue =
     lookupMode === "ticker" ? normalizedTicker : lookupMode === "companyName" ? normalizedCompanyName : normalizedCik;
-  const parsedLookbackYears = Math.max(1, Number.parseInt(lookbackYears, 10) || 5);
+  const lookbackYearsText = lookbackYears.trim();
+  const parsedLookbackYears = Number.parseInt(lookbackYearsText, 10);
+  const lookbackYearsValid =
+    lookbackYearsText.length === 0 || (/^\d+$/.test(lookbackYearsText) && parsedLookbackYears >= 1 && parsedLookbackYears <= 50);
+  const effectiveLookbackYears = lookbackYearsValid && lookbackYearsText.length > 0 ? parsedLookbackYears : 5;
+  const lookbackYearsError =
+    lookbackYearsText.length > 0 && !lookbackYearsValid ? "Years back must be a whole number between 1 and 50." : null;
+  const defaultStockTemplate = status?.stocksRootPath ? `${status.stocksRootPath}/[ticker]` : "[research-root]/stocks/[ticker]";
+  const effectiveStockTemplate = stockFolderTemplate.trim() || defaultStockTemplate;
+  const stockTemplateValid = isStockFolderTemplate(effectiveStockTemplate);
+  const derivedOutputDir = deriveOutputRootFromStockTemplate(effectiveStockTemplate, status?.researchRootPath);
+  const effectiveStartDate = windowMode === "exact" ? startDate : "";
+  const effectiveEndDate = endDate;
+  const dateRangeValid = !(effectiveStartDate && effectiveEndDate) || effectiveStartDate <= effectiveEndDate;
+  const dateRangeError = dateRangeValid ? null : "Start date must be on or before end date.";
+  const formValidationError = windowMode === "rolling" ? lookbackYearsError : dateRangeError;
 
   const request: InvestorPdfDownloadRequest = {
     ticker: lookupMode === "ticker" ? normalizedTicker : undefined,
     companyName: lookupMode === "companyName" ? normalizedCompanyName : undefined,
     cik: lookupMode === "cik" ? normalizedCik : undefined,
-    lookbackYears: parsedLookbackYears,
-    startDate: startDate || undefined,
-    endDate: endDate || undefined,
-    outputDir: outputDir.trim() || undefined,
+    lookbackYears: effectiveLookbackYears,
+    startDate: effectiveStartDate || undefined,
+    endDate: effectiveEndDate || undefined,
+    outputDir: derivedOutputDir,
     includeAnnualReports: true,
     includeCompanyReports: true,
     includeEarningsDecks: false,
@@ -80,7 +102,7 @@ export function InvestorPdfsWorkspace({
   const lastSyncQuery = useQuery({
     queryKey: ["investor-pdfs-last-sync", request],
     queryFn: () => api.investorPdfLastSync(request),
-    enabled: Boolean(status?.available) && Boolean(identifierValue) && !syncing,
+    enabled: Boolean(status?.available) && Boolean(identifierValue) && !syncing && stockTemplateValid && !formValidationError,
     staleTime: 30_000,
     retry: false,
   });
@@ -95,10 +117,9 @@ export function InvestorPdfsWorkspace({
     : undefined;
   const activeSyncResult = scopedSyncResult ?? lastSyncQuery.data ?? undefined;
 
-  const canRun = Boolean(status?.available) && Boolean(identifierValue) && !syncing;
-  const effectiveOutputRoot = outputDir.trim() || status?.researchRootPath || "[research-root]";
+  const canRun = Boolean(status?.available) && Boolean(identifierValue) && !syncing && stockTemplateValid && !formValidationError;
   const resolvedTicker = normalizedTicker || activeSyncResult?.ticker || "[resolved-ticker]";
-  const predictedStockRoot = `${effectiveOutputRoot}/stocks/${resolvedTicker}`;
+  const predictedStockRoot = materializeStockFolder(effectiveStockTemplate, resolvedTicker);
   const predictedPdfsPath = `${predictedStockRoot}/pdfs`;
   const predictedWorkspacePath = `${predictedStockRoot}/.investor-pdfs`;
 
@@ -197,39 +218,78 @@ export function InvestorPdfsWorkspace({
 
               <section className="border-b border-line/70 pb-6">
                 <div className="text-[11px] uppercase tracking-[0.22em] text-muted">Window</div>
-                <div className="mt-3 grid gap-4 md:grid-cols-[180px,1fr,1fr]">
-                  <div>
-                    <div className="mb-2 text-[11px] uppercase tracking-[0.22em] text-muted">Years back</div>
-                    <input
-                      className={inputClassName}
-                      inputMode="numeric"
-                      onChange={(event) => setLookbackYears(event.target.value)}
-                      type="text"
-                      value={lookbackYears}
-                    />
-                  </div>
-                  <div>
-                    <div className="mb-2 text-[11px] uppercase tracking-[0.22em] text-muted">Start date</div>
-                    <input
-                      className={inputClassName}
-                      onChange={(event) => setStartDate(event.target.value)}
-                      type="date"
-                      value={startDate}
-                    />
-                  </div>
-                  <div>
-                    <div className="mb-2 text-[11px] uppercase tracking-[0.22em] text-muted">End date</div>
-                    <input
-                      className={inputClassName}
-                      onChange={(event) => setEndDate(event.target.value)}
-                      type="date"
-                      value={endDate}
-                    />
-                  </div>
+                <div className="mt-3 flex gap-6 border-b border-line/70">
+                  {windowOptions.map((option) => {
+                    const selected = option.value === windowMode;
+                    return (
+                      <button
+                        key={option.value}
+                        className={`border-b-2 pb-3 text-sm font-medium transition ${
+                          selected ? "border-accent text-text" : "border-transparent text-muted hover:text-text"
+                        }`}
+                        onClick={() => setWindowMode(option.value)}
+                        type="button"
+                      >
+                        {option.label}
+                      </button>
+                    );
+                  })}
                 </div>
+                {windowMode === "rolling" ? (
+                  <div className="mt-4 grid gap-4 md:grid-cols-[180px,1fr]">
+                    <div>
+                      <div className="mb-2 text-[11px] uppercase tracking-[0.22em] text-muted">Years back</div>
+                      <input
+                        className={inputClassName}
+                        inputMode="numeric"
+                        onChange={(event) => setLookbackYears(event.target.value)}
+                        type="text"
+                        value={lookbackYears}
+                      />
+                    </div>
+                    <div>
+                      <div className="mb-2 text-[11px] uppercase tracking-[0.22em] text-muted">End date</div>
+                      <input
+                        className={inputClassName}
+                        onChange={(event) => setEndDate(event.target.value)}
+                        type="date"
+                        value={endDate}
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mt-4 grid gap-4 md:grid-cols-[1fr,1fr]">
+                    <div>
+                      <div className="mb-2 text-[11px] uppercase tracking-[0.22em] text-muted">Start date</div>
+                      <input
+                        className={inputClassName}
+                        onChange={(event) => setStartDate(event.target.value)}
+                        type="date"
+                        value={startDate}
+                      />
+                    </div>
+                    <div>
+                      <div className="mb-2 text-[11px] uppercase tracking-[0.22em] text-muted">End date</div>
+                      <input
+                        className={inputClassName}
+                        onChange={(event) => setEndDate(event.target.value)}
+                        type="date"
+                        value={endDate}
+                      />
+                    </div>
+                  </div>
+                )}
                 <p className="mt-3 text-sm text-muted">
-                  Leave the dates blank to use a rolling lookback window. With the defaults, a run against <span className="mono text-text">MSFT</span> means “previous {parsedLookbackYears} years.”
+                  {windowMode === "rolling" ? (
+                    <>
+                      Leave <span className="mono text-text">End date</span> blank to count back from today. With the defaults, a run against{" "}
+                      <span className="mono text-text">MSFT</span> means “previous {effectiveLookbackYears} years.”
+                    </>
+                  ) : (
+                    <>Use exact dates when you want a fixed filing window. Leave one side blank only if you want an open-ended range.</>
+                  )}
                 </p>
+                {formValidationError ? <p className="mt-2 text-sm text-danger">{formValidationError}</p> : null}
               </section>
 
               <section className="grid gap-5">
@@ -267,14 +327,23 @@ export function InvestorPdfsWorkspace({
                 </div>
 
                 <div>
-                  <div className="mb-2 text-[11px] uppercase tracking-[0.22em] text-muted">Research root</div>
+                  <div className="mb-2 text-[11px] uppercase tracking-[0.22em] text-muted">Stock folder</div>
                   <input
                     className={inputClassName}
-                    onChange={(event) => setOutputDir(event.target.value)}
-                    placeholder={status?.researchRootPath ?? "/path/to/research"}
+                    onChange={(event) => setStockFolderTemplate(event.target.value)}
+                    placeholder={defaultStockTemplate}
                     type="text"
-                    value={outputDir}
+                    value={stockFolderTemplate}
                   />
+                  <p className="mt-3 text-sm text-muted">
+                    Use <span className="mono text-text">[ticker]</span>. This run lands in{" "}
+                    <span className="mono text-[#9cead8]">{activeSyncResult?.stockPath || predictedStockRoot}</span>.
+                  </p>
+                  {!stockTemplateValid ? (
+                    <p className="mt-2 text-sm text-danger">
+                      End the path with <span className="mono">/stocks/[ticker]</span> so the target stock folder is unambiguous.
+                    </p>
+                  ) : null}
                 </div>
               </section>
             </div>
@@ -282,14 +351,21 @@ export function InvestorPdfsWorkspace({
             <div className="grid gap-6 border-t border-line/70 pt-6 xl:border-l xl:border-t-0 xl:pl-8 xl:pt-0">
               <section className="grid gap-3">
                 <div className="text-[11px] uppercase tracking-[0.22em] text-muted">Target paths</div>
+                <PathField label="Stock folder" value={activeSyncResult?.stockPath || predictedStockRoot} />
                 <PathField label="Visible PDFs" value={activeSyncResult?.pdfsPath || predictedPdfsPath} />
-                <PathField label="Hidden workspace" value={activeSyncResult?.workspacePath || predictedWorkspacePath} />
+                <PathField label="Hidden .investor-pdfs" value={activeSyncResult?.workspacePath || predictedWorkspacePath} />
               </section>
 
               <section className="grid gap-4 border-t border-line/70 pt-6">
                 <div className="text-[11px] uppercase tracking-[0.22em] text-muted">Latest run</div>
                 {activeSyncResult ? (
                   <>
+                    {activeSyncResult.matchedPdfs === 0 ? (
+                      <div className="rounded-[12px] border border-line/80 bg-panelSoft px-4 py-3 text-sm text-muted">
+                        No PDFs matched for <span className="text-text">{activeSyncResult.companyName}</span> in{" "}
+                        <span className="text-text">{describeWindow(activeSyncResult)}</span>. Clear the dates or widen the window if you expected older documents.
+                      </div>
+                    ) : null}
                     <div className="grid gap-3 sm:grid-cols-3">
                       <Stat label="Matched PDFs" value={String(activeSyncResult.matchedPdfs)} />
                       <Stat label="Downloaded" value={String(activeSyncResult.downloadedFiles)} />
@@ -316,7 +392,9 @@ export function InvestorPdfsWorkspace({
 
               {statusError ? <div className="text-sm text-danger">{statusError}</div> : null}
               {syncError ? <div className="text-sm text-danger">{syncError}</div> : null}
-              {lastSyncQuery.error instanceof Error ? <div className="text-sm text-danger">{lastSyncQuery.error.message}</div> : null}
+              {!formValidationError && lastSyncQuery.error instanceof Error ? (
+                <div className="text-sm text-danger">{lastSyncQuery.error.message}</div>
+              ) : null}
             </div>
           </div>
         </section>
@@ -339,6 +417,39 @@ function matchesCurrentIssuer(
     return response.companyName.toLowerCase() === current.companyName.toLowerCase();
   }
   return response.cik === current.cik;
+}
+
+function isStockFolderTemplate(value: string) {
+  const normalized = value.trim().replace(/\/+$/, "");
+  return normalized.endsWith("/stocks/[ticker]");
+}
+
+function deriveOutputRootFromStockTemplate(template: string, fallback: string | undefined) {
+  const normalized = template.trim().replace(/\/+$/, "");
+  if (normalized.endsWith("/stocks/[ticker]")) {
+    return normalized.slice(0, -"/stocks/[ticker]".length) || "/";
+  }
+  return fallback;
+}
+
+function materializeStockFolder(template: string, ticker: string) {
+  return template.replaceAll("[ticker]", ticker);
+}
+
+function describeWindow(result: InvestorPdfDownloadResponse) {
+  if (result.startDate && result.endDate) {
+    if (result.startDate === result.endDate) {
+      return `the one-day window on ${result.startDate}`;
+    }
+    return `${result.startDate} through ${result.endDate}`;
+  }
+  if (result.startDate) {
+    return `the window starting ${result.startDate}`;
+  }
+  if (result.endDate) {
+    return `the window ending ${result.endDate}`;
+  }
+  return `the previous ${result.lookbackYears} years`;
 }
 
 function PathField({ label, value }: { label: string; value: string }) {

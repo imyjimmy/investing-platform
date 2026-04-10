@@ -45,14 +45,53 @@ function withAccountId(path: string, accountId?: string) {
   return `${path}${separator}accountId=${encodeURIComponent(accountId)}`;
 }
 
+function formatApiErrorDetail(detail: unknown): string | null {
+  if (typeof detail === "string" && detail.trim()) {
+    return detail.trim();
+  }
+  if (Array.isArray(detail)) {
+    const entries = detail
+      .map((entry) => formatValidationEntry(entry))
+      .filter((entry): entry is string => Boolean(entry));
+    return entries.length ? entries.join(" ") : null;
+  }
+  if (detail && typeof detail === "object") {
+    try {
+      return JSON.stringify(detail);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function formatValidationEntry(entry: unknown): string | null {
+  if (!entry || typeof entry !== "object") {
+    return typeof entry === "string" ? entry : null;
+  }
+  const candidate = entry as { loc?: unknown; msg?: unknown };
+  const msg = typeof candidate.msg === "string" ? candidate.msg : null;
+  const loc = Array.isArray(candidate.loc)
+    ? candidate.loc
+        .map((segment) => (typeof segment === "string" || typeof segment === "number" ? String(segment) : null))
+        .filter((segment): segment is string => Boolean(segment))
+        .filter((segment) => segment !== "body")
+    : [];
+  if (msg && loc.length) {
+    return `${loc.join(".")}: ${msg}`;
+  }
+  return msg;
+}
+
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, init);
   if (!response.ok) {
     let message = `${response.status} ${response.statusText}`;
     try {
-      const payload = (await response.json()) as { detail?: string };
-      if (payload.detail) {
-        message = payload.detail;
+      const payload = (await response.json()) as { detail?: unknown };
+      const formattedDetail = formatApiErrorDetail(payload.detail);
+      if (formattedDetail) {
+        message = formattedDetail;
       }
     } catch {
       // Keep the HTTP status text when the server does not return JSON.
