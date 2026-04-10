@@ -20,6 +20,15 @@ interface EdgarWorkspaceProps {
 }
 
 const DEFAULT_PDF_FOLDER_FORMAT = "pdfs/[date]_[filing-type]_[sequence]";
+const PDF_FORMAT_TOKENS = [
+  { token: "[date]", sample: "2026-01-28", meaning: "filing date" },
+  { token: "[filing-type]", sample: "10-Q", meaning: "SEC form type" },
+  { token: "[sequence]", sample: "000119312526027207", meaning: "stable filing accession id" },
+  { token: "[accession]", sample: "000119312526027207", meaning: "same value as sequence" },
+  { token: "[ticker]", sample: "MSFT", meaning: "resolved ticker" },
+  { token: "[filename]", sample: "primary-document", meaning: "source file stem" },
+  { token: "[filing]", sample: "2026-01-28_10-Q_000119312526027207", meaning: "whole filing folder name" },
+] as const;
 
 const lookupOptions: Array<{ label: string; value: EdgarLookupMode }> = [
   { value: "ticker", label: "Ticker" },
@@ -88,6 +97,8 @@ export function EdgarWorkspace({
   const [companyNameValue, setCompanyNameValue] = useState("");
   const [cikValue, setCikValue] = useState("");
   const [showLookupHelp, setShowLookupHelp] = useState(false);
+  const [showPreviewHelp, setShowPreviewHelp] = useState(false);
+  const [showFormatHelp, setShowFormatHelp] = useState(false);
   const [formTypesInput, setFormTypesInput] = useState("8-K, 10-K, 10-Q");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
@@ -169,6 +180,12 @@ export function EdgarWorkspace({
   const predictedPdfsTemplate =
     pdfLayout === "nested" ? stockRoot : `${stockRoot}/${effectivePdfFolderFormat}`;
   const visiblePdfsPath = activeSyncResult?.pdfsPath || predictedPdfsTemplate;
+  const formatterExamplePath = `${stockRoot}/${renderPdfFolderFormatExample(effectivePdfFolderFormat, resolvedTicker)}`;
+
+  function appendPdfToken(token: string) {
+    setPdfFolderFormat((current) => `${current}${token}`);
+    setPdfFolderFormatTouched(true);
+  }
 
   function handleRun() {
     if (!canRun) {
@@ -217,46 +234,52 @@ export function EdgarWorkspace({
             <div className="text-[11px] uppercase tracking-[0.22em] text-muted">SEC filings</div>
             <h2 className="mt-1 text-xl font-semibold text-text">Download Filings</h2>
           </div>
-          <div className="grid gap-6 xl:grid-cols-[1.18fr,0.82fr]">
-            <div className="grid gap-6">
-              <section className="border-b border-line/70 pb-6">
-                <div className="flex items-center gap-2">
-                  <div className="text-[11px] uppercase tracking-[0.22em] text-muted">Issuer</div>
-                  <button
-                    aria-expanded={showLookupHelp}
-                    aria-label="Issuer lookup help"
-                    className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-line bg-[rgba(255,255,255,0.02)] text-muted transition hover:border-accent/25 hover:text-text"
-                    onClick={() => setShowLookupHelp((value) => !value)}
-                    type="button"
-                  >
-                    <InfoIcon />
-                  </button>
-                </div>
-                <div className="mt-1 text-base font-semibold text-text">Ticker, company, or CIK</div>
-                {showLookupHelp ? (
-                  <p className="mt-3 max-w-3xl text-sm leading-6 text-muted">
-                    Ticker is fastest when you know the symbol. Company asks the SEC lookup table to resolve the issuer name. CIK uses the raw SEC filer identifier directly.
-                  </p>
-                ) : null}
-                <div className="mt-4 grid gap-4">
-                  <div className="flex gap-6 border-b border-line/70">
-                    {lookupOptions.map((option) => {
-                      const selected = option.value === lookupMode;
-                      return (
-                        <button
-                          key={option.value}
-                          className={`border-b-2 pb-3 text-sm font-medium transition ${
-                            selected
-                              ? "border-accent text-text"
-                              : "border-transparent text-muted hover:text-text"
-                          }`}
-                          onClick={() => setLookupMode(option.value)}
-                          type="button"
-                        >
-                          {option.label}
-                        </button>
-                      );
-                    })}
+          <div className="grid items-start gap-6 xl:grid-cols-[1.18fr,0.82fr]">
+            <div className="grid content-start gap-6 self-start">
+              <section className="border-b border-line/70 pb-5">
+                <div className="text-[11px] uppercase tracking-[0.22em] text-muted">Issuer</div>
+                <div className="mt-3 grid gap-3">
+                  <div className="flex items-end justify-between gap-4">
+                    <div className="flex gap-6 border-b border-line/70">
+                      {lookupOptions.map((option) => {
+                        const selected = option.value === lookupMode;
+                        return (
+                          <button
+                            key={option.value}
+                            className={`border-b-2 pb-3 text-sm font-medium transition ${
+                              selected
+                                ? "border-accent text-text"
+                                : "border-transparent text-muted hover:text-text"
+                            }`}
+                            onClick={() => setLookupMode(option.value)}
+                            type="button"
+                          >
+                            {option.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="relative shrink-0 pb-2">
+                      <button
+                        aria-expanded={showLookupHelp}
+                        aria-label="Issuer lookup help"
+                        className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-line bg-[rgba(255,255,255,0.02)] text-muted transition hover:border-accent/25 hover:text-text"
+                        onClick={() => setShowLookupHelp((value) => !value)}
+                        type="button"
+                      >
+                        <InfoIcon />
+                      </button>
+                      {showLookupHelp ? (
+                        <div className="absolute right-0 top-full z-20 mt-3 w-[320px] rounded-[14px] border border-line bg-[#091214] px-4 py-4 text-sm text-muted shadow-[0_18px_50px_rgba(0,0,0,0.35)]">
+                          <div className="text-sm font-medium text-text">How issuer lookup works</div>
+                          <div className="mt-3 grid gap-2 leading-6">
+                            <div><span className="text-text">Ticker</span> is the fastest path when you already know the symbol.</div>
+                            <div><span className="text-text">Company</span> asks the SEC issuer table to resolve the exact company name.</div>
+                            <div><span className="text-text">CIK</span> uses the raw SEC filer identifier directly.</div>
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
                   </div>
                   <label className="grid gap-2">
                     <span className="text-xs uppercase tracking-[0.18em] text-muted">
@@ -381,47 +404,14 @@ export function EdgarWorkspace({
                     </select>
                   </label>
                 </div>
-
-                <div className="mt-4 grid gap-2">
-                  <span className="text-xs uppercase tracking-[0.18em] text-muted">PDF folder format</span>
-                  <input
-                    className={inputClassName}
-                    disabled={pdfControlsDisabled || pdfLayout === "nested"}
-                    onChange={(event) => {
-                      setPdfFolderFormat(event.target.value);
-                      setPdfFolderFormatTouched(true);
-                    }}
-                    placeholder={DEFAULT_PDF_FOLDER_FORMAT}
-                    type="text"
-                    value={pdfFolderFormat}
-                  />
-                  <div className="text-xs leading-5 text-muted">
-                    {pdfControlsDisabled ? (
-                      <>Metadata-only mode does not create readable PDFs.</>
-                    ) : pdfLayout === "nested" ? (
-                      <>Beside filings only ignores the library format because PDFs stay next to the original filing files.</>
-                    ) : (
-                      <>
-                        Use tokens like <span className="mono text-text">[date]</span>, <span className="mono text-text">[filing-type]</span>,{" "}
-                        <span className="mono text-text">[sequence]</span>, <span className="mono text-text">[accession]</span>,{" "}
-                        <span className="mono text-text">[ticker]</span>, <span className="mono text-text">[filename]</span>, or{" "}
-                        <span className="mono text-text">[filing]</span>. <span className="mono text-text">[sequence]</span> uses the filing accession id so each PDF folder stays stable across reruns.
-                      </>
-                    )}
+                <div className="mt-4 text-sm leading-6 text-muted">
+                  {selectedMode.summary} {selectedPdfLayout.description}
+                </div>
+                {sameDayRange ? (
+                  <div className="mt-3 rounded-[14px] border border-caution/25 bg-caution/10 px-3 py-2 text-xs leading-5 text-caution">
+                    Start date and end date are the same. That creates a one-day filing window and often returns nothing unless you know the exact filing date.
                   </div>
-                </div>
-
-                <div className="mt-4 border-t border-line/70 pt-4">
-                  <div className="text-xs uppercase tracking-[0.18em] text-muted">This run saves</div>
-                  <div className="mt-2 text-sm font-medium leading-6 text-text">{selectedMode.summary}</div>
-                  <div className="mt-3 text-sm leading-6 text-muted">{describeDownloadMode(downloadMode)}</div>
-                  <div className="mt-2 text-sm leading-6 text-muted">{selectedPdfLayout.description}</div>
-                  {sameDayRange ? (
-                    <div className="mt-3 rounded-[14px] border border-caution/25 bg-caution/10 px-3 py-2 text-xs leading-5 text-caution">
-                      Start date and end date are the same. That creates a one-day filing window and often returns nothing unless you know the exact filing date.
-                    </div>
-                  ) : null}
-                </div>
+                ) : null}
               </section>
 
               <section>
@@ -472,10 +462,106 @@ export function EdgarWorkspace({
               </section>
             </div>
 
-          <div className="grid gap-4 border-t border-line/70 pt-6 xl:border-l xl:border-t-0 xl:pl-8 xl:pt-0">
-            <section>
-              <div className="text-[11px] uppercase tracking-[0.22em] text-muted">This run</div>
-              <h3 className="mt-1 text-base font-semibold text-text">Preview the paths and file shape before you run it.</h3>
+          <div className="grid content-start gap-6 self-start border-t border-line/70 pt-6 xl:border-l xl:border-t-0 xl:pl-8 xl:pt-0">
+            <section className="relative border-b border-line/70 pb-6">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-[11px] uppercase tracking-[0.22em] text-muted">PDF formatter</div>
+                  <h3 className="mt-1 text-base font-semibold text-text">Define where readable PDFs land.</h3>
+                </div>
+                <button
+                  aria-expanded={showFormatHelp}
+                  aria-label="PDF formatter help"
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-line bg-[rgba(255,255,255,0.02)] text-muted transition hover:border-accent/25 hover:text-text"
+                  onClick={() => setShowFormatHelp((value) => !value)}
+                  type="button"
+                >
+                  <InfoIcon />
+                </button>
+              </div>
+              {showFormatHelp ? (
+                <div className="absolute right-0 top-0 z-20 mt-10 w-[340px] rounded-[14px] border border-line bg-[#091214] px-4 py-4 text-sm text-muted shadow-[0_18px_50px_rgba(0,0,0,0.35)]">
+                  <div className="text-sm font-medium text-text">PDF formatter help</div>
+                  <div className="mt-3 grid gap-2 leading-6">
+                    {pdfControlsDisabled ? (
+                      <div>Metadata-only mode does not create readable PDFs.</div>
+                    ) : pdfLayout === "nested" ? (
+                      <div>Beside filings only ignores the library format because PDFs stay next to the original filing files.</div>
+                    ) : (
+                      <>
+                        <div>Click any token to append it to the format field.</div>
+                        <div><span className="mono text-text">[sequence]</span> and <span className="mono text-text">[accession]</span> both use the filing accession id, so the folder name stays stable across reruns.</div>
+                        <div>The example path updates live with your current ticker and format string.</div>
+                      </>
+                    )}
+                  </div>
+                </div>
+              ) : null}
+              <div className="mt-4 grid gap-3">
+                <label className="grid gap-2">
+                  <span className="text-xs uppercase tracking-[0.18em] text-muted">PDF folder format</span>
+                  <input
+                    className={inputClassName}
+                    disabled={pdfControlsDisabled || pdfLayout === "nested"}
+                    onChange={(event) => {
+                      setPdfFolderFormat(event.target.value);
+                      setPdfFolderFormatTouched(true);
+                    }}
+                    placeholder={DEFAULT_PDF_FOLDER_FORMAT}
+                    type="text"
+                    value={pdfFolderFormat}
+                  />
+                </label>
+                <div>
+                  <div className="text-xs uppercase tracking-[0.16em] text-muted">Example path</div>
+                  <div className="mono mt-2 break-all text-sm text-[#9cead8]">{formatterExamplePath}</div>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {PDF_FORMAT_TOKENS.map((item) => (
+                    <button
+                      key={item.token}
+                      className="flex items-start justify-between gap-4 rounded-[10px] border border-line px-3 py-3 text-left transition hover:border-accent/25"
+                      disabled={pdfControlsDisabled || pdfLayout === "nested"}
+                      onClick={() => appendPdfToken(item.token)}
+                      type="button"
+                    >
+                      <span>
+                        <span className="mono block text-sm text-text">{item.token}</span>
+                        <span className="mt-1 block text-xs leading-5 text-muted">{item.meaning}</span>
+                      </span>
+                      <span className="mono text-xs text-[#9cead8]">{item.sample === "MSFT" ? resolvedTicker : item.sample}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </section>
+
+            <section className="relative">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-[11px] uppercase tracking-[0.22em] text-muted">This run</div>
+                  <h3 className="mt-1 text-base font-semibold text-text">Compact preview</h3>
+                </div>
+                <button
+                  aria-expanded={showPreviewHelp}
+                  aria-label="Run preview help"
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-line bg-[rgba(255,255,255,0.02)] text-muted transition hover:border-accent/25 hover:text-text"
+                  onClick={() => setShowPreviewHelp((value) => !value)}
+                  type="button"
+                >
+                  <InfoIcon />
+                </button>
+              </div>
+              {showPreviewHelp ? (
+                <div className="absolute right-0 top-0 z-20 mt-10 w-[340px] rounded-[14px] border border-line bg-[#091214] px-4 py-4 text-sm text-muted shadow-[0_18px_50px_rgba(0,0,0,0.35)]">
+                  <div className="text-sm font-medium text-text">Run preview help</div>
+                  <div className="mt-3 grid gap-2 leading-6">
+                    <div>Blank dates mean every available filing date is eligible.</div>
+                    <div>The stock folder stays human-visible, while metadata and manifests stay under <span className="mono text-text">.edgar</span>.</div>
+                    <div>Readable PDFs land either beside the filing files, in the PDF library, or both, depending on your current PDF destination setting.</div>
+                  </div>
+                </div>
+              ) : null}
               <div className="mt-4 divide-y divide-line/70">
                 <InfoRow detail={describeDownloadMode(downloadMode)} label="Files" value={selectedMode.label} />
                 <InfoRow
@@ -498,7 +584,11 @@ export function EdgarWorkspace({
                   label="Readable PDFs"
                   value={visiblePdfsPath}
                 />
-                <InfoRow detail="Metadata exports, raw submissions, and manifests stay hidden here." label=".edgar" value={predictedEdgarPath} />
+                <InfoRow
+                  detail="Metadata exports, raw submissions, and manifests stay hidden here."
+                  label=".edgar"
+                  value={predictedEdgarPath}
+                />
               </div>
             </section>
           </div>
@@ -613,12 +703,22 @@ function PathField({ label, value }: { label: string; value: string }) {
   );
 }
 
-function InfoRow({ detail, label, value }: { detail: string; label: string; value: string }) {
+function InfoRow({
+  detail,
+  label,
+  showDetail = false,
+  value,
+}: {
+  detail: string;
+  label: string;
+  showDetail?: boolean;
+  value: string;
+}) {
   return (
     <div className="py-4 first:pt-0 last:pb-0">
       <div className="text-xs uppercase tracking-[0.16em] text-muted">{label}</div>
       <div className="mt-2 break-words text-sm font-medium leading-6 text-text">{value}</div>
-      <div className="mt-2 break-words text-sm leading-6 text-muted">{detail}</div>
+      {showDetail ? <div className="mt-2 break-words text-sm leading-6 text-muted">{detail}</div> : null}
     </div>
   );
 }
@@ -634,13 +734,7 @@ function WorkspaceIcon() {
 }
 
 function InfoIcon() {
-  return (
-    <svg aria-hidden="true" fill="none" height="14" viewBox="0 0 20 20" width="14">
-      <circle cx="10" cy="10" r="6.75" stroke="currentColor" strokeWidth="1.5" />
-      <path d="M10 8v5" stroke="currentColor" strokeLinecap="round" strokeWidth="1.5" />
-      <circle cx="10" cy="5.8" fill="currentColor" r="1" />
-    </svg>
-  );
+  return <span aria-hidden="true" className="text-[12px] font-semibold leading-none">i</span>;
 }
 
 function parseFormTypes(value: string) {
@@ -767,6 +861,20 @@ function describePdfLayoutDetail(downloadMode: EdgarDownloadMode, pdfLayout: Edg
     return `Readable PDFs are written only into ${pdfFolderFormat}.`;
   }
   return "Readable PDFs stay beside the original filing files only.";
+}
+
+function renderPdfFolderFormatExample(format: string, ticker: string) {
+  const replacements: Record<string, string> = {
+    "[date]": "2026-01-28",
+    "[filing-type]": "10-Q",
+    "[sequence]": "000119312526027207",
+    "[accession]": "000119312526027207",
+    "[ticker]": ticker || "MSFT",
+    "[filename]": "primary-document",
+    "[filing]": "2026-01-28_10-Q_000119312526027207",
+  };
+
+  return Object.entries(replacements).reduce((result, [token, value]) => result.split(token).join(value), format);
 }
 
 function formatTimestamp(value: string) {
