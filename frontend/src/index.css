@@ -591,6 +591,14 @@ body {
   background: var(--safe);
 }
 
+.chrome-tab-dot.is-caution {
+  background: var(--caution);
+}
+
+.chrome-tab-dot.is-danger {
+  background: var(--danger);
+}
+
 .chrome-tab-dot.is-muted {
   background: rgba(216, 231, 229, 0.34);
 }
@@ -602,11 +610,6 @@ body {
   text-transform: uppercase;
   color: rgba(216, 231, 229, 0.52);
   white-space: nowrap;
-}
-
-.account-workspace-body > .workspace-section:first-child {
-  padding-top: 0;
-  border-top: 0;
 }
 
 .mono {

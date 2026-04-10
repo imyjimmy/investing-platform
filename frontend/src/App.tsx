@@ -116,11 +116,24 @@ type TicketDraft = {
 
 type SourceTone = "live" | "off" | "planned";
 type WorkspaceSurface = "home" | "ibkr" | "edgar" | "investorPdfs";
+type ConnectionHealthTone = "safe" | "caution" | "danger" | "planned";
+
+type AccountConnectorCard = {
+  id: string;
+  title: string;
+  status: string;
+  detail: string;
+  tone: ConnectionHealthTone;
+  countsTowardHealth: boolean;
+  icon: ReactNode;
+  workspace?: WorkspaceSurface;
+};
 
 function App() {
   const queryClient = useQueryClient();
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
   const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceSurface>("home");
   const [chainSymbol, setChainSymbol] = useState("NVDA");
   const [chainSymbolInput, setChainSymbolInput] = useState("NVDA");
@@ -293,8 +306,6 @@ function App() {
   const optionPositions = optionPositionsQuery.data?.positions ?? [];
   const openOrders = openOrdersQuery.data?.orders ?? [];
   const accountId = risk?.account.accountId ?? connectionQuery.data?.accountId ?? null;
-  const accountTabs = uniqueAccounts([...(connectionQuery.data?.managedAccounts ?? []), accountId]);
-  const renderedAccountTabs = accountTabs.length > 0 ? accountTabs : ["Disconnected"];
   const watchlist = Array.from(
     new Set([chainSymbol, "NVDA", ...(risk?.watchlist ?? []), ...optionPositions.map((position) => position.symbol)]),
   ).sort();
@@ -334,7 +345,7 @@ function App() {
   const executionBannerMessage = !paperExecutionEnabled
     ? "Paper execution is disabled for this dashboard session."
     : !selectedAccount
-      ? "Select an account tab to route a paper order."
+      ? "Connect IBKR to discover the routed account for paper execution."
       : !selectedAccountIsPaper
         ? "Paper execution is blocked on live accounts."
         : null;
@@ -413,6 +424,94 @@ function App() {
   const executionModeLabel = paperExecutionEnabled ? "Paper execution" : "Disabled";
   const refreshCadenceLabel = "Conn 10s · Risk 15s · Chain 20s";
   const heartbeatLabel = connectionQuery.data?.lastHeartbeatAt ? formatTimestamp(connectionQuery.data.lastHeartbeatAt) : "No heartbeat";
+  const accountConnectors: AccountConnectorCard[] = [
+    {
+      id: "ibkr",
+      title: "IBKR",
+      status: connectionQuery.isLoading
+        ? "Checking"
+        : connectionQuery.data?.connected
+          ? risk?.isStale
+            ? "Connected · stale snapshot"
+            : "Connected"
+          : "Disconnected",
+      detail: connectionQuery.isLoading
+        ? "Loading broker connector status"
+        : connectionQuery.data?.connected
+          ? `${connectionEndpoint} · ${paperExecutionEnabled ? "paper routing enabled" : "read-only session"}`
+          : sourceError ?? `${connectionEndpoint} · waiting for gateway`,
+      tone: connectionQuery.isLoading ? "caution" : connectionQuery.data?.connected ? (risk?.isStale ? "caution" : "safe") : "danger",
+      countsTowardHealth: true,
+      icon: <BrokerIcon />,
+      workspace: "ibkr",
+    },
+    {
+      id: "edgar",
+      title: "EDGAR",
+      status: edgarStatusQuery.isLoading ? "Checking" : edgarSyncing ? "Syncing" : edgarStatusQuery.data?.available ? "Ready" : "Offline",
+      detail: edgarStatusQuery.isLoading ? "Loading EDGAR source state" : edgarStatusError ?? "SEC filing research source",
+      tone: edgarStatusQuery.isLoading ? "caution" : edgarStatusQuery.data?.available ? "safe" : "danger",
+      countsTowardHealth: true,
+      icon: <DocumentIcon />,
+      workspace: "edgar",
+    },
+    {
+      id: "investor-pdfs",
+      title: "Investor PDFs",
+      status: investorPdfStatusQuery.isLoading ? "Checking" : investorPdfSyncing ? "Syncing" : investorPdfStatusQuery.data?.available ? "Ready" : "Offline",
+      detail: investorPdfStatusQuery.isLoading ? "Loading investor PDF source state" : investorPdfStatusError ?? "Annual reports and exhibit PDF library",
+      tone: investorPdfStatusQuery.isLoading ? "caution" : investorPdfStatusQuery.data?.available ? "safe" : "danger",
+      countsTowardHealth: true,
+      icon: <PdfLibraryIcon />,
+      workspace: "investorPdfs",
+    },
+    {
+      id: "coinbase",
+      title: "Coinbase",
+      status: "Planned",
+      detail: "Future crypto exchange balances and activity feed",
+      tone: "planned",
+      countsTowardHealth: false,
+      icon: <CoinbaseIcon />,
+    },
+    {
+      id: "plaid-fidelity",
+      title: "Plaid · Fidelity",
+      status: "Planned",
+      detail: "Future linked brokerage cash and holdings sync",
+      tone: "planned",
+      countsTowardHealth: false,
+      icon: <BankIcon />,
+    },
+    {
+      id: "plaid-chase",
+      title: "Plaid · Chase",
+      status: "Planned",
+      detail: "Future banking cash movement and treasury feed",
+      tone: "planned",
+      countsTowardHealth: false,
+      icon: <BankIcon />,
+    },
+  ];
+  const definedConnectors = accountConnectors.filter((connector) => connector.countsTowardHealth);
+  const definedConnectorCount = definedConnectors.length;
+  const liveConnectorCount = definedConnectors.filter((connector) => connector.tone === "safe").length;
+  const connectedConnectorCount = definedConnectors.filter((connector) => connector.tone === "safe" || connector.tone === "caution").length;
+  const plannedConnectorCount = accountConnectors.length - definedConnectorCount;
+  const accountStatusTone: ConnectionHealthTone =
+    connectedConnectorCount === 0 ? "danger" : liveConnectorCount === definedConnectorCount ? "safe" : "caution";
+  const accountStatusLabel =
+    accountStatusTone === "safe"
+      ? "All connectors live"
+      : accountStatusTone === "caution"
+        ? "Partial connector coverage"
+        : "No live connectors";
+  const accountTabBadge =
+    accountStatusTone === "safe"
+      ? "All live"
+      : accountStatusTone === "caution"
+        ? `${connectedConnectorCount}/${definedConnectorCount} online`
+        : "Offline";
 
   async function runEdgarDownload(request: EdgarDownloadRequest) {
     setEdgarSyncing(true);
@@ -534,9 +633,25 @@ function App() {
 
                     <ShellSourceRow
                       badge="Planned"
-                      icon={<FolderIcon />}
-                      meta="Watch local research and export folders"
-                      title="Local folders"
+                      icon={<CoinbaseIcon />}
+                      meta="Future crypto exchange balances connector"
+                      title="Coinbase"
+                      tone="planned"
+                    />
+
+                    <ShellSourceRow
+                      badge="Planned"
+                      icon={<BankIcon />}
+                      meta="Future Fidelity-linked cash and holdings sync"
+                      title="Plaid · Fidelity"
+                      tone="planned"
+                    />
+
+                    <ShellSourceRow
+                      badge="Planned"
+                      icon={<BankIcon />}
+                      meta="Future Chase treasury and cash flow sync"
+                      title="Plaid · Chase"
                       tone="planned"
                     />
                   </div>
@@ -611,104 +726,116 @@ function App() {
                 />
               ) : null}
               <div className={activeWorkspace === "home" ? "" : "hidden"}>
-              <div className="chrome-header-frame">
-          <div className="chrome-tabs-shell">
-            <div className="chrome-tab-strip">
-              {renderedAccountTabs.map((tabAccountId) => {
-                const isPlaceholder = accountTabs.length === 0;
-                const isActive = isPlaceholder ? true : (selectedAccountId ?? accountId ?? undefined) === tabAccountId;
-                const isPaperTab = isPaperTradingAccountId(tabAccountId);
-                return (
-                  <button
-                    key={tabAccountId}
-                    aria-disabled={isPlaceholder}
-                    className={`chrome-tab ${isActive ? "is-active" : ""} ${isPlaceholder ? "is-disabled" : ""}`}
-                    onClick={() => {
-                      if (isPlaceholder) {
-                        return;
-                      }
-                      setSelectedAccountId(tabAccountId);
-                    }}
-                    type="button"
-                  >
-                    <span className={`chrome-tab-dot ${isPlaceholder ? "is-muted" : isPaperTab ? "is-paper" : "is-live"}`} />
-                    <span className="chrome-tab-title truncate text-sm font-medium">{tabAccountId}</span>
-                    {!isPlaceholder ? <span className="chrome-tab-badge">{isPaperTab ? "Paper" : "Live"}</span> : null}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-          <div className="account-workspace panel rounded-[16px]">
-          <header className="chrome-header-body px-10 py-5 lg:px-12">
-          <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
-            <div>
-              <div className="mb-2 text-[11px] uppercase tracking-[0.32em] text-accent">Van Aken Investments LLC</div>
-              <div className="flex flex-wrap items-center gap-3">
-                <h1 className="text-3xl font-semibold tracking-tight text-text">IBKR Options Workstation</h1>
-                {selectedAccountIsPaper ? (
-                  <div className="inline-flex items-center rounded-full border-2 border-danger bg-panelSoft px-4 py-1 text-sm font-medium text-text">
-                    Paper Trading Acct
+                <div className="chrome-header-frame">
+                  <div className="chrome-tabs-shell">
+                    <div className="chrome-tab-strip">
+                      <button aria-current="page" className="chrome-tab is-active" type="button">
+                        <span className={`chrome-tab-dot ${connectionToneDotClass(accountStatusTone)}`} />
+                        <span className="chrome-tab-title truncate text-sm font-medium">Van Aken</span>
+                        <span className="chrome-tab-badge">{accountTabBadge}</span>
+                      </button>
+                    </div>
                   </div>
-                ) : null}
-              </div>
-              <p className="mt-2 max-w-3xl text-sm text-muted">
-                Read free liquidity, option obligations, near-term expiry risk, and short-premium opportunity without bouncing between TWS windows.
-              </p>
-            </div>
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-              <StatusBadge status={connectionQuery.data} />
-            </div>
-          </div>
-          <div className="mt-4 grid gap-3 text-sm text-muted md:grid-cols-4">
-            <div className="panel-soft rounded-2xl px-4 py-3">
-              <div className="text-[11px] uppercase tracking-[0.2em]">Gateway</div>
-              <div className="mt-1 text-text">{connectionQuery.data ? `${connectionQuery.data.host}:${connectionQuery.data.port}` : "Loading"}</div>
-            </div>
-            <div className="panel-soft rounded-2xl px-4 py-3">
-              <div className="text-[11px] uppercase tracking-[0.2em]">Active account</div>
-              <div className="mt-1 text-text">{selectedAccount ?? "—"}</div>
-            </div>
-            <div className="panel-soft rounded-2xl px-4 py-3">
-              <div className="text-[11px] uppercase tracking-[0.2em]">Data freshness</div>
-              <div className="mt-1 text-text">{risk?.isStale ? "Stale snapshot" : "Live snapshot"}</div>
-            </div>
-            <div className="panel-soft rounded-2xl px-4 py-3">
-              <div className="text-[11px] uppercase tracking-[0.2em]">Last heartbeat</div>
-              <div className="mt-1 text-text">{connectionQuery.data?.lastHeartbeatAt ? formatTimestamp(connectionQuery.data.lastHeartbeatAt) : "—"}</div>
-            </div>
-          </div>
-          {connectionQuery.data?.lastError || connectError || reconnectError ? (
-            <div className="mt-4 rounded-2xl border border-danger/20 bg-danger/8 px-4 py-3 text-sm text-danger">
-              {connectError ?? reconnectError ?? connectionQuery.data?.lastError}
-            </div>
-          ) : null}
-          </header>
-          <div className="account-workspace-body flex flex-col gap-6 px-10 pb-6 lg:px-12">
-
-        <Panel title="Portfolio Overview" eyebrow="Home Screen">
+                  <div className="account-workspace panel rounded-[16px]">
+                    <header className="chrome-header-body relative px-10 py-5 lg:px-12">
+                      <button
+                        aria-expanded={accountSettingsOpen}
+                        aria-label={accountSettingsOpen ? "Hide account settings" : "Open account settings"}
+                        className={`absolute right-10 top-3 inline-flex h-8 w-8 items-center justify-center transition ${
+                          accountSettingsOpen
+                            ? "rounded-md bg-accent/10 text-accent"
+                            : "rounded-md text-muted hover:text-text"
+                        }`}
+                        onClick={() => setAccountSettingsOpen((value) => !value)}
+                        type="button"
+                      >
+                        <GearIcon />
+                      </button>
+                      {accountSettingsOpen ? (
+                        <div className="absolute right-10 top-12 z-20 w-[min(30rem,calc(100%-5rem))] overflow-hidden rounded-2xl border border-line bg-panel shadow-[0_18px_48px_rgba(0,0,0,0.32)] backdrop-blur-xl">
+                          <div className="flex items-center justify-between border-b border-line/70 px-4 py-3">
+                            <div className="text-[11px] uppercase tracking-[0.2em] text-muted">Connections</div>
+                            <div className="text-[11px] uppercase tracking-[0.18em] text-muted">{plannedConnectorCount} planned</div>
+                          </div>
+                          <div className="grid max-h-[70vh] gap-3 overflow-auto p-4 sm:grid-cols-2">
+                            {accountConnectors.map((connector) => (
+                              <ConnectorStatusCard
+                                key={connector.id}
+                                detail={connector.detail}
+                                icon={connector.icon}
+                                onOpen={connector.workspace ? () => setActiveWorkspace(connector.workspace!) : undefined}
+                                status={connector.status}
+                                title={connector.title}
+                                tone={connector.tone}
+                              />
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+                      <div className="flex flex-col gap-5 pr-12 lg:flex-row lg:items-start lg:justify-between">
+                        <div>
+                          <div className="mb-2 text-[11px] uppercase tracking-[0.32em] text-accent">Van Aken Investments LLC</div>
+                          <div className="flex flex-wrap items-center gap-3">
+                            <h1 className="text-3xl font-semibold tracking-tight text-text">Account Snapshot</h1>
+                            <AccountStatusBadge label={accountStatusLabel} tone={accountStatusTone} />
+                          </div>
+                        </div>
+                      </div>
+                      <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                        <MetricCard
+                          hint={selectedAccount ? `${selectedAccount}${selectedAccountIsPaper ? " · Paper route" : " · Live route"}` : undefined}
+                          label="Total net worth"
+                          value={riskSummaryQuery.isLoading ? "Loading" : fmtCurrency(risk?.account.netLiquidation)}
+                        />
+                        <MetricCard
+                          label="Available funds"
+                          value={riskSummaryQuery.isLoading ? "Loading" : fmtCurrency(risk?.account.availableFunds)}
+                        />
+                        <MetricCard
+                          label="Excess liquidity"
+                          value={riskSummaryQuery.isLoading ? "Loading" : fmtCurrency(risk?.account.excessLiquidity)}
+                        />
+                        <MetricCard
+                          hint={risk?.isStale ? "Snapshot is stale" : undefined}
+                          label="Margin usage"
+                          tone={
+                            risk?.account.marginUsagePct == null
+                              ? "neutral"
+                              : risk.account.marginUsagePct > 60
+                                ? "danger"
+                                : risk.account.marginUsagePct > 40
+                                  ? "caution"
+                                  : "safe"
+                          }
+                          value={riskSummaryQuery.isLoading ? "Loading" : fmtNumber(risk?.account.marginUsagePct, "%")}
+                        />
+                      </div>
+                      {connectionQuery.data?.lastError || connectError || reconnectError ? (
+                        <div className="mt-4 rounded-2xl border border-danger/20 bg-danger/8 px-4 py-3 text-sm text-danger">
+                          {connectError ?? reconnectError ?? connectionQuery.data?.lastError}
+                        </div>
+                      ) : null}
+                    </header>
+                    <div className="account-workspace-body flex flex-col gap-6 px-10 pb-6 lg:px-12">
+        <Panel
+          action={<div className="text-[11px] uppercase tracking-[0.18em] text-muted">Current capital source: IBKR</div>}
+          title="Account Snapshot"
+          eyebrow="Account Home"
+        >
           {riskSummaryQuery.isLoading ? (
             <div className="text-sm text-muted">Loading overview...</div>
           ) : risk ? (
             <div className="grid gap-4">
               <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-                <MetricCard label="Net liq" value={fmtCurrency(risk.account.netLiquidation)} />
-                <MetricCard label="Available funds" value={fmtCurrency(risk.account.availableFunds)} />
-                <MetricCard label="Excess liquidity" value={fmtCurrency(risk.account.excessLiquidity)} />
+                <MetricCard label="IBKR option positions" value={fmtNumber(risk.account.optionPositionsCount)} />
+                <MetricCard label="IBKR open orders" value={fmtNumber(risk.account.openOrdersCount)} />
                 <MetricCard
-                  label="Margin usage"
-                  value={fmtNumber(risk.account.marginUsagePct, "%")}
-                  tone={risk.account.marginUsagePct > 60 ? "danger" : risk.account.marginUsagePct > 40 ? "caution" : "safe"}
-                />
-                <MetricCard label="Open option positions" value={fmtNumber(risk.account.optionPositionsCount)} />
-                <MetricCard label="Open orders" value={fmtNumber(risk.account.openOrdersCount)} />
-                <MetricCard
-                  label="Premium this week"
+                  label="IBKR premium this week"
                   value={fmtCurrency(risk.premium.estimatedPremiumExpiringThisWeek)}
                   tone={risk.premium.estimatedPremiumExpiringThisWeek > 0 ? "safe" : "neutral"}
                 />
                 <MetricCard
-                  label="Free option capacity"
+                  label="IBKR option capacity"
                   value={fmtCurrency(risk.collateral.estimatedFreeOptionSellingCapacity)}
                   tone={
                     risk.collateral.estimatedFreeOptionSellingCapacity <= 0
@@ -792,7 +919,7 @@ function App() {
         </Panel>
 
         <div className="grid gap-6 xl:grid-cols-[1.5fr,0.9fr]">
-          <Panel title="Option Positions" eyebrow="Positions View">
+          <Panel title="IBKR Options Book" eyebrow="Broker Feed">
             <div className="mb-4 grid gap-3 lg:grid-cols-3 xl:grid-cols-6">
               <input
                 className="rounded-2xl border border-line bg-panelSoft px-3 py-2 text-sm outline-none transition focus:border-accent/50"
@@ -900,7 +1027,7 @@ function App() {
             )}
           </Panel>
 
-          <Panel title="Orders & Commitments" eyebrow="Open Orders">
+          <Panel title="IBKR Orders & Commitments" eyebrow="Broker Feed">
             {openOrdersQuery.isLoading ? (
               <div className="text-sm text-muted">Loading open orders...</div>
             ) : openOrdersQuery.error instanceof Error ? (
@@ -962,8 +1089,8 @@ function App() {
         </div>
 
         <Panel
-          title="Chain Explorer"
-          eyebrow={`Selected symbol · ${chainSymbol}`}
+          title="IBKR Chain Explorer"
+          eyebrow={`Broker feed · ${chainSymbol}`}
           action={
             <div className="flex flex-col items-stretch gap-2 sm:items-end">
               <form
@@ -1296,7 +1423,7 @@ function App() {
         </Panel>
 
         <div className="grid gap-6 xl:grid-cols-[1fr,1fr]">
-          <Panel title="Risk View" eyebrow="Concentration + Expiry Buckets">
+          <Panel title="IBKR Risk View" eyebrow="Broker Analytics">
             {risk ? (
               <div className="grid gap-6">
                 <div className="h-72">
@@ -1349,7 +1476,7 @@ function App() {
             )}
           </Panel>
 
-          <Panel title="Exposure by Expiry" eyebrow="Expiry Stack">
+          <Panel title="IBKR Expiry Stack" eyebrow="Broker Analytics">
             {risk ? (
               <div className="grid gap-6">
                 <div className="h-72">
@@ -1393,7 +1520,7 @@ function App() {
           </Panel>
         </div>
 
-        <Panel title="Scenario View" eyebrow="Portfolio Shock Test">
+        <Panel title="IBKR Scenario View" eyebrow="Broker Analytics">
           <div className="mb-5 grid gap-3 lg:grid-cols-4">
             <RangeField label="Spot move %" value={movePct} min={-30} max={30} step={1} onChange={setMovePct} />
             <RangeField label="Days forward" value={daysForward} min={0} max={45} step={1} onChange={setDaysForward} />
@@ -1499,7 +1626,7 @@ function IbkrWorkspace({
                 <StatusBadge status={status} />
               </div>
               <p className="mt-2 max-w-3xl text-sm text-muted">
-                Use this connector workspace to manage the IB Gateway or TWS session. The Home button returns to the tab-enabled dashboard.
+                Use this connector workspace to manage the IB Gateway or TWS session. The Home button returns to the Van Aken account dashboard.
               </p>
             </div>
             <div className="flex flex-wrap gap-3">
@@ -1536,7 +1663,7 @@ function IbkrWorkspace({
               />
               <MetricCard label="Session mode" value={sessionModeLabel} />
               <MetricCard
-                hint={selectedAccount ? `Current dashboard tab: ${selectedAccount}` : "No active dashboard account yet"}
+                hint={selectedAccount ? `Current home route: ${selectedAccount}` : "No active home route yet"}
                 label="Execution"
                 tone={status?.executionMode === "paper" ? "safe" : "neutral"}
                 value={executionLabel}
@@ -1560,7 +1687,7 @@ function IbkrWorkspace({
                 </div>
               </Panel>
 
-              <Panel title="Account Routing" eyebrow="Dashboard Tabs">
+              <Panel title="Account Routing" eyebrow="Account Home">
                 {managedAccounts.length > 0 ? (
                   <div className="grid gap-3">
                     {managedAccounts.map((accountId) => {
@@ -1577,7 +1704,7 @@ function IbkrWorkspace({
                             <div>
                               <div className="text-sm font-medium text-text">{accountId}</div>
                               <div className="mt-1 text-sm text-muted">
-                                {isCurrent ? "Currently selected in the Home dashboard." : "Available as a dashboard tab."}
+                                {isCurrent ? "Currently routed into the Van Aken home dashboard." : "Available to route into the home dashboard."}
                               </div>
                             </div>
                             <span
@@ -1596,7 +1723,7 @@ function IbkrWorkspace({
                   </div>
                 ) : (
                   <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-4 text-sm text-muted">
-                    Connect to IB Gateway or TWS to populate the tab-enabled dashboard on Home.
+                    Connect to IB Gateway or TWS to populate the Van Aken home dashboard.
                   </div>
                 )}
               </Panel>
@@ -1613,6 +1740,55 @@ function ConnectorFact({ label, value }: { label: string; value: string }) {
     <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-3">
       <div className="text-[11px] uppercase tracking-[0.18em] text-muted">{label}</div>
       <div className="mt-2 text-sm font-medium text-text">{value}</div>
+    </div>
+  );
+}
+
+function AccountStatusBadge({ label, tone }: { label: string; tone: ConnectionHealthTone }) {
+  return (
+    <span className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-medium uppercase tracking-[0.18em] ${connectionToneBadgeClass(tone)}`}>
+      <span className={`h-2.5 w-2.5 rounded-full ${connectionToneIndicatorClass(tone)}`} />
+      {label}
+    </span>
+  );
+}
+
+function ConnectorStatusCard({
+  title,
+  status,
+  detail,
+  tone,
+  icon,
+  onOpen,
+}: {
+  title: string;
+  status: string;
+  detail: string;
+  tone: ConnectionHealthTone;
+  icon: ReactNode;
+  onOpen?: () => void;
+}) {
+  return (
+    <div className={`rounded-2xl border p-4 ${connectionTonePanelClass(tone)}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <span className={`inline-flex h-10 w-10 items-center justify-center rounded-xl ${connectionToneIconClass(tone)}`}>{icon}</span>
+          <div>
+            <div className="text-sm font-medium text-text">{title}</div>
+            <div className="mt-1 text-xs uppercase tracking-[0.16em] text-muted">{status}</div>
+          </div>
+        </div>
+        {onOpen ? (
+          <button
+            className="rounded-full border border-line/80 bg-panel px-3 py-1 text-[11px] font-medium uppercase tracking-[0.16em] text-muted transition hover:border-accent/35 hover:text-text"
+            onClick={onOpen}
+            type="button"
+          >
+            Open
+          </button>
+        ) : null}
+      </div>
+      <div className="mt-3 text-sm text-muted">{detail}</div>
     </div>
   );
 }
@@ -1741,6 +1917,25 @@ function FolderIcon() {
   );
 }
 
+function CoinbaseIcon() {
+  return (
+    <svg aria-hidden="true" fill="none" height="18" viewBox="0 0 20 20" width="18">
+      <circle cx="10" cy="10" r="6.1" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M12.65 7.5a3.3 3.3 0 1 0 0 5" stroke="currentColor" strokeLinecap="round" strokeWidth="1.6" />
+    </svg>
+  );
+}
+
+function BankIcon() {
+  return (
+    <svg aria-hidden="true" fill="none" height="18" viewBox="0 0 20 20" width="18">
+      <path d="M3.5 7.2 10 4l6.5 3.2" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" />
+      <path d="M5.3 8.2v6.1M8.85 8.2v6.1M11.15 8.2v6.1M14.7 8.2v6.1" stroke="currentColor" strokeLinecap="round" strokeWidth="1.45" />
+      <path d="M3.7 15.3h12.6" stroke="currentColor" strokeLinecap="round" strokeWidth="1.5" />
+    </svg>
+  );
+}
+
 function GearIcon() {
   return (
     <svg aria-hidden="true" fill="none" height="20" viewBox="0 0 20 20" width="20">
@@ -1842,6 +2037,65 @@ function shortenPath(value: string, maxLength = 42) {
   }
   const edge = Math.max(12, Math.floor((maxLength - 1) / 2));
   return `${value.slice(0, edge)}…${value.slice(-edge)}`;
+}
+
+function connectionToneBadgeClass(tone: ConnectionHealthTone) {
+  if (tone === "safe") {
+    return "border-safe/30 bg-safe/10 text-safe";
+  }
+  if (tone === "caution") {
+    return "border-caution/30 bg-caution/10 text-caution";
+  }
+  if (tone === "danger") {
+    return "border-danger/30 bg-danger/10 text-danger";
+  }
+  return "border-line/80 bg-panelSoft text-muted";
+}
+
+function connectionToneIndicatorClass(tone: ConnectionHealthTone) {
+  if (tone === "safe") {
+    return "bg-safe";
+  }
+  if (tone === "caution") {
+    return "bg-caution";
+  }
+  if (tone === "danger") {
+    return "bg-danger";
+  }
+  return "bg-muted";
+}
+
+function connectionToneDotClass(tone: ConnectionHealthTone) {
+  if (tone === "safe") {
+    return "is-live";
+  }
+  if (tone === "caution") {
+    return "is-caution";
+  }
+  if (tone === "danger") {
+    return "is-danger";
+  }
+  return "is-muted";
+}
+
+function connectionTonePanelClass(tone: ConnectionHealthTone) {
+  if (tone === "planned") {
+    return "border-line/80 bg-panelSoft";
+  }
+  return "border-line/80 bg-panelSoft";
+}
+
+function connectionToneIconClass(tone: ConnectionHealthTone) {
+  if (tone === "safe") {
+    return "bg-safe/10 text-safe";
+  }
+  if (tone === "caution") {
+    return "bg-caution/10 text-caution";
+  }
+  if (tone === "danger") {
+    return "bg-danger/10 text-danger";
+  }
+  return "bg-white/5 text-text";
 }
 
 function comparePositions(
