@@ -148,6 +148,11 @@ body {
   transform: translateY(-1px);
 }
 
+.shell-toggle.is-active {
+  background: rgba(102, 208, 191, 0.07);
+  color: var(--text);
+}
+
 .shell-toggle:focus-visible {
   outline: 2px solid rgba(102, 208, 191, 0.3);
   outline-offset: 2px;

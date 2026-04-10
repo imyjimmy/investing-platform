@@ -12,6 +12,7 @@ import {
 
 import { api } from "./lib/api";
 import type {
+  ConnectionStatus,
   EdgarDownloadRequest,
   EdgarDownloadResponse,
   InvestorPdfDownloadRequest,
@@ -114,14 +115,15 @@ type TicketDraft = {
 };
 
 type SourceTone = "live" | "off" | "planned";
-type WorkspaceSurface = "ibkr" | "edgar" | "investorPdfs";
+type WorkspaceSurface = "home" | "ibkr" | "edgar" | "investorPdfs";
 
 function App() {
   const queryClient = useQueryClient();
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceSurface>("ibkr");
+  const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceSurface>("home");
   const [chainSymbol, setChainSymbol] = useState("NVDA");
+  const [chainSymbolInput, setChainSymbolInput] = useState("NVDA");
   const [selectedAccountId, setSelectedAccountId] = useState<string | undefined>(undefined);
   const [selectedExpiry, setSelectedExpiry] = useState<string | undefined>(undefined);
   const [ticketDraft, setTicketDraft] = useState<TicketDraft | null>(null);
@@ -243,6 +245,10 @@ function App() {
   }, [chainQuery.data?.selectedExpiry, selectedExpiry]);
 
   useEffect(() => {
+    setChainSymbolInput(chainSymbol);
+  }, [chainSymbol]);
+
+  useEffect(() => {
     const availableAccounts = uniqueAccounts([
       ...(connectionQuery.data?.managedAccounts ?? []),
       connectionQuery.data?.accountId,
@@ -289,7 +295,9 @@ function App() {
   const accountId = risk?.account.accountId ?? connectionQuery.data?.accountId ?? null;
   const accountTabs = uniqueAccounts([...(connectionQuery.data?.managedAccounts ?? []), accountId]);
   const renderedAccountTabs = accountTabs.length > 0 ? accountTabs : ["Disconnected"];
-  const watchlist = Array.from(new Set(["NVDA", ...(risk?.watchlist ?? []), ...optionPositions.map((position) => position.symbol)])).sort();
+  const watchlist = Array.from(
+    new Set([chainSymbol, "NVDA", ...(risk?.watchlist ?? []), ...optionPositions.map((position) => position.symbol)]),
+  ).sort();
   const chainHasBidAsk = (chainQuery.data?.rows ?? []).some(
     (row) => row.callBid != null || row.callAsk != null || row.putBid != null || row.putAsk != null,
   );
@@ -432,6 +440,17 @@ function App() {
     }
   }
 
+  function handleChainSymbolSelection(nextSymbol: string) {
+    const normalizedSymbol = nextSymbol.trim().toUpperCase();
+    if (!normalizedSymbol || normalizedSymbol === chainSymbol) {
+      return;
+    }
+    startTransition(() => {
+      setChainSymbol(normalizedSymbol);
+      setSelectedExpiry(undefined);
+    });
+  }
+
   return (
     <div className={`app-shell grid-shell min-h-screen text-text ${sidebarOpen ? "is-sidebar-open" : ""}`}>
       <div className="mx-auto w-full max-w-[1880px]">
@@ -447,8 +466,9 @@ function App() {
           </button>
           <button
             aria-label="Go to dashboard"
-            className="shell-toggle shell-home-button"
-            onClick={() => setActiveWorkspace("ibkr")}
+            aria-pressed={activeWorkspace === "home"}
+            className={`shell-toggle shell-home-button ${activeWorkspace === "home" ? "is-active" : ""}`}
+            onClick={() => setActiveWorkspace("home")}
             type="button"
           >
             <HomeIcon />
@@ -552,7 +572,18 @@ function App() {
 
           <div className="shell-stage">
             <div className="mx-auto w-full max-w-[1600px]">
-              {activeWorkspace === "edgar" ? (
+              {activeWorkspace === "ibkr" ? (
+                <IbkrWorkspace
+                  connectPending={connectMutation.isPending}
+                  endpoint={connectionEndpoint}
+                  onConnect={() => connectMutation.mutate()}
+                  onReconnect={() => reconnectMutation.mutate()}
+                  reconnectPending={reconnectMutation.isPending}
+                  selectedAccount={selectedAccount}
+                  sourceError={sourceError}
+                  status={connectionQuery.data}
+                />
+              ) : activeWorkspace === "edgar" ? (
                 <EdgarWorkspace
                   defaultTicker={chainSymbol}
                   onRun={(request) => {
@@ -579,7 +610,7 @@ function App() {
                   syncing={investorPdfSyncing}
                 />
               ) : null}
-              <div className={activeWorkspace === "ibkr" ? "" : "hidden"}>
+              <div className={activeWorkspace === "home" ? "" : "hidden"}>
               <div className="chrome-header-frame">
           <div className="chrome-tabs-shell">
             <div className="chrome-tab-strip">
@@ -932,28 +963,48 @@ function App() {
 
         <Panel
           title="Chain Explorer"
-          eyebrow="NVDA / IREN / AXTI / PYPL"
+          eyebrow={`Selected symbol · ${chainSymbol}`}
           action={
-            <div className="flex flex-wrap gap-2">
-              {watchlist.map((symbol) => (
+            <div className="flex flex-col items-stretch gap-2 sm:items-end">
+              <form
+                className="flex w-full flex-wrap justify-end gap-2 sm:w-auto"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  handleChainSymbolSelection(chainSymbolInput);
+                }}
+              >
+                <input
+                  aria-label="Load symbol"
+                  className="min-w-[120px] rounded-full border border-line bg-panelSoft px-3 py-1.5 text-xs font-medium uppercase tracking-[0.14em] text-text outline-none transition focus:border-accent/40"
+                  onChange={(event) => setChainSymbolInput(event.target.value.toUpperCase())}
+                  placeholder="IREN"
+                  type="text"
+                  value={chainSymbolInput}
+                />
                 <button
-                  key={symbol}
-                  className={`rounded-full border px-3 py-1.5 text-xs font-medium transition ${
-                    chainSymbol === symbol
-                      ? "border-accent/50 bg-accent/10 text-accent"
-                      : "border-line bg-panelSoft text-muted hover:border-accent/30 hover:text-text"
-                  }`}
-                  onClick={() =>
-                    startTransition(() => {
-                      setChainSymbol(symbol);
-                      setSelectedExpiry(undefined);
-                    })
-                  }
-                  type="button"
+                  className="rounded-full border border-accent/35 bg-accent/10 px-3 py-1.5 text-xs font-medium text-accent transition hover:border-accent/50 disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={!chainSymbolInput.trim() || chainSymbolInput.trim().toUpperCase() === chainSymbol}
+                  type="submit"
                 >
-                  {symbol}
+                  Load symbol
                 </button>
-              ))}
+              </form>
+              <div className="flex flex-wrap justify-end gap-2">
+                {watchlist.map((symbol) => (
+                  <button
+                    key={symbol}
+                    className={`rounded-full border px-3 py-1.5 text-xs font-medium transition ${
+                      chainSymbol === symbol
+                        ? "border-accent/50 bg-accent/10 text-accent"
+                        : "border-line bg-panelSoft text-muted hover:border-accent/30 hover:text-text"
+                    }`}
+                    onClick={() => handleChainSymbolSelection(symbol)}
+                    type="button"
+                  >
+                    {symbol}
+                  </button>
+                ))}
+              </div>
             </div>
           }
         >
@@ -1409,6 +1460,163 @@ function App() {
   );
 }
 
+function IbkrWorkspace({
+  status,
+  endpoint,
+  sourceError,
+  selectedAccount,
+  connectPending,
+  reconnectPending,
+  onConnect,
+  onReconnect,
+}: {
+  status: ConnectionStatus | undefined;
+  endpoint: string;
+  sourceError: string | null;
+  selectedAccount: string | undefined;
+  connectPending: boolean;
+  reconnectPending: boolean;
+  onConnect: () => void;
+  onReconnect: () => void;
+}) {
+  const managedAccounts = uniqueAccounts([...(status?.managedAccounts ?? []), status?.accountId]);
+  const connectionLabel = status?.connected ? "Connected" : "Disconnected";
+  const sessionModeLabel = status?.mode === "ibkr" ? "IBKR live session" : "Mock snapshot";
+  const executionLabel = status?.executionMode === "paper" ? "Paper execution" : "Disabled";
+  const lastConnectedLabel = status?.lastSuccessfulConnectAt ? formatTimestamp(status.lastSuccessfulConnectAt) : "Never";
+  const lastHeartbeatLabel = status?.lastHeartbeatAt ? formatTimestamp(status.lastHeartbeatAt) : "No heartbeat";
+  const nextReconnectLabel = status?.nextReconnectAttemptAt ? formatTimestamp(status.nextReconnectAttemptAt) : "None scheduled";
+
+  return (
+    <div className="chrome-header-frame">
+      <div className="account-workspace panel overflow-hidden rounded-[16px]">
+        <header className="border-b border-line/70 px-10 py-7 lg:px-12">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <div className="mb-2 text-[11px] uppercase tracking-[0.32em] text-accent">Broker connector</div>
+              <div className="flex flex-wrap items-center gap-3">
+                <h1 className="text-3xl font-semibold tracking-tight text-text">Interactive Brokers</h1>
+                <StatusBadge status={status} />
+              </div>
+              <p className="mt-2 max-w-3xl text-sm text-muted">
+                Use this connector workspace to manage the IB Gateway or TWS session. The Home button returns to the tab-enabled dashboard.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-3">
+              <button
+                className="rounded-full border border-accent/35 bg-accent/10 px-4 py-2 text-sm font-medium text-accent transition hover:border-accent/50 hover:text-white disabled:cursor-default disabled:opacity-45"
+                disabled={connectPending}
+                onClick={onConnect}
+                type="button"
+              >
+                {connectPending ? "Connecting..." : "Connect"}
+              </button>
+              <button
+                className="rounded-full border border-line bg-panelSoft px-4 py-2 text-sm font-medium text-text transition hover:border-accent/35 disabled:cursor-default disabled:opacity-45"
+                disabled={reconnectPending}
+                onClick={onReconnect}
+                type="button"
+              >
+                {reconnectPending ? "Refreshing..." : "Reconnect"}
+              </button>
+            </div>
+          </div>
+        </header>
+
+        <section className="px-10 py-8 lg:px-12">
+          <div className="grid gap-6">
+            {sourceError ? <ErrorState message={sourceError} /> : null}
+
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              <MetricCard
+                hint={endpoint}
+                label="Connection"
+                tone={status?.connected ? "safe" : "danger"}
+                value={connectionLabel}
+              />
+              <MetricCard label="Session mode" value={sessionModeLabel} />
+              <MetricCard
+                hint={selectedAccount ? `Current dashboard tab: ${selectedAccount}` : "No active dashboard account yet"}
+                label="Execution"
+                tone={status?.executionMode === "paper" ? "safe" : "neutral"}
+                value={executionLabel}
+              />
+              <MetricCard
+                hint={managedAccounts.length > 0 ? managedAccounts.join(" · ") : "Connect to discover routed accounts"}
+                label="Managed accounts"
+                value={fmtNumber(managedAccounts.length)}
+              />
+            </div>
+
+            <div className="grid gap-6 xl:grid-cols-[0.92fr,1.08fr]">
+              <Panel title="Gateway Session" eyebrow="Connector State">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <ConnectorFact label="Endpoint" value={endpoint} />
+                  <ConnectorFact label="Client ID" value={status ? String(status.clientId) : "—"} />
+                  <ConnectorFact label="Market data" value={status?.marketDataMode ?? "Unknown"} />
+                  <ConnectorFact label="Last connect" value={lastConnectedLabel} />
+                  <ConnectorFact label="Last heartbeat" value={lastHeartbeatLabel} />
+                  <ConnectorFact label="Next reconnect" value={nextReconnectLabel} />
+                </div>
+              </Panel>
+
+              <Panel title="Account Routing" eyebrow="Dashboard Tabs">
+                {managedAccounts.length > 0 ? (
+                  <div className="grid gap-3">
+                    {managedAccounts.map((accountId) => {
+                      const isPaperAccount = isPaperTradingAccountId(accountId);
+                      const isCurrent = selectedAccount === accountId;
+                      return (
+                        <div
+                          key={accountId}
+                          className={`rounded-2xl border px-4 py-3 ${
+                            isCurrent ? "border-accent/35 bg-accent/8" : "border-line/80 bg-panelSoft"
+                          }`}
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div>
+                              <div className="text-sm font-medium text-text">{accountId}</div>
+                              <div className="mt-1 text-sm text-muted">
+                                {isCurrent ? "Currently selected in the Home dashboard." : "Available as a dashboard tab."}
+                              </div>
+                            </div>
+                            <span
+                              className={`rounded-full border px-3 py-1 text-xs font-medium ${
+                                isPaperAccount
+                                  ? "border-danger/35 bg-danger/8 text-danger"
+                                  : "border-line bg-panel text-text"
+                              }`}
+                            >
+                              {isPaperAccount ? "Paper" : "Live"}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-4 text-sm text-muted">
+                    Connect to IB Gateway or TWS to populate the tab-enabled dashboard on Home.
+                  </div>
+                )}
+              </Panel>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function ConnectorFact({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-3">
+      <div className="text-[11px] uppercase tracking-[0.18em] text-muted">{label}</div>
+      <div className="mt-2 text-sm font-medium text-text">{value}</div>
+    </div>
+  );
+}
+
 function ShellSourceRow({
   title,
   meta,
@@ -1455,7 +1663,15 @@ function ShellSourceRow({
         </div>
         <span className={`shell-source-badge is-${tone}`}>{badge}</span>
       </div>
-      {children ? <div className="shell-source-extra">{children}</div> : null}
+      {children ? (
+        <div
+          className="shell-source-extra"
+          onClick={(event) => event.stopPropagation()}
+          onKeyDown={(event) => event.stopPropagation()}
+        >
+          {children}
+        </div>
+      ) : null}
     </section>
   );
 }
