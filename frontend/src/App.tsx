@@ -134,6 +134,7 @@ function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
+  const [ibkrConnectorCollapsed, setIbkrConnectorCollapsed] = useState(false);
   const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceSurface>("home");
   const [chainSymbol, setChainSymbol] = useState("NVDA");
   const [chainSymbolInput, setChainSymbolInput] = useState("NVDA");
@@ -316,6 +317,13 @@ function App() {
   const paperExecutionEnabled = connectionQuery.data?.executionMode === "paper";
   const selectedAccount = selectedAccountId ?? accountId ?? undefined;
   const selectedAccountIsPaper = isPaperTradingAccountId(selectedAccount);
+  const ibkrConnectorLabel = selectedAccountIsPaper
+    ? "IBKR Paper Connector"
+    : selectedAccount
+      ? "IBKR Live Connector"
+      : "IBKR Connector";
+  const ibkrConnectorTitle = selectedAccountIsPaper ? "Paper Account" : selectedAccount ? "Live Account" : "Connector Overview";
+  const ibkrConnectorDetail = selectedAccount ?? "Awaiting route";
   const parsedLimitPrice = ticketOrderType === "LMT" ? Number(ticketLimitPrice) : null;
   const validLimitPrice =
     ticketOrderType === "MKT" ? null : Number.isFinite(parsedLimitPrice) && parsedLimitPrice != null && parsedLimitPrice > 0 ? parsedLimitPrice : null;
@@ -818,108 +826,125 @@ function App() {
                     </header>
                     <div className="account-workspace-body flex flex-col gap-6 px-10 pb-6 lg:px-12">
         <Panel
-          action={<div className="text-[11px] uppercase tracking-[0.18em] text-muted">Current capital source: IBKR</div>}
-          title="Account Snapshot"
-          eyebrow="Account Home"
-        >
-          {riskSummaryQuery.isLoading ? (
-            <div className="text-sm text-muted">Loading overview...</div>
-          ) : risk ? (
-            <div className="grid gap-4">
-              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-                <MetricCard label="IBKR option positions" value={fmtNumber(risk.account.optionPositionsCount)} />
-                <MetricCard label="IBKR open orders" value={fmtNumber(risk.account.openOrdersCount)} />
-                <MetricCard
-                  label="IBKR premium this week"
-                  value={fmtCurrency(risk.premium.estimatedPremiumExpiringThisWeek)}
-                  tone={risk.premium.estimatedPremiumExpiringThisWeek > 0 ? "safe" : "neutral"}
-                />
-                <MetricCard
-                  label="IBKR option capacity"
-                  value={fmtCurrency(risk.collateral.estimatedFreeOptionSellingCapacity)}
-                  tone={
-                    risk.collateral.estimatedFreeOptionSellingCapacity <= 0
-                      ? "danger"
-                      : risk.collateral.estimatedFreeOptionSellingCapacity < 25_000
-                        ? "caution"
-                        : "safe"
-                  }
-                />
-              </div>
-              <div className="grid gap-4 xl:grid-cols-[1.2fr,0.8fr]">
-                <div className="panel-soft rounded-2xl p-4">
-                  <div className="mb-3 flex items-center justify-between">
-                    <h3 className="text-sm font-medium text-text">Positions closest to the money</h3>
-                    <span className="text-xs uppercase tracking-[0.18em] text-muted">Short risk stack</span>
-                  </div>
-                  <div className="overflow-x-auto">
-                    <table className="min-w-full text-left text-sm">
-                      <thead className="text-xs uppercase tracking-[0.16em] text-muted">
-                        <tr>
-                          <th className="pb-3 pr-4">Ticker</th>
-                          <th className="pb-3 pr-4">Contract</th>
-                          <th className="pb-3 pr-4">Spot</th>
-                          <th className="pb-3 pr-4">Distance</th>
-                          <th className="pb-3 pr-4">DTE</th>
-                          <th className="pb-3">Risk</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {risk.positionsClosestToMoney.map((position) => (
-                          <tr key={`${position.symbol}-${position.expiry}-${position.right}-${position.strike}`} className="border-t border-line/70">
-                            <td className="py-3 pr-4 font-medium text-text">{position.symbol}</td>
-                            <td className="py-3 pr-4 mono text-xs text-muted">
-                              {position.right}
-                              {position.strike} {position.expiry}
-                            </td>
-                            <td className="py-3 pr-4">{fmtCurrencySmall(position.underlyingSpot)}</td>
-                            <td className="py-3 pr-4">{fmtNumber(position.distanceToStrikePct, "%")}</td>
-                            <td className="py-3 pr-4">{position.dte}</td>
-                            <td className="py-3">
-                              <RiskBadge level={position.assignmentRiskLevel} />
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-                <div className="panel-soft rounded-2xl p-4">
-                  <div className="mb-3 flex items-center justify-between">
-                    <h3 className="text-sm font-medium text-text">Alerts</h3>
-                    <span className="text-xs uppercase tracking-[0.16em] text-muted">Near-term pressure</span>
-                  </div>
-                  <div className="space-y-3">
-                    {risk.alerts.length === 0 ? (
-                      <div className="rounded-2xl border border-line/80 px-4 py-3 text-sm text-muted">No urgent alerts in the current snapshot.</div>
-                    ) : (
-                      risk.alerts.map((alert) => (
-                        <div
-                          key={`${alert.title}-${alert.detail}`}
-                          className={`rounded-2xl border px-4 py-3 text-sm ${
-                            alert.level === "critical"
-                              ? "border-danger/25 bg-danger/8"
-                              : alert.level === "warning"
-                                ? "border-caution/25 bg-caution/8"
-                                : "border-line/80 bg-panel"
-                          }`}
-                        >
-                          <div className="font-medium text-text">{alert.title}</div>
-                          <div className="mt-1 text-muted">{alert.detail}</div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </div>
-              </div>
+          action={
+            <div className="flex items-center gap-3">
+              <div className="text-[11px] uppercase tracking-[0.18em] text-muted">{ibkrConnectorDetail}</div>
+              <button
+                aria-expanded={!ibkrConnectorCollapsed}
+                aria-label={ibkrConnectorCollapsed ? "Expand IBKR connector" : "Collapse IBKR connector"}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-line/70 bg-panelSoft text-muted transition hover:border-accent/30 hover:text-text"
+                onClick={() => setIbkrConnectorCollapsed((value) => !value)}
+                type="button"
+              >
+                <ChevronIcon collapsed={ibkrConnectorCollapsed} />
+              </button>
             </div>
-          ) : (
-            <ErrorState message={riskSummaryQuery.error instanceof Error ? riskSummaryQuery.error.message : "Overview unavailable."} />
-          )}
+          }
+          title={ibkrConnectorTitle}
+          eyebrow={ibkrConnectorLabel}
+        >
+          {!ibkrConnectorCollapsed ? (
+            riskSummaryQuery.isLoading ? (
+              <div className="text-sm text-muted">Loading overview...</div>
+            ) : risk ? (
+              <div className="grid gap-4">
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                  <MetricCard label="Option positions" value={fmtNumber(risk.account.optionPositionsCount)} />
+                  <MetricCard label="Open orders" value={fmtNumber(risk.account.openOrdersCount)} />
+                  <MetricCard
+                    label="Premium this week"
+                    value={fmtCurrency(risk.premium.estimatedPremiumExpiringThisWeek)}
+                    tone={risk.premium.estimatedPremiumExpiringThisWeek > 0 ? "safe" : "neutral"}
+                  />
+                  <MetricCard
+                    label="Option capacity"
+                    value={fmtCurrency(risk.collateral.estimatedFreeOptionSellingCapacity)}
+                    tone={
+                      risk.collateral.estimatedFreeOptionSellingCapacity <= 0
+                        ? "danger"
+                        : risk.collateral.estimatedFreeOptionSellingCapacity < 25_000
+                          ? "caution"
+                          : "safe"
+                    }
+                  />
+                </div>
+                <div className="grid gap-4 xl:grid-cols-[1.2fr,0.8fr]">
+                  <div className="panel-soft rounded-2xl p-4">
+                    <div className="mb-3 flex items-center justify-between">
+                      <h3 className="text-sm font-medium text-text">Positions closest to the money</h3>
+                      <span className="text-xs uppercase tracking-[0.18em] text-muted">Short risk stack</span>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="min-w-full text-left text-sm">
+                        <thead className="text-xs uppercase tracking-[0.16em] text-muted">
+                          <tr>
+                            <th className="pb-3 pr-4">Ticker</th>
+                            <th className="pb-3 pr-4">Contract</th>
+                            <th className="pb-3 pr-4">Spot</th>
+                            <th className="pb-3 pr-4">Distance</th>
+                            <th className="pb-3 pr-4">DTE</th>
+                            <th className="pb-3">Risk</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {risk.positionsClosestToMoney.map((position) => (
+                            <tr key={`${position.symbol}-${position.expiry}-${position.right}-${position.strike}`} className="border-t border-line/70">
+                              <td className="py-3 pr-4 font-medium text-text">{position.symbol}</td>
+                              <td className="py-3 pr-4 mono text-xs text-muted">
+                                {position.right}
+                                {position.strike} {position.expiry}
+                              </td>
+                              <td className="py-3 pr-4">{fmtCurrencySmall(position.underlyingSpot)}</td>
+                              <td className="py-3 pr-4">{fmtNumber(position.distanceToStrikePct, "%")}</td>
+                              <td className="py-3 pr-4">{position.dte}</td>
+                              <td className="py-3">
+                                <RiskBadge level={position.assignmentRiskLevel} />
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                  <div className="panel-soft rounded-2xl p-4">
+                    <div className="mb-3 flex items-center justify-between">
+                      <h3 className="text-sm font-medium text-text">Alerts</h3>
+                      <span className="text-xs uppercase tracking-[0.16em] text-muted">Near-term pressure</span>
+                    </div>
+                    <div className="space-y-3">
+                      {risk.alerts.length === 0 ? (
+                        <div className="rounded-2xl border border-line/80 px-4 py-3 text-sm text-muted">No urgent alerts in the current snapshot.</div>
+                      ) : (
+                        risk.alerts.map((alert) => (
+                          <div
+                            key={`${alert.title}-${alert.detail}`}
+                            className={`rounded-2xl border px-4 py-3 text-sm ${
+                              alert.level === "critical"
+                                ? "border-danger/25 bg-danger/8"
+                                : alert.level === "warning"
+                                  ? "border-caution/25 bg-caution/8"
+                                  : "border-line/80 bg-panel"
+                            }`}
+                          >
+                            <div className="font-medium text-text">{alert.title}</div>
+                            <div className="mt-1 text-muted">{alert.detail}</div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <ErrorState message={riskSummaryQuery.error instanceof Error ? riskSummaryQuery.error.message : "Overview unavailable."} />
+            )
+          ) : null}
         </Panel>
 
+        {!ibkrConnectorCollapsed ? (
+          <>
         <div className="grid gap-6 xl:grid-cols-[1.5fr,0.9fr]">
-          <Panel title="IBKR Options Book" eyebrow="Broker Feed">
+          <Panel title="Options Book" eyebrow={ibkrConnectorLabel}>
             <div className="mb-4 grid gap-3 lg:grid-cols-3 xl:grid-cols-6">
               <input
                 className="rounded-2xl border border-line bg-panelSoft px-3 py-2 text-sm outline-none transition focus:border-accent/50"
@@ -1027,7 +1052,7 @@ function App() {
             )}
           </Panel>
 
-          <Panel title="IBKR Orders & Commitments" eyebrow="Broker Feed">
+          <Panel title="Orders & Commitments" eyebrow={ibkrConnectorLabel}>
             {openOrdersQuery.isLoading ? (
               <div className="text-sm text-muted">Loading open orders...</div>
             ) : openOrdersQuery.error instanceof Error ? (
@@ -1089,8 +1114,8 @@ function App() {
         </div>
 
         <Panel
-          title="IBKR Chain Explorer"
-          eyebrow={`Broker feed · ${chainSymbol}`}
+          title="Chain Explorer"
+          eyebrow={`${ibkrConnectorLabel} · ${chainSymbol}`}
           action={
             <div className="flex flex-col items-stretch gap-2 sm:items-end">
               <form
@@ -1423,7 +1448,7 @@ function App() {
         </Panel>
 
         <div className="grid gap-6 xl:grid-cols-[1fr,1fr]">
-          <Panel title="IBKR Risk View" eyebrow="Broker Analytics">
+          <Panel title="Risk View" eyebrow={ibkrConnectorLabel}>
             {risk ? (
               <div className="grid gap-6">
                 <div className="h-72">
@@ -1476,7 +1501,7 @@ function App() {
             )}
           </Panel>
 
-          <Panel title="IBKR Expiry Stack" eyebrow="Broker Analytics">
+          <Panel title="Expiry Stack" eyebrow={ibkrConnectorLabel}>
             {risk ? (
               <div className="grid gap-6">
                 <div className="h-72">
@@ -1520,7 +1545,7 @@ function App() {
           </Panel>
         </div>
 
-        <Panel title="IBKR Scenario View" eyebrow="Broker Analytics">
+        <Panel title="Scenario View" eyebrow={ibkrConnectorLabel}>
           <div className="mb-5 grid gap-3 lg:grid-cols-4">
             <RangeField label="Spot move %" value={movePct} min={-30} max={30} step={1} onChange={setMovePct} />
             <RangeField label="Days forward" value={daysForward} min={0} max={45} step={1} onChange={setDaysForward} />
@@ -1575,6 +1600,8 @@ function App() {
             </div>
           ) : null}
         </Panel>
+          </>
+        ) : null}
           </div>
           </div>
               </div>
@@ -1687,7 +1714,7 @@ function IbkrWorkspace({
                 </div>
               </Panel>
 
-              <Panel title="Account Routing" eyebrow="Account Home">
+              <Panel title="Managed Accounts" eyebrow="Connector Routing">
                 {managedAccounts.length > 0 ? (
                   <div className="grid gap-3">
                     {managedAccounts.map((accountId) => {
@@ -1946,6 +1973,21 @@ function GearIcon() {
         strokeWidth="1.35"
       />
       <circle cx="10" cy="10" r="2.35" stroke="currentColor" strokeWidth="1.35" />
+    </svg>
+  );
+}
+
+function ChevronIcon({ collapsed }: { collapsed: boolean }) {
+  return (
+    <svg
+      aria-hidden="true"
+      fill="none"
+      height="16"
+      style={{ transform: collapsed ? "rotate(-90deg)" : "rotate(0deg)", transition: "transform 180ms ease" }}
+      viewBox="0 0 16 16"
+      width="16"
+    >
+      <path d="m4 6 4 4 4-4" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.6" />
     </svg>
   );
 }
