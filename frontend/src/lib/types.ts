@@ -368,3 +368,65 @@ export interface EdgarDownloadResponse {
   manifestPath: string;
   syncedAt: string;
 }
+
+export interface InvestorPdfSourceStatus {
+  available: boolean;
+  status: "ready" | "degraded";
+  researchRootPath: string;
+  stocksRootPath: string;
+  pdfFolderName: string;
+  timeoutSeconds: number;
+}
+
+export interface InvestorPdfDownloadRequest {
+  ticker?: string;
+  companyName?: string;
+  cik?: string;
+  lookbackYears?: number;
+  startDate?: string;
+  endDate?: string;
+  outputDir?: string;
+  includeAnnualReports?: boolean;
+  includeEarningsDecks?: boolean;
+  includeInvestorPresentations?: boolean;
+  includeCompanyReports?: boolean;
+  includeSecExhibits?: boolean;
+  resume?: boolean;
+  maxRequestsPerSecond?: number;
+  userAgent?: string;
+}
+
+export interface InvestorPdfArtifact {
+  title: string;
+  category: "annual-report" | "earnings-deck" | "investor-presentation" | "company-report" | "sec-exhibit";
+  sourceLabel: string;
+  sourceUrl: string;
+  host: string;
+  publishedAt?: string | null;
+  year?: number | null;
+  savedPath?: string | null;
+}
+
+export interface InvestorPdfDownloadResponse {
+  companyName: string;
+  ticker: string;
+  cik: string;
+  lookbackYears: number;
+  startDate?: string | null;
+  endDate?: string | null;
+  discoveredCandidates: number;
+  matchedPdfs: number;
+  downloadedFiles: number;
+  skippedFiles: number;
+  failedFiles: number;
+  resume: boolean;
+  researchRootPath: string;
+  stockPath: string;
+  pdfsPath: string;
+  workspacePath: string;
+  exportsJsonPath: string;
+  exportsCsvPath: string;
+  manifestPath: string;
+  artifacts: InvestorPdfArtifact[];
+  syncedAt: string;
+}

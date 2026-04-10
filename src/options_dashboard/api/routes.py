@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, HTTPException, Query
 
 from options_dashboard import __version__
-from options_dashboard.models import EdgarDownloadRequest, OptionOrderRequest
+from options_dashboard.models import EdgarDownloadRequest, InvestorPdfDownloadRequest, OptionOrderRequest
 from options_dashboard.services.analytics import (
     build_collateral_summary,
     build_exposure_by_expiry,
@@ -16,7 +16,7 @@ from options_dashboard.services.analytics import (
     build_risk_summary,
     build_scenario,
 )
-from options_dashboard.services.app_state import get_broker_service, get_edgar_service, get_settings
+from options_dashboard.services.app_state import get_broker_service, get_edgar_service, get_investor_pdf_service, get_settings
 from options_dashboard.services.base import BrokerUnavailableError
 
 
@@ -33,6 +33,10 @@ def _settings():
 
 def _edgar():
     return get_edgar_service()
+
+
+def _investor_pdfs():
+    return get_investor_pdf_service()
 
 
 @router.get("/health")
@@ -269,6 +273,32 @@ def edgar_download(request: EdgarDownloadRequest) -> dict:
 def edgar_last_sync(request: EdgarDownloadRequest) -> dict | None:
     try:
         result = _edgar().last_sync(request)
+        return result.model_dump() if result else None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.get("/sources/investor-pdfs/status")
+def investor_pdf_status() -> dict:
+    return _investor_pdfs().source_status().model_dump()
+
+
+@router.post("/sources/investor-pdfs/download")
+def investor_pdf_download(request: InvestorPdfDownloadRequest) -> dict:
+    try:
+        return _investor_pdfs().download(request).model_dump()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post("/sources/investor-pdfs/last-sync")
+def investor_pdf_last_sync(request: InvestorPdfDownloadRequest) -> dict | None:
+    try:
+        result = _investor_pdfs().last_sync(request)
         return result.model_dump() if result else None
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

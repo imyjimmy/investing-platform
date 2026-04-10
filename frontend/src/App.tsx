@@ -11,8 +11,17 @@ import {
 } from "recharts";
 
 import { api } from "./lib/api";
-import type { EdgarDownloadRequest, EdgarDownloadResponse, OpenOrderExposure, OptionOrderRequest, OptionPosition } from "./lib/types";
+import type {
+  EdgarDownloadRequest,
+  EdgarDownloadResponse,
+  InvestorPdfDownloadRequest,
+  InvestorPdfDownloadResponse,
+  OpenOrderExposure,
+  OptionOrderRequest,
+  OptionPosition,
+} from "./lib/types";
 import { EdgarWorkspace } from "./components/EdgarWorkspace";
+import { InvestorPdfsWorkspace } from "./components/InvestorPdfsWorkspace";
 import { MetricCard } from "./components/MetricCard";
 import { Panel } from "./components/Panel";
 import { RiskBadge } from "./components/RiskBadge";
@@ -105,7 +114,7 @@ type TicketDraft = {
 };
 
 type SourceTone = "live" | "off" | "planned";
-type WorkspaceSurface = "ibkr" | "edgar";
+type WorkspaceSurface = "ibkr" | "edgar" | "investorPdfs";
 
 function App() {
   const queryClient = useQueryClient();
@@ -137,6 +146,9 @@ function App() {
   const [edgarSyncing, setEdgarSyncing] = useState(false);
   const [edgarSyncResult, setEdgarSyncResult] = useState<EdgarDownloadResponse | undefined>(undefined);
   const [edgarSyncError, setEdgarSyncError] = useState<string | null>(null);
+  const [investorPdfSyncing, setInvestorPdfSyncing] = useState(false);
+  const [investorPdfSyncResult, setInvestorPdfSyncResult] = useState<InvestorPdfDownloadResponse | undefined>(undefined);
+  const [investorPdfSyncError, setInvestorPdfSyncError] = useState<string | null>(null);
 
   const deferredTickerFilter = useDeferredValue(tickerFilter);
 
@@ -178,6 +190,10 @@ function App() {
     queryKey: ["edgar-status"],
     queryFn: api.edgarStatus,
   });
+  const investorPdfStatusQuery = useQuery({
+    queryKey: ["investor-pdf-status"],
+    queryFn: api.investorPdfStatus,
+  });
 
   const connectMutation = useMutation({ mutationFn: api.connect });
   const reconnectMutation = useMutation({ mutationFn: api.reconnect });
@@ -185,6 +201,12 @@ function App() {
     mutationFn: api.edgarDownload,
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["edgar-status"] });
+    },
+  });
+  const investorPdfDownloadMutation = useMutation({
+    mutationFn: api.investorPdfDownload,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["investor-pdf-status"] });
     },
   });
   const previewMutation = useMutation({
@@ -375,6 +397,10 @@ function App() {
   const edgarSourceTone: SourceTone = edgarStatusQuery.data?.available ? "live" : edgarStatusError ? "off" : "off";
   const edgarBadge = edgarSyncing ? "Syncing" : edgarStatusQuery.data?.available ? "Ready" : "Off";
   const edgarMeta = "SEC API";
+  const investorPdfStatusError = investorPdfStatusQuery.error instanceof Error ? investorPdfStatusQuery.error.message : null;
+  const investorPdfSourceTone: SourceTone = investorPdfStatusQuery.data?.available ? "live" : investorPdfStatusError ? "off" : "off";
+  const investorPdfBadge = investorPdfSyncing ? "Syncing" : investorPdfStatusQuery.data?.available ? "Ready" : "Off";
+  const investorPdfMeta = "Annual reports + SEC PDF exhibits";
   const dataModeLabel = connectionQuery.data?.mode === "ibkr" ? "IBKR live session" : "Mock snapshot";
   const executionModeLabel = paperExecutionEnabled ? "Paper execution" : "Disabled";
   const refreshCadenceLabel = "Conn 10s · Risk 15s · Chain 20s";
@@ -390,6 +416,19 @@ function App() {
       setEdgarSyncError(error instanceof Error ? error.message : "EDGAR sync failed.");
     } finally {
       setEdgarSyncing(false);
+    }
+  }
+
+  async function runInvestorPdfDownload(request: InvestorPdfDownloadRequest) {
+    setInvestorPdfSyncing(true);
+    setInvestorPdfSyncError(null);
+    try {
+      const result = await investorPdfDownloadMutation.mutateAsync(request);
+      setInvestorPdfSyncResult(result);
+    } catch (error) {
+      setInvestorPdfSyncError(error instanceof Error ? error.message : "Investor PDF sync failed.");
+    } finally {
+      setInvestorPdfSyncing(false);
     }
   }
 
@@ -464,6 +503,16 @@ function App() {
                     />
 
                     <ShellSourceRow
+                      active={activeWorkspace === "investorPdfs"}
+                      badge={investorPdfBadge}
+                      icon={<PdfLibraryIcon />}
+                      meta={investorPdfMeta}
+                      onSelect={() => setActiveWorkspace("investorPdfs")}
+                      title="Investor PDFs"
+                      tone={investorPdfSourceTone}
+                    />
+
+                    <ShellSourceRow
                       badge="Planned"
                       icon={<FolderIcon />}
                       meta="Watch local research and export folders"
@@ -516,8 +565,21 @@ function App() {
                   syncResult={edgarSyncResult}
                   syncing={edgarSyncing}
                 />
+              ) : activeWorkspace === "investorPdfs" ? (
+                <InvestorPdfsWorkspace
+                  defaultTicker={chainSymbol}
+                  onRun={(request) => {
+                    void runInvestorPdfDownload(request);
+                  }}
+                  status={investorPdfStatusQuery.data}
+                  statusLoading={investorPdfStatusQuery.isLoading}
+                  statusError={investorPdfStatusError}
+                  syncError={investorPdfSyncError}
+                  syncResult={investorPdfSyncResult}
+                  syncing={investorPdfSyncing}
+                />
               ) : null}
-              <div className={activeWorkspace === "edgar" ? "hidden" : ""}>
+              <div className={activeWorkspace === "ibkr" ? "" : "hidden"}>
               <div className="chrome-header-frame">
           <div className="chrome-tabs-shell">
             <div className="chrome-tab-strip">
@@ -1435,6 +1497,16 @@ function DocumentIcon() {
       <path d="M6.5 3.75h4.8l2.7 2.7v9.8H6.5z" stroke="currentColor" strokeLinejoin="round" strokeWidth="1.5" />
       <path d="M11.3 3.75v2.9h2.7" stroke="currentColor" strokeLinejoin="round" strokeWidth="1.5" />
       <path d="M8.3 10h4.8M8.3 12.8h4.1" opacity="0.55" stroke="currentColor" strokeLinecap="round" strokeWidth="1.4" />
+    </svg>
+  );
+}
+
+function PdfLibraryIcon() {
+  return (
+    <svg aria-hidden="true" fill="none" height="18" viewBox="0 0 20 20" width="18">
+      <path d="M4.1 5.25h7.2a1.6 1.6 0 0 1 1.6 1.6v8.05H5.7a1.6 1.6 0 0 1-1.6-1.6z" stroke="currentColor" strokeLinejoin="round" strokeWidth="1.45" />
+      <path d="M8.75 3.85h6.15a1.6 1.6 0 0 1 1.6 1.6v8.7" opacity="0.5" stroke="currentColor" strokeLinejoin="round" strokeWidth="1.45" />
+      <path d="M7.2 9.05h4.1M7.2 11.55h2.9" stroke="currentColor" strokeLinecap="round" strokeWidth="1.35" />
     </svg>
   );
 }

@@ -23,6 +23,7 @@ OrderType = Literal["LMT", "MKT"]
 TimeInForce = Literal["DAY", "GTC"]
 EdgarDownloadMode = Literal["primary-document", "all-attachments", "metadata-only", "full-filing-bundle"]
 EdgarPdfLayout = Literal["nested", "by-filing", "both"]
+InvestorPdfCategory = Literal["annual-report", "earnings-deck", "investor-presentation", "company-report", "sec-exhibit"]
 
 
 class ConnectionStatus(DashboardModel):
@@ -508,4 +509,108 @@ class EdgarDownloadResponse(DashboardModel):
     exportsJsonPath: str
     exportsCsvPath: str
     manifestPath: str
+    syncedAt: datetime
+
+
+class InvestorPdfSourceStatus(DashboardModel):
+    available: bool
+    status: Literal["ready", "degraded"]
+    researchRootPath: str
+    stocksRootPath: str
+    pdfFolderName: str = "pdfs"
+    timeoutSeconds: float
+
+
+class InvestorPdfDownloadRequest(DashboardModel):
+    ticker: str | None = None
+    companyName: str | None = None
+    cik: str | None = None
+    lookbackYears: int = Field(default=5, ge=1, le=25)
+    startDate: date | None = None
+    endDate: date | None = None
+    outputDir: str | None = None
+    includeAnnualReports: bool = True
+    includeEarningsDecks: bool = True
+    includeInvestorPresentations: bool = True
+    includeCompanyReports: bool = True
+    includeSecExhibits: bool = True
+    resume: bool = True
+    maxRequestsPerSecond: float | None = Field(default=None, gt=0)
+    userAgent: str | None = None
+
+    @field_validator("ticker")
+    @classmethod
+    def _normalize_investor_pdf_ticker(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip().upper()
+        return normalized or None
+
+    @field_validator("companyName")
+    @classmethod
+    def _normalize_investor_pdf_company_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @field_validator("cik")
+    @classmethod
+    def _normalize_investor_pdf_cik(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        digits = "".join(character for character in value if character.isdigit())
+        return digits or None
+
+    @model_validator(mode="after")
+    def _validate_investor_pdf_request(self) -> "InvestorPdfDownloadRequest":
+        if not any([self.ticker, self.companyName, self.cik]):
+            raise ValueError("Provide a ticker, company name, or CIK.")
+        if self.startDate and self.endDate and self.startDate > self.endDate:
+            raise ValueError("startDate must be on or before endDate.")
+        if not any(
+            [
+                self.includeAnnualReports,
+                self.includeEarningsDecks,
+                self.includeInvestorPresentations,
+                self.includeCompanyReports,
+                self.includeSecExhibits,
+            ]
+        ):
+            raise ValueError("Select at least one PDF category to search.")
+        return self
+
+
+class InvestorPdfArtifact(DashboardModel):
+    title: str
+    category: InvestorPdfCategory
+    sourceLabel: str
+    sourceUrl: str
+    host: str
+    publishedAt: str | None = None
+    year: int | None = None
+    savedPath: str | None = None
+
+
+class InvestorPdfDownloadResponse(DashboardModel):
+    companyName: str
+    ticker: str
+    cik: str
+    lookbackYears: int
+    startDate: date | None = None
+    endDate: date | None = None
+    discoveredCandidates: int
+    matchedPdfs: int
+    downloadedFiles: int
+    skippedFiles: int
+    failedFiles: int
+    resume: bool
+    researchRootPath: str
+    stockPath: str
+    pdfsPath: str
+    workspacePath: str
+    exportsJsonPath: str
+    exportsCsvPath: str
+    manifestPath: str
+    artifacts: list[InvestorPdfArtifact] = Field(default_factory=list)
     syncedAt: datetime

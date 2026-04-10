@@ -3,6 +3,9 @@ import type {
     EdgarDownloadRequest,
     EdgarDownloadResponse,
     EdgarSourceStatus,
+    InvestorPdfDownloadRequest,
+    InvestorPdfDownloadResponse,
+    InvestorPdfSourceStatus,
     OpenOrdersResponse,
     OptionOrderPreview,
     OptionOrderRequest,
@@ -90,6 +93,11 @@ export const api = {
   edgarStatus: () => fetchJson<EdgarSourceStatus>("/api/sources/edgar/status"),
   edgarDownload: (request: EdgarDownloadRequest) => postJson<EdgarDownloadResponse>("/api/sources/edgar/download", request),
   edgarLastSync: (request: EdgarDownloadRequest) => postJson<EdgarDownloadResponse | null>("/api/sources/edgar/last-sync", request),
+  investorPdfStatus: () => fetchJson<InvestorPdfSourceStatus>("/api/sources/investor-pdfs/status"),
+  investorPdfDownload: (request: InvestorPdfDownloadRequest) =>
+    postJson<InvestorPdfDownloadResponse>("/api/sources/investor-pdfs/download", request),
+  investorPdfLastSync: (request: InvestorPdfDownloadRequest) =>
+    postJson<InvestorPdfDownloadResponse | null>("/api/sources/investor-pdfs/last-sync", request),
   previewOptionOrder: (request: OptionOrderRequest) => postJson<OptionOrderPreview>("/api/execution/options/preview", request),
   submitOptionOrder: (request: OptionOrderRequest) => postJson<SubmittedOrder>("/api/execution/options/submit", request),
   cancelOrder: (orderId: number, accountId: string) =>
