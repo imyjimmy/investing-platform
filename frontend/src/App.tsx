@@ -432,7 +432,7 @@ function App() {
   const executionModeLabel = paperExecutionEnabled ? "Paper execution" : "Disabled";
   const refreshCadenceLabel = "Conn 10s · Risk 15s · Chain 20s";
   const heartbeatLabel = connectionQuery.data?.lastHeartbeatAt ? formatTimestamp(connectionQuery.data.lastHeartbeatAt) : "No heartbeat";
-  const accountConnectors: AccountConnectorCard[] = [
+  const accountSettingsConnectors: AccountConnectorCard[] = [
     {
       id: "ibkr",
       title: "IBKR",
@@ -501,11 +501,11 @@ function App() {
       icon: <BankIcon />,
     },
   ];
-  const definedConnectors = accountConnectors.filter((connector) => connector.countsTowardHealth);
+  const definedConnectors = accountSettingsConnectors.filter((connector) => connector.countsTowardHealth);
   const definedConnectorCount = definedConnectors.length;
   const liveConnectorCount = definedConnectors.filter((connector) => connector.tone === "safe").length;
   const connectedConnectorCount = definedConnectors.filter((connector) => connector.tone === "safe" || connector.tone === "caution").length;
-  const plannedConnectorCount = accountConnectors.length - definedConnectorCount;
+  const plannedConnectorCount = accountSettingsConnectors.length - definedConnectorCount;
   const accountStatusTone: ConnectionHealthTone =
     connectedConnectorCount === 0 ? "danger" : liveConnectorCount === definedConnectorCount ? "safe" : "caution";
   const accountStatusLabel =
@@ -759,27 +759,6 @@ function App() {
                       >
                         <GearIcon />
                       </button>
-                      {accountSettingsOpen ? (
-                        <div className="absolute right-10 top-12 z-20 w-[min(30rem,calc(100%-5rem))] overflow-hidden rounded-2xl border border-line bg-panel shadow-[0_18px_48px_rgba(0,0,0,0.32)] backdrop-blur-xl">
-                          <div className="flex items-center justify-between border-b border-line/70 px-4 py-3">
-                            <div className="text-[11px] uppercase tracking-[0.2em] text-muted">Connections</div>
-                            <div className="text-[11px] uppercase tracking-[0.18em] text-muted">{plannedConnectorCount} planned</div>
-                          </div>
-                          <div className="grid max-h-[70vh] gap-3 overflow-auto p-4 sm:grid-cols-2">
-                            {accountConnectors.map((connector) => (
-                              <ConnectorStatusCard
-                                key={connector.id}
-                                detail={connector.detail}
-                                icon={connector.icon}
-                                onOpen={connector.workspace ? () => setActiveWorkspace(connector.workspace!) : undefined}
-                                status={connector.status}
-                                title={connector.title}
-                                tone={connector.tone}
-                              />
-                            ))}
-                          </div>
-                        </div>
-                      ) : null}
                       <div className="flex flex-col gap-5 pr-12 lg:flex-row lg:items-start lg:justify-between">
                         <div>
                           <div className="mb-2 text-[11px] uppercase tracking-[0.32em] text-accent">Van Aken Investments LLC</div>
@@ -825,6 +804,26 @@ function App() {
                       ) : null}
                     </header>
                     <div className="account-workspace-body flex flex-col gap-6 px-10 pb-6 lg:px-12">
+        {accountSettingsOpen ? (
+          <Panel
+            action={<div className="text-[11px] uppercase tracking-[0.18em] text-muted">{plannedConnectorCount} planned</div>}
+            title="Account Settings"
+          >
+            <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
+              {accountSettingsConnectors.map((connector) => (
+                <ConnectorStatusCard
+                  key={connector.id}
+                  detail={connector.detail}
+                  icon={connector.icon}
+                  onOpen={connector.workspace ? () => setActiveWorkspace(connector.workspace!) : undefined}
+                  status={connector.status}
+                  title={connector.title}
+                  tone={connector.tone}
+                />
+              ))}
+            </div>
+          </Panel>
+        ) : null}
         <Panel
           action={
             <div className="flex items-center gap-3">
