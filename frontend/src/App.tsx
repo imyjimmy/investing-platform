@@ -12,7 +12,7 @@ import {
 
 import { api } from "./lib/api";
 import type {
-  CoinbasePortfolioResponse,
+  CoinbaseSourceStatus,
   ConnectionStatus,
   EdgarDownloadRequest,
   EdgarDownloadResponse,
@@ -117,7 +117,7 @@ type TicketDraft = {
 };
 
 type SourceTone = "live" | "off" | "planned";
-type WorkspaceSurface = "home" | "ibkr" | "edgar" | "investorPdfs";
+type WorkspaceSurface = "home" | "ibkr" | "coinbase" | "edgar" | "investorPdfs";
 type ConnectionHealthTone = "safe" | "caution" | "danger" | "planned";
 
 type AccountConnectorCard = {
@@ -337,21 +337,6 @@ function App() {
       ? "IBKR Live Connector"
       : "IBKR Connector";
   const ibkrConnectorTitle = selectedAccountIsPaper ? "Paper Account" : selectedAccount ? "Live Account" : "Connector Overview";
-  const ibkrConnectorDetail = selectedAccount ?? "Awaiting route";
-  const ibkrConnectorTone: ConnectionHealthTone = connectionQuery.isLoading
-    ? "caution"
-    : connectionQuery.data?.connected
-      ? risk?.isStale
-        ? "caution"
-        : "safe"
-      : "danger";
-  const ibkrConnectorStatusLabel = connectionQuery.isLoading
-    ? "Checking IBKR"
-    : connectionQuery.data?.connected
-      ? risk?.isStale
-        ? "Stale snapshot"
-        : "Live connector"
-      : "Disconnected";
   const parsedLimitPrice = ticketOrderType === "LMT" ? Number(ticketLimitPrice) : null;
   const validLimitPrice =
     ticketOrderType === "MKT" ? null : Number.isFinite(parsedLimitPrice) && parsedLimitPrice != null && parsedLimitPrice > 0 ? parsedLimitPrice : null;
@@ -453,16 +438,16 @@ function App() {
   const coinbaseSourceTone: SourceTone = coinbaseStatusQuery.isLoading ? "planned" : coinbaseStatusQuery.data?.available ? "live" : "off";
   const coinbaseBadge = coinbaseStatusQuery.isLoading
     ? "Checking"
-    : coinbasePortfolioQuery.isLoading
-      ? "Syncing"
-      : coinbaseStatusQuery.data?.available
-        ? coinbasePortfolioQuery.data?.isStale
-          ? "Stale"
-          : "Ready"
+    : coinbaseStatusQuery.data?.available
+      ? "Ready"
+      : coinbaseStatusQuery.data?.authMode === "missing"
+        ? "Setup"
         : "Off";
-  const coinbaseMeta = coinbasePortfolioQuery.data
-    ? coinbasePortfolioSummary(coinbasePortfolioQuery.data)
-    : coinbaseStatusQuery.data?.detail ?? "Coinbase App balances";
+  const coinbaseMeta = coinbaseStatusQuery.isLoading
+    ? "Assigned to Van Aken dashboard"
+    : coinbaseStatusQuery.data?.available
+      ? "Assigned to Van Aken dashboard"
+      : "Connector settings for Van Aken dashboard";
   const coinbaseConnectorTone: ConnectionHealthTone = coinbaseStatusQuery.isLoading
     ? "caution"
     : coinbaseStatusQuery.data?.available
@@ -470,15 +455,6 @@ function App() {
         ? "caution"
         : "safe"
       : "danger";
-  const coinbaseConnectorBadgeLabel = coinbaseStatusQuery.isLoading
-    ? "Checking Coinbase"
-    : coinbaseStatusQuery.data?.available
-      ? coinbasePortfolioQuery.data?.isStale
-        ? "Stale snapshot"
-        : "Live balances"
-      : coinbaseStatusQuery.data?.authMode === "missing"
-        ? "Needs setup"
-        : "Needs attention";
   const coinbaseConnectorStatus = coinbaseStatusQuery.isLoading
     ? "Checking"
     : coinbasePortfolioQuery.isLoading
@@ -492,9 +468,9 @@ function App() {
           : "Degraded";
   const coinbaseConnectorDetail = coinbaseStatusQuery.isLoading
     ? "Loading Coinbase connector status"
-    : coinbasePortfolioQuery.data
-      ? coinbasePortfolioSummary(coinbasePortfolioQuery.data)
-      : coinbasePortfolioError ?? coinbaseStatusError ?? coinbaseStatusQuery.data?.detail ?? "Coinbase balances connector";
+    : coinbaseStatusQuery.data?.available
+      ? "Assigned to Van Aken dashboard"
+      : "Connector settings for Van Aken dashboard";
   const edgarStatusError = edgarStatusQuery.error instanceof Error ? edgarStatusQuery.error.message : null;
   const edgarSourceTone: SourceTone = edgarStatusQuery.data?.available ? "live" : edgarStatusError ? "off" : "off";
   const edgarBadge = edgarSyncing ? "Syncing" : edgarStatusQuery.data?.available ? "Ready" : "Off";
@@ -556,6 +532,7 @@ function App() {
       tone: coinbaseConnectorTone,
       countsTowardHealth: true,
       icon: <CoinbaseIcon />,
+      workspace: "coinbase",
     },
     {
       id: "plaid-fidelity",
@@ -639,7 +616,6 @@ function App() {
         collapsed={coinbaseConnectorCollapsed}
         eyebrow="Van Aken Coinbase"
         onToggle={() => setCoinbaseConnectorCollapsed((value) => !value)}
-        status={<AccountStatusBadge label={coinbaseConnectorBadgeLabel} tone={coinbaseConnectorTone} />}
         title="Coinbase Holdings"
       >
         {coinbaseStatusQuery.isLoading ? (
@@ -823,9 +799,11 @@ function App() {
                     />
 
                     <ShellSourceRow
+                      active={activeWorkspace === "coinbase"}
                       badge={coinbaseBadge}
                       icon={<CoinbaseIcon />}
                       meta={coinbaseMeta}
+                      onSelect={() => setActiveWorkspace("coinbase")}
                       title="Coinbase"
                       tone={coinbaseSourceTone}
                     />
@@ -888,6 +866,12 @@ function App() {
                   selectedAccount={selectedAccount}
                   sourceError={sourceError}
                   status={connectionQuery.data}
+                />
+              ) : activeWorkspace === "coinbase" ? (
+                <CoinbaseWorkspace
+                  status={coinbaseStatusQuery.data}
+                  statusError={coinbaseStatusError}
+                  statusLoading={coinbaseStatusQuery.isLoading}
                 />
               ) : activeWorkspace === "edgar" ? (
                 <EdgarWorkspace
@@ -1009,10 +993,8 @@ function App() {
         ) : null}
         <AccountConnectorSection
           collapsed={ibkrConnectorCollapsed}
-          detail={ibkrConnectorDetail}
           eyebrow={ibkrConnectorLabel}
           onToggle={() => setIbkrConnectorCollapsed((value) => !value)}
-          status={<AccountStatusBadge label={ibkrConnectorStatusLabel} tone={ibkrConnectorTone} />}
           title={ibkrConnectorTitle}
         >
           {riskSummaryQuery.isLoading ? (
@@ -1933,6 +1915,82 @@ function IbkrWorkspace({
   );
 }
 
+function CoinbaseWorkspace({
+  status,
+  statusLoading,
+  statusError,
+}: {
+  status: CoinbaseSourceStatus | undefined;
+  statusLoading: boolean;
+  statusError: string | null;
+}) {
+  const connectorTone: ConnectionHealthTone = statusLoading ? "caution" : status?.available ? "safe" : "danger";
+  const connectorLabel = statusLoading ? "Checking" : status?.available ? "Ready" : status?.authMode === "missing" ? "Needs setup" : "Unavailable";
+  const linkedAccountCount = 1;
+
+  return (
+    <div className="chrome-header-frame">
+      <div className="account-workspace panel overflow-hidden rounded-[16px]">
+        <header className="border-b border-line/70 px-10 py-7 lg:px-12">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <div className="mb-2 text-[11px] uppercase tracking-[0.32em] text-accent">Connector settings</div>
+              <div className="flex flex-wrap items-center gap-3">
+                <h1 className="text-3xl font-semibold tracking-tight text-text">Coinbase</h1>
+                <AccountStatusBadge label={connectorLabel} tone={connectorTone} />
+              </div>
+              <p className="mt-2 max-w-3xl text-sm text-muted">
+                This workspace only shows which dashboard accounts use the Coinbase connector. Coinbase balances only appear on the Van Aken Dashboard.
+              </p>
+            </div>
+          </div>
+        </header>
+
+        <section className="px-10 py-8 lg:px-12">
+          <div className="grid gap-6">
+            {statusError ? <ErrorState message={statusError} /> : null}
+
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              <MetricCard label="Connector" tone={status?.available ? "safe" : "neutral"} value={connectorLabel} />
+              <MetricCard label="Linked dashboard accounts" value={fmtNumber(linkedAccountCount)} />
+              <MetricCard label="Primary dashboard" value="Van Aken" />
+            </div>
+
+            <div className="grid gap-6 xl:grid-cols-[1.08fr,0.92fr]">
+              <Panel title="Linked Accounts" eyebrow="Connector Usage">
+                <div className="grid gap-3">
+                  <div className="rounded-2xl border border-accent/25 bg-accent/8 px-4 py-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-medium text-text">Van Aken</div>
+                        <div className="mt-1 text-sm text-muted">This Coinbase connector feeds the Van Aken dashboard holdings section.</div>
+                      </div>
+                      <span className="rounded-full border border-accent/25 bg-panel px-3 py-1 text-xs font-medium uppercase tracking-[0.16em] text-accent">
+                        Dashboard
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </Panel>
+
+              <Panel title="Workspace Role" eyebrow="Notes">
+                <div className="grid gap-3">
+                  <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-4 text-sm text-muted">
+                    This screen intentionally avoids showing balances or credential details.
+                  </div>
+                  <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-4 text-sm text-muted">
+                    To view actual Coinbase holdings, use the Van Aken Dashboard.
+                  </div>
+                </div>
+              </Panel>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
 function ConnectorFact({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-3">
@@ -2216,10 +2274,6 @@ function RangeField({
       />
     </div>
   );
-}
-
-function coinbasePortfolioSummary(portfolio: CoinbasePortfolioResponse) {
-  return `${fmtCurrency(portfolio.totalUsdValue)} · ${portfolio.visibleHoldingsCount} holdings`;
 }
 
 function ErrorState({ message }: { message: string }) {

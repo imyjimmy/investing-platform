@@ -1,4 +1,4 @@
-import type { PropsWithChildren, ReactNode } from "react";
+import type { PropsWithChildren } from "react";
 
 import { Panel } from "./Panel";
 
@@ -7,8 +7,6 @@ interface AccountConnectorSectionProps extends PropsWithChildren {
   eyebrow?: string;
   collapsed: boolean;
   onToggle: () => void;
-  detail?: string;
-  status?: ReactNode;
   className?: string;
 }
 
@@ -17,17 +15,16 @@ export function AccountConnectorSection({
   eyebrow,
   collapsed,
   onToggle,
-  detail,
-  status,
   className = "",
   children,
 }: AccountConnectorSectionProps) {
   return (
     <Panel
-      action={
-        <div className="flex flex-wrap items-center justify-end gap-3">
-          {status}
-          {detail ? <div className="text-[11px] uppercase tracking-[0.18em] text-muted">{detail}</div> : null}
+      className={className}
+      eyebrow={eyebrow}
+      title={
+        <div className="flex items-center gap-3">
+          <span>{title}</span>
           <button
             aria-expanded={!collapsed}
             aria-label={collapsed ? `Expand ${title}` : `Collapse ${title}`}
@@ -39,9 +36,6 @@ export function AccountConnectorSection({
           </button>
         </div>
       }
-      className={className}
-      eyebrow={eyebrow}
-      title={title}
     >
       {!collapsed ? children : null}
     </Panel>
@@ -54,7 +48,7 @@ function ChevronIcon({ collapsed }: { collapsed: boolean }) {
       aria-hidden="true"
       fill="none"
       height="16"
-      style={{ transform: collapsed ? "rotate(-90deg)" : "rotate(0deg)", transition: "transform 180ms ease" }}
+      style={{ transform: collapsed ? "rotate(0deg)" : "rotate(180deg)", transition: "transform 180ms ease" }}
       viewBox="0 0 16 16"
       width="16"
     >
