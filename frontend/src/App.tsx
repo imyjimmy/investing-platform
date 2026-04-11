@@ -915,7 +915,7 @@ function App() {
                     <header className="chrome-header-body relative px-10 py-5 lg:px-12">
                       <button
                         aria-expanded={accountSettingsOpen}
-                        aria-label={accountSettingsOpen ? "Hide account settings" : "Open account settings"}
+                        aria-label={accountSettingsOpen ? "Return to dashboard" : "Open account settings"}
                         className={`absolute right-10 top-3 inline-flex h-8 w-8 items-center justify-center transition ${
                           accountSettingsOpen
                             ? "rounded-md bg-accent/10 text-accent"
@@ -926,175 +926,192 @@ function App() {
                       >
                         <GearIcon />
                       </button>
-                      <div className="flex flex-col gap-5 pr-12 lg:flex-row lg:items-start lg:justify-between">
-                        <div>
-                          <div className="mb-2 text-[11px] uppercase tracking-[0.32em] text-accent">Van Aken Investments LLC</div>
-                          <div className="flex flex-wrap items-center gap-3">
-                            <h1 className="text-3xl font-semibold tracking-tight text-text">Account Snapshot</h1>
-                            <AccountStatusBadge label={accountStatusLabel} tone={accountStatusTone} />
+                      {accountSettingsOpen ? (
+                        <div className="flex flex-col gap-5 pr-12 lg:flex-row lg:items-start lg:justify-between">
+                          <div>
+                            <div className="mb-2 text-[11px] uppercase tracking-[0.32em] text-accent">Van Aken Investments LLC</div>
+                            <div className="flex flex-wrap items-center gap-3">
+                              <h1 className="text-3xl font-semibold tracking-tight text-text">Account Settings</h1>
+                            </div>
+                            <p className="mt-2 max-w-3xl text-sm text-muted">
+                              Manage the connectors and sources routed into the Van Aken dashboard.
+                            </p>
                           </div>
                         </div>
-                      </div>
-                      <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                        <MetricCard
-                          hint={selectedAccount ? `${selectedAccount}${selectedAccountIsPaper ? " · Paper route" : " · Live route"}` : undefined}
-                          label="Total net worth"
-                          value={riskSummaryQuery.isLoading ? "Loading" : fmtCurrency(risk?.account.netLiquidation)}
-                        />
-                        <MetricCard
-                          label="Available funds"
-                          value={riskSummaryQuery.isLoading ? "Loading" : fmtCurrency(risk?.account.availableFunds)}
-                        />
-                        <MetricCard
-                          label="Excess liquidity"
-                          value={riskSummaryQuery.isLoading ? "Loading" : fmtCurrency(risk?.account.excessLiquidity)}
-                        />
-                        <MetricCard
-                          hint={risk?.isStale ? "Snapshot is stale" : undefined}
-                          label="Margin usage"
-                          tone={
-                            risk?.account.marginUsagePct == null
-                              ? "neutral"
-                              : risk.account.marginUsagePct > 60
-                                ? "danger"
-                                : risk.account.marginUsagePct > 40
-                                  ? "caution"
-                                  : "safe"
-                          }
-                          value={riskSummaryQuery.isLoading ? "Loading" : fmtNumber(risk?.account.marginUsagePct, "%")}
-                        />
-                      </div>
-                      {connectionQuery.data?.lastError || connectError || reconnectError ? (
-                        <div className="mt-4 rounded-2xl border border-danger/20 bg-danger/8 px-4 py-3 text-sm text-danger">
-                          {connectError ?? reconnectError ?? connectionQuery.data?.lastError}
-                        </div>
-                      ) : null}
+                      ) : (
+                        <>
+                          <div className="flex flex-col gap-5 pr-12 lg:flex-row lg:items-start lg:justify-between">
+                            <div>
+                              <div className="mb-2 text-[11px] uppercase tracking-[0.32em] text-accent">Van Aken Investments LLC</div>
+                              <div className="flex flex-wrap items-center gap-3">
+                                <h1 className="text-3xl font-semibold tracking-tight text-text">Account Snapshot</h1>
+                                <AccountStatusBadge label={accountStatusLabel} tone={accountStatusTone} />
+                              </div>
+                            </div>
+                          </div>
+                          <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                            <MetricCard
+                              hint={selectedAccount ? `${selectedAccount}${selectedAccountIsPaper ? " · Paper route" : " · Live route"}` : undefined}
+                              label="Total net worth"
+                              value={riskSummaryQuery.isLoading ? "Loading" : fmtCurrency(risk?.account.netLiquidation)}
+                            />
+                            <MetricCard
+                              label="Available funds"
+                              value={riskSummaryQuery.isLoading ? "Loading" : fmtCurrency(risk?.account.availableFunds)}
+                            />
+                            <MetricCard
+                              label="Excess liquidity"
+                              value={riskSummaryQuery.isLoading ? "Loading" : fmtCurrency(risk?.account.excessLiquidity)}
+                            />
+                            <MetricCard
+                              hint={risk?.isStale ? "Snapshot is stale" : undefined}
+                              label="Margin usage"
+                              tone={
+                                risk?.account.marginUsagePct == null
+                                  ? "neutral"
+                                  : risk.account.marginUsagePct > 60
+                                    ? "danger"
+                                    : risk.account.marginUsagePct > 40
+                                      ? "caution"
+                                      : "safe"
+                              }
+                              value={riskSummaryQuery.isLoading ? "Loading" : fmtNumber(risk?.account.marginUsagePct, "%")}
+                            />
+                          </div>
+                          {connectionQuery.data?.lastError || connectError || reconnectError ? (
+                            <div className="mt-4 rounded-2xl border border-danger/20 bg-danger/8 px-4 py-3 text-sm text-danger">
+                              {connectError ?? reconnectError ?? connectionQuery.data?.lastError}
+                            </div>
+                          ) : null}
+                        </>
+                      )}
                     </header>
                     <div className="account-workspace-body flex flex-col gap-6 px-10 pb-6 lg:px-12">
-        {accountSettingsOpen ? (
-          <Panel
-            action={<div className="text-[11px] uppercase tracking-[0.18em] text-muted">{plannedConnectorCount} planned</div>}
-            title="Account Settings"
-          >
-            <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
-              {accountSettingsConnectors.map((connector) => (
-                <ConnectorStatusCard
-                  key={connector.id}
-                  detail={connector.detail}
-                  icon={connector.icon}
-                  onOpen={connector.workspace ? () => setActiveWorkspace(connector.workspace!) : undefined}
-                  status={connector.status}
-                  title={connector.title}
-                  tone={connector.tone}
-                />
-              ))}
-            </div>
-          </Panel>
-        ) : null}
-        <AccountConnectorSection
-          collapsed={ibkrConnectorCollapsed}
-          eyebrow={ibkrConnectorLabel}
-          onToggle={() => setIbkrConnectorCollapsed((value) => !value)}
-          title={ibkrConnectorTitle}
-        >
-          {riskSummaryQuery.isLoading ? (
-            <div className="text-sm text-muted">Loading overview...</div>
-          ) : risk ? (
-            <div className="grid gap-4">
-              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-                <MetricCard label="Option positions" value={fmtNumber(risk.account.optionPositionsCount)} />
-                <MetricCard label="Open orders" value={fmtNumber(risk.account.openOrdersCount)} />
-                <MetricCard
-                  label="Premium this week"
-                  value={fmtCurrency(risk.premium.estimatedPremiumExpiringThisWeek)}
-                  tone={risk.premium.estimatedPremiumExpiringThisWeek > 0 ? "safe" : "neutral"}
-                />
-                <MetricCard
-                  label="Option capacity"
-                  value={fmtCurrency(risk.collateral.estimatedFreeOptionSellingCapacity)}
-                  tone={
-                    risk.collateral.estimatedFreeOptionSellingCapacity <= 0
-                      ? "danger"
-                      : risk.collateral.estimatedFreeOptionSellingCapacity < 25_000
-                        ? "caution"
-                        : "safe"
-                  }
-                />
-              </div>
-              <div className="grid gap-4 xl:grid-cols-[1.2fr,0.8fr]">
-                <div className="panel-soft rounded-2xl p-4">
-                  <div className="mb-3 flex items-center justify-between">
-                    <h3 className="text-sm font-medium text-text">Positions closest to the money</h3>
-                    <span className="text-xs uppercase tracking-[0.18em] text-muted">Short risk stack</span>
-                  </div>
-                  <div className="overflow-x-auto">
-                    <table className="min-w-full text-left text-sm">
-                      <thead className="text-xs uppercase tracking-[0.16em] text-muted">
-                        <tr>
-                          <th className="pb-3 pr-4">Ticker</th>
-                          <th className="pb-3 pr-4">Contract</th>
-                          <th className="pb-3 pr-4">Spot</th>
-                          <th className="pb-3 pr-4">Distance</th>
-                          <th className="pb-3 pr-4">DTE</th>
-                          <th className="pb-3">Risk</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {risk.positionsClosestToMoney.map((position) => (
-                          <tr key={`${position.symbol}-${position.expiry}-${position.right}-${position.strike}`} className="border-t border-line/70">
-                            <td className="py-3 pr-4 font-medium text-text">{position.symbol}</td>
-                            <td className="py-3 pr-4 mono text-xs text-muted">
-                              {position.right}
-                              {position.strike} {position.expiry}
-                            </td>
-                            <td className="py-3 pr-4">{fmtCurrencySmall(position.underlyingSpot)}</td>
-                            <td className="py-3 pr-4">{fmtNumber(position.distanceToStrikePct, "%")}</td>
-                            <td className="py-3 pr-4">{position.dte}</td>
-                            <td className="py-3">
-                              <RiskBadge level={position.assignmentRiskLevel} />
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-                <div className="panel-soft rounded-2xl p-4">
-                  <div className="mb-3 flex items-center justify-between">
-                    <h3 className="text-sm font-medium text-text">Alerts</h3>
-                    <span className="text-xs uppercase tracking-[0.16em] text-muted">Near-term pressure</span>
-                  </div>
-                  <div className="space-y-3">
-                    {risk.alerts.length === 0 ? (
-                      <div className="rounded-2xl border border-line/80 px-4 py-3 text-sm text-muted">No urgent alerts in the current snapshot.</div>
-                    ) : (
-                      risk.alerts.map((alert) => (
-                        <div
-                          key={`${alert.title}-${alert.detail}`}
-                          className={`rounded-2xl border px-4 py-3 text-sm ${
-                            alert.level === "critical"
-                              ? "border-danger/25 bg-danger/8"
-                              : alert.level === "warning"
-                                ? "border-caution/25 bg-caution/8"
-                                : "border-line/80 bg-panel"
-                          }`}
+                      {accountSettingsOpen ? (
+                        <Panel
+                          action={<div className="text-[11px] uppercase tracking-[0.18em] text-muted">{plannedConnectorCount} planned</div>}
+                          title="Account Settings"
                         >
-                          <div className="font-medium text-text">{alert.title}</div>
-                          <div className="mt-1 text-muted">{alert.detail}</div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
-          ) : (
-            <ErrorState message={riskSummaryQuery.error instanceof Error ? riskSummaryQuery.error.message : "Overview unavailable."} />
-          )}
-        </AccountConnectorSection>
+                          <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
+                            {accountSettingsConnectors.map((connector) => (
+                              <ConnectorStatusCard
+                                key={connector.id}
+                                detail={connector.detail}
+                                icon={connector.icon}
+                                onOpen={connector.workspace ? () => setActiveWorkspace(connector.workspace!) : undefined}
+                                status={connector.status}
+                                title={connector.title}
+                                tone={connector.tone}
+                              />
+                            ))}
+                          </div>
+                        </Panel>
+                      ) : (
+                        <>
+                          <AccountConnectorSection
+                            collapsed={ibkrConnectorCollapsed}
+                            eyebrow={ibkrConnectorLabel}
+                            onToggle={() => setIbkrConnectorCollapsed((value) => !value)}
+                            title={ibkrConnectorTitle}
+                          >
+                            {riskSummaryQuery.isLoading ? (
+                              <div className="text-sm text-muted">Loading overview...</div>
+                            ) : risk ? (
+                              <div className="grid gap-4">
+                                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                                  <MetricCard label="Option positions" value={fmtNumber(risk.account.optionPositionsCount)} />
+                                  <MetricCard label="Open orders" value={fmtNumber(risk.account.openOrdersCount)} />
+                                  <MetricCard
+                                    label="Premium this week"
+                                    value={fmtCurrency(risk.premium.estimatedPremiumExpiringThisWeek)}
+                                    tone={risk.premium.estimatedPremiumExpiringThisWeek > 0 ? "safe" : "neutral"}
+                                  />
+                                  <MetricCard
+                                    label="Option capacity"
+                                    value={fmtCurrency(risk.collateral.estimatedFreeOptionSellingCapacity)}
+                                    tone={
+                                      risk.collateral.estimatedFreeOptionSellingCapacity <= 0
+                                        ? "danger"
+                                        : risk.collateral.estimatedFreeOptionSellingCapacity < 25_000
+                                          ? "caution"
+                                          : "safe"
+                                    }
+                                  />
+                                </div>
+                                <div className="grid gap-4 xl:grid-cols-[1.2fr,0.8fr]">
+                                  <div className="panel-soft rounded-2xl p-4">
+                                    <div className="mb-3 flex items-center justify-between">
+                                      <h3 className="text-sm font-medium text-text">Positions closest to the money</h3>
+                                      <span className="text-xs uppercase tracking-[0.18em] text-muted">Short risk stack</span>
+                                    </div>
+                                    <div className="overflow-x-auto">
+                                      <table className="min-w-full text-left text-sm">
+                                        <thead className="text-xs uppercase tracking-[0.16em] text-muted">
+                                          <tr>
+                                            <th className="pb-3 pr-4">Ticker</th>
+                                            <th className="pb-3 pr-4">Contract</th>
+                                            <th className="pb-3 pr-4">Spot</th>
+                                            <th className="pb-3 pr-4">Distance</th>
+                                            <th className="pb-3 pr-4">DTE</th>
+                                            <th className="pb-3">Risk</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody>
+                                          {risk.positionsClosestToMoney.map((position) => (
+                                            <tr key={`${position.symbol}-${position.expiry}-${position.right}-${position.strike}`} className="border-t border-line/70">
+                                              <td className="py-3 pr-4 font-medium text-text">{position.symbol}</td>
+                                              <td className="py-3 pr-4 mono text-xs text-muted">
+                                                {position.right}
+                                                {position.strike} {position.expiry}
+                                              </td>
+                                              <td className="py-3 pr-4">{fmtCurrencySmall(position.underlyingSpot)}</td>
+                                              <td className="py-3 pr-4">{fmtNumber(position.distanceToStrikePct, "%")}</td>
+                                              <td className="py-3 pr-4">{position.dte}</td>
+                                              <td className="py-3">
+                                                <RiskBadge level={position.assignmentRiskLevel} />
+                                              </td>
+                                            </tr>
+                                          ))}
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                  </div>
+                                  <div className="panel-soft rounded-2xl p-4">
+                                    <div className="mb-3 flex items-center justify-between">
+                                      <h3 className="text-sm font-medium text-text">Alerts</h3>
+                                      <span className="text-xs uppercase tracking-[0.16em] text-muted">Near-term pressure</span>
+                                    </div>
+                                    <div className="space-y-3">
+                                      {risk.alerts.length === 0 ? (
+                                        <div className="rounded-2xl border border-line/80 px-4 py-3 text-sm text-muted">No urgent alerts in the current snapshot.</div>
+                                      ) : (
+                                        risk.alerts.map((alert) => (
+                                          <div
+                                            key={`${alert.title}-${alert.detail}`}
+                                            className={`rounded-2xl border px-4 py-3 text-sm ${
+                                              alert.level === "critical"
+                                                ? "border-danger/25 bg-danger/8"
+                                                : alert.level === "warning"
+                                                  ? "border-caution/25 bg-caution/8"
+                                                  : "border-line/80 bg-panel"
+                                            }`}
+                                          >
+                                            <div className="font-medium text-text">{alert.title}</div>
+                                            <div className="mt-1 text-muted">{alert.detail}</div>
+                                          </div>
+                                        ))
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            ) : (
+                              <ErrorState message={riskSummaryQuery.error instanceof Error ? riskSummaryQuery.error.message : "Overview unavailable."} />
+                            )}
+                          </AccountConnectorSection>
 
-        {!ibkrConnectorCollapsed ? (
-          <>
+                          {!ibkrConnectorCollapsed ? (
+                            <>
         <div className="grid gap-6 xl:grid-cols-[1.5fr,0.9fr]">
           <Panel title="Options Book" eyebrow={ibkrConnectorLabel}>
             <div className="mb-4 grid gap-3 lg:grid-cols-3 xl:grid-cols-6">
@@ -1752,12 +1769,14 @@ function App() {
             </div>
           ) : null}
         </Panel>
-          </>
-        ) : null}
-        {renderCoinbasePanel()}
-          </div>
-          </div>
-              </div>
+                            </>
+                          ) : null}
+                          {renderCoinbasePanel()}
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
