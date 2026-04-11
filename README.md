@@ -73,16 +73,17 @@ OPTIONS_DASHBOARD_EDGAR_USER_AGENT=Your Name your_email@example.com
 OPTIONS_DASHBOARD_EDGAR_MAX_REQUESTS_PER_SECOND=5
 ```
 
-For Coinbase App account access, add either a bearer token or an ECDSA key name + PEM private key from the CDP portal:
+For Coinbase account access, either add a CDP Ed25519 key id + secret, a bearer token, or a PEM-style key:
 
 ```env
 COINBASE_API_KEY=
+COINBASE_API_KEY_ID=your_key_id
 COINBASE_API_KEY_NAME=organizations/{org_id}/apiKeys/{key_id}
 COINBASE_API_PRIVATE_KEY="-----BEGIN EC PRIVATE KEY-----\n...\n-----END EC PRIVATE KEY-----\n"
 COINBASE_API_KEY_FILE=
 ```
 
-Coinbase’s current docs note that Coinbase App account APIs require an **ECDSA / ES256** key. A raw Ed25519 secret by itself is not enough to read `/v2/accounts`.
+If you use a CDP Secret API Key with the default **Ed25519** algorithm, the dashboard expects both `COINBASE_API_KEY_ID` and `COINBASE_API_KEY`.
 
 If you use paper **TWS** instead of **IB Gateway**, the paper socket port is commonly `7497` instead of `4002`.
 
@@ -204,7 +205,7 @@ SEC EDGAR download helper:
 - Execution is intentionally **paper-only** right now. Live-account order routing is blocked in the backend.
 - Order submission is explicit-account only. Market data remains gateway-wide, and the current connected account is used for the paper ticket.
 - EDGAR downloads use checksum-based resume with machine state under `[research root]/stocks/[ticker]/.edgar/`, filing folders under `[research root]/stocks/[ticker]/`, and generated PDFs in a configurable layout such as `[research root]/stocks/[ticker]/pdfs/[filing]/`.
-- Coinbase account access follows the current Coinbase App auth flow from the CDP docs: bearer token or per-request JWT signed with an ECDSA private key.
+- Coinbase account access follows the current CDP auth flow from the Coinbase docs: bearer token or per-request JWT signed with either an Ed25519 secret key or a PEM private key, depending on the key type you created.
 - If market data permissions are missing, some quotes and Greeks may be delayed, partial, or unavailable.
 - Collateral, assignment risk, and scenario outputs are deliberately labeled as heuristics where appropriate.
 - When the gateway is unavailable, the backend returns readable connection errors and will fall back to stale cached snapshots when it has them.

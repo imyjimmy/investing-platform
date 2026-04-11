@@ -436,6 +436,8 @@ class CoinbaseHolding(DashboardModel):
     currencyName: str | None = None
     currencyType: str | None = None
     balance: float
+    availableBalance: float | None = None
+    holdBalance: float | None = None
     usdRate: float | None = None
     usdValue: float | None = None
     allocationPct: float | None = None

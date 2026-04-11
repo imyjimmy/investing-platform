@@ -335,6 +335,8 @@ export interface CoinbaseHolding {
   currencyName: string | null;
   currencyType: string | null;
   balance: number;
+  availableBalance: number | null;
+  holdBalance: number | null;
   usdRate: number | null;
   usdValue: number | null;
   allocationPct: number | null;

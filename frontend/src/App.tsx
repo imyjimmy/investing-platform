@@ -608,6 +608,127 @@ function App() {
     });
   }
 
+  function renderCoinbasePanel() {
+    return (
+      <Panel
+        action={
+          <AccountStatusBadge
+            label={
+              coinbaseStatusQuery.isLoading
+                ? "Checking Coinbase"
+                : coinbaseStatusQuery.data?.available
+                  ? coinbasePortfolioQuery.data?.isStale
+                    ? "Stale snapshot"
+                    : "Live balances"
+                  : coinbaseStatusQuery.data?.authMode === "missing"
+                    ? "Needs setup"
+                    : "Needs attention"
+            }
+            tone={coinbaseConnectorTone}
+          />
+        }
+        title="Coinbase Holdings"
+        eyebrow="Van Aken Coinbase"
+      >
+        {coinbaseStatusQuery.isLoading ? (
+          <div className="text-sm text-muted">Checking Coinbase connector...</div>
+        ) : !coinbaseStatusQuery.data?.available ? (
+          <div className="grid gap-4">
+            <div className="grid gap-4 md:grid-cols-3">
+              <MetricCard
+                label="Connector"
+                value={coinbaseStatusQuery.data?.authMode === "missing" ? "Not configured" : "Unavailable"}
+              />
+              <MetricCard
+                label="Auth mode"
+                value={coinbaseStatusQuery.data?.authMode ? coinbaseStatusQuery.data.authMode.toUpperCase() : "—"}
+              />
+              <MetricCard label="API base" value={coinbaseStatusQuery.data?.apiBaseUrl ?? "https://api.coinbase.com"} />
+            </div>
+            <ErrorState message={coinbaseStatusError ?? coinbaseStatusQuery.data?.detail ?? "Coinbase connector is unavailable."} />
+          </div>
+        ) : coinbasePortfolioQuery.isLoading ? (
+          <div className="text-sm text-muted">Loading Coinbase balances...</div>
+        ) : coinbasePortfolioQuery.error instanceof Error ? (
+          <ErrorState message={coinbasePortfolioQuery.error.message} />
+        ) : coinbasePortfolioQuery.data ? (
+          <div className="grid gap-4">
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              <MetricCard label="Total value" value={fmtCurrency(coinbasePortfolioQuery.data.totalUsdValue)} />
+              <MetricCard label="Cash-like" value={fmtCurrency(coinbasePortfolioQuery.data.cashLikeUsdValue)} />
+              <MetricCard label="Crypto" value={fmtCurrency(coinbasePortfolioQuery.data.cryptoUsdValue)} />
+              <MetricCard
+                hint={`${coinbasePortfolioQuery.data.totalAccountsCount} total accounts returned`}
+                label="Visible holdings"
+                value={fmtNumber(coinbasePortfolioQuery.data.visibleHoldingsCount)}
+              />
+            </div>
+            {coinbasePortfolioQuery.data.sourceNotice ? (
+              <div
+                className={`rounded-2xl border px-4 py-3 text-sm ${
+                  coinbasePortfolioQuery.data.isStale
+                    ? "border-caution/25 bg-caution/8 text-caution"
+                    : "border-line/80 bg-panelSoft text-muted"
+                }`}
+              >
+                {coinbasePortfolioQuery.data.sourceNotice}
+              </div>
+            ) : null}
+            <div className="overflow-x-auto">
+              <table className="min-w-[900px] text-left text-sm">
+                <thead className="text-[11px] uppercase tracking-[0.16em] text-muted">
+                  <tr>
+                    <th className="pb-3 pr-4">Asset</th>
+                    <th className="pb-3 pr-4">Account</th>
+                    <th className="pb-3 pr-4">Type</th>
+                    <th className="pb-3 pr-4">Balance</th>
+                    <th className="pb-3 pr-4">Available</th>
+                    <th className="pb-3 pr-4">On hold</th>
+                    <th className="pb-3 pr-4">USD rate</th>
+                    <th className="pb-3 pr-4">Value</th>
+                    <th className="pb-3">Allocation</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {coinbasePortfolioQuery.data.holdings.map((holding) => (
+                    <tr key={`${holding.accountId}-${holding.currencyCode}`} className="border-t border-line/70 align-top">
+                      <td className="py-3 pr-4">
+                        <div className="font-medium text-text">{holding.currencyCode}</div>
+                        <div className="mt-1 text-xs text-muted">{holding.currencyName ?? "Coinbase asset"}</div>
+                      </td>
+                      <td className="py-3 pr-4">
+                        <div className="text-text">{holding.accountName}</div>
+                        <div className="mt-1 text-xs text-muted">
+                          {holding.primary ? "Primary" : "Secondary"}
+                          {holding.ready === false ? " · Pending" : ""}
+                        </div>
+                      </td>
+                      <td className="py-3 pr-4">
+                        <div className="text-text capitalize">{holding.accountType}</div>
+                        <div className="mt-1 text-xs text-muted">{holding.isCashLike ? "Cash-like" : holding.currencyType ?? "Crypto"}</div>
+                      </td>
+                      <td className="py-3 pr-4">
+                        {fmtNumber(holding.balance)}
+                        <div className="mt-1 text-xs text-muted">{holding.currencyCode}</div>
+                      </td>
+                      <td className="py-3 pr-4">{fmtNumber(holding.availableBalance)}</td>
+                      <td className="py-3 pr-4">{fmtNumber(holding.holdBalance)}</td>
+                      <td className="py-3 pr-4">{fmtCurrencySmall(holding.usdRate)}</td>
+                      <td className="py-3 pr-4 font-medium text-text">{fmtCurrency(holding.usdValue)}</td>
+                      <td className="py-3">{fmtNumber(holding.allocationPct, "%")}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ) : (
+          <ErrorState message="Coinbase balances are unavailable." />
+        )}
+      </Panel>
+    );
+  }
+
   return (
     <div className={`app-shell grid-shell min-h-screen text-text ${sidebarOpen ? "is-sidebar-open" : ""}`}>
       <div className="mx-auto w-full max-w-[1880px]">
@@ -988,119 +1109,6 @@ function App() {
               <ErrorState message={riskSummaryQuery.error instanceof Error ? riskSummaryQuery.error.message : "Overview unavailable."} />
             )
           ) : null}
-        </Panel>
-
-        <Panel
-          action={
-            <AccountStatusBadge
-              label={
-                coinbaseStatusQuery.isLoading
-                  ? "Checking Coinbase"
-                  : coinbaseStatusQuery.data?.available
-                    ? coinbasePortfolioQuery.data?.isStale
-                      ? "Stale snapshot"
-                      : "Live balances"
-                    : coinbaseStatusQuery.data?.authMode === "missing"
-                      ? "Needs setup"
-                      : "Needs attention"
-              }
-              tone={coinbaseConnectorTone}
-            />
-          }
-          title="Coinbase Holdings"
-          eyebrow="Van Aken Coinbase"
-        >
-          {coinbaseStatusQuery.isLoading ? (
-            <div className="text-sm text-muted">Checking Coinbase connector...</div>
-          ) : !coinbaseStatusQuery.data?.available ? (
-            <div className="grid gap-4">
-              <div className="grid gap-4 md:grid-cols-3">
-                <MetricCard
-                  label="Connector"
-                  value={coinbaseStatusQuery.data?.authMode === "missing" ? "Not configured" : "Unavailable"}
-                />
-                <MetricCard
-                  label="Auth mode"
-                  value={coinbaseStatusQuery.data?.authMode ? coinbaseStatusQuery.data.authMode.toUpperCase() : "—"}
-                />
-                <MetricCard label="API base" value={coinbaseStatusQuery.data?.apiBaseUrl ?? "https://api.coinbase.com"} />
-              </div>
-              <ErrorState message={coinbaseStatusError ?? coinbaseStatusQuery.data?.detail ?? "Coinbase connector is unavailable."} />
-            </div>
-          ) : coinbasePortfolioQuery.isLoading ? (
-            <div className="text-sm text-muted">Loading Coinbase balances...</div>
-          ) : coinbasePortfolioQuery.error instanceof Error ? (
-            <ErrorState message={coinbasePortfolioQuery.error.message} />
-          ) : coinbasePortfolioQuery.data ? (
-            <div className="grid gap-4">
-              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-                <MetricCard label="Total value" value={fmtCurrency(coinbasePortfolioQuery.data.totalUsdValue)} />
-                <MetricCard label="Cash-like" value={fmtCurrency(coinbasePortfolioQuery.data.cashLikeUsdValue)} />
-                <MetricCard label="Crypto" value={fmtCurrency(coinbasePortfolioQuery.data.cryptoUsdValue)} />
-                <MetricCard
-                  hint={`${coinbasePortfolioQuery.data.totalAccountsCount} total accounts returned`}
-                  label="Visible holdings"
-                  value={fmtNumber(coinbasePortfolioQuery.data.visibleHoldingsCount)}
-                />
-              </div>
-              {coinbasePortfolioQuery.data.sourceNotice ? (
-                <div
-                  className={`rounded-2xl border px-4 py-3 text-sm ${
-                    coinbasePortfolioQuery.data.isStale
-                      ? "border-caution/25 bg-caution/8 text-caution"
-                      : "border-line/80 bg-panelSoft text-muted"
-                  }`}
-                >
-                  {coinbasePortfolioQuery.data.sourceNotice}
-                </div>
-              ) : null}
-              <div className="overflow-x-auto">
-                <table className="min-w-[900px] text-left text-sm">
-                  <thead className="text-[11px] uppercase tracking-[0.16em] text-muted">
-                    <tr>
-                      <th className="pb-3 pr-4">Asset</th>
-                      <th className="pb-3 pr-4">Account</th>
-                      <th className="pb-3 pr-4">Type</th>
-                      <th className="pb-3 pr-4">Balance</th>
-                      <th className="pb-3 pr-4">USD rate</th>
-                      <th className="pb-3 pr-4">Value</th>
-                      <th className="pb-3">Allocation</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {coinbasePortfolioQuery.data.holdings.map((holding) => (
-                      <tr key={`${holding.accountId}-${holding.currencyCode}`} className="border-t border-line/70 align-top">
-                        <td className="py-3 pr-4">
-                          <div className="font-medium text-text">{holding.currencyCode}</div>
-                          <div className="mt-1 text-xs text-muted">{holding.currencyName ?? "Coinbase asset"}</div>
-                        </td>
-                        <td className="py-3 pr-4">
-                          <div className="text-text">{holding.accountName}</div>
-                          <div className="mt-1 text-xs text-muted">
-                            {holding.primary ? "Primary" : "Secondary"}
-                            {holding.ready === false ? " · Pending" : ""}
-                          </div>
-                        </td>
-                        <td className="py-3 pr-4">
-                          <div className="text-text capitalize">{holding.accountType}</div>
-                          <div className="mt-1 text-xs text-muted">{holding.isCashLike ? "Cash-like" : holding.currencyType ?? "Crypto"}</div>
-                        </td>
-                        <td className="py-3 pr-4">
-                          {fmtNumber(holding.balance)}
-                          <div className="mt-1 text-xs text-muted">{holding.currencyCode}</div>
-                        </td>
-                        <td className="py-3 pr-4">{fmtCurrencySmall(holding.usdRate)}</td>
-                        <td className="py-3 pr-4 font-medium text-text">{fmtCurrency(holding.usdValue)}</td>
-                        <td className="py-3">{fmtNumber(holding.allocationPct, "%")}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          ) : (
-            <ErrorState message="Coinbase balances are unavailable." />
-          )}
         </Panel>
 
         {!ibkrConnectorCollapsed ? (
@@ -1764,6 +1772,7 @@ function App() {
         </Panel>
           </>
         ) : null}
+        {renderCoinbasePanel()}
           </div>
           </div>
               </div>

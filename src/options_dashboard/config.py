@@ -89,6 +89,7 @@ class DashboardSettings:
     edgar_retry_limit: int = 5
     coinbase_api_base_url: str = "https://api.coinbase.com"
     coinbase_api_key: str | None = None
+    coinbase_api_key_id: str | None = None
     coinbase_api_key_name: str | None = None
     coinbase_api_private_key: str | None = None
     coinbase_api_key_file: Path | None = None
@@ -133,6 +134,7 @@ class DashboardSettings:
             edgar_retry_limit=_env_int("OPTIONS_DASHBOARD_EDGAR_RETRY_LIMIT", 5),
             coinbase_api_base_url=_env_str("COINBASE_API_BASE_URL", "https://api.coinbase.com"),
             coinbase_api_key=_env_optional_str("COINBASE_API_KEY"),
+            coinbase_api_key_id=_env_optional_str("COINBASE_API_KEY_ID"),
             coinbase_api_key_name=_env_optional_str("COINBASE_API_KEY_NAME"),
             coinbase_api_private_key=_env_optional_str("COINBASE_API_PRIVATE_KEY"),
             coinbase_api_key_file=_env_optional_path("COINBASE_API_KEY_FILE"),

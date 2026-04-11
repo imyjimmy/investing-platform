@@ -24,8 +24,10 @@ from options_dashboard.services.base import CacheEntry
 class ResolvedCoinbaseCredentials:
     auth_mode: Literal["jwt", "bearer", "missing", "unsupported"]
     detail: str
+    key_id: str | None = None
     key_name: str | None = None
     private_key: str | None = None
+    key_secret: str | None = None
     bearer_token: str | None = None
 
 
@@ -114,10 +116,16 @@ class CoinbaseService:
 
         cash_like_usd_value = round(sum(holding.usdValue or 0.0 for holding in holdings if holding.isCashLike), 2)
         crypto_usd_value = round(sum(holding.usdValue or 0.0 for holding in holdings if not holding.isCashLike), 2)
+        total_hold_usd_value = round(
+            sum((holding.holdBalance or 0.0) * (holding.usdRate or 0.0) for holding in holdings),
+            2,
+        )
         source_notice: str | None = None
         if pricing_gaps:
             unresolved = ", ".join(sorted(set(pricing_gaps)))
             source_notice = f"USD pricing was unavailable for {unresolved}. Those balances are excluded from the total."
+        elif total_hold_usd_value > 0:
+            source_notice = f"Includes {currency_format(total_hold_usd_value)} on hold for open Coinbase orders."
         elif not holdings:
             source_notice = "No positive Coinbase balances were returned for the configured account."
 
@@ -134,14 +142,30 @@ class CoinbaseService:
         )
 
     def _build_holding(self, account: dict[str, Any]) -> CoinbaseHolding | None:
-        account_id = str(account.get("id") or "").strip()
-        currency = account.get("currency") if isinstance(account.get("currency"), dict) else {}
+        account_id = str(account.get("id") or account.get("uuid") or "").strip()
+        currency_payload = account.get("currency")
+        currency = currency_payload if isinstance(currency_payload, dict) else {}
         balance_payload = account.get("balance") if isinstance(account.get("balance"), dict) else {}
-        currency_code = str(currency.get("code") or balance_payload.get("currency") or "").strip().upper()
+        available_balance_payload = account.get("available_balance") if isinstance(account.get("available_balance"), dict) else {}
+        hold_balance_payload = account.get("hold") if isinstance(account.get("hold"), dict) else {}
+        currency_code = str(
+            currency.get("code")
+            or currency_payload
+            or balance_payload.get("currency")
+            or available_balance_payload.get("currency")
+            or hold_balance_payload.get("currency")
+            or ""
+        ).strip().upper()
         if not account_id or not currency_code:
             return None
 
-        balance = _safe_float(balance_payload.get("amount"))
+        available_balance = (
+            _safe_float(available_balance_payload.get("value"))
+            if available_balance_payload
+            else _safe_float(balance_payload.get("amount"))
+        )
+        hold_balance = _safe_float(hold_balance_payload.get("value")) if hold_balance_payload else 0.0
+        balance = available_balance + hold_balance
         usd_rate = self._lookup_usd_rate(currency_code)
         usd_value = round(balance * usd_rate, 2) if usd_rate is not None else None
         return CoinbaseHolding(
@@ -154,6 +178,8 @@ class CoinbaseService:
             currencyName=str(currency.get("name")) if currency.get("name") else None,
             currencyType=str(currency.get("type")) if currency.get("type") else None,
             balance=round(balance, 8),
+            availableBalance=round(available_balance, 8),
+            holdBalance=round(hold_balance, 8),
             usdRate=usd_rate,
             usdValue=usd_value,
             allocationPct=None,
@@ -162,6 +188,31 @@ class CoinbaseService:
         )
 
     def _list_accounts(self, credentials: ResolvedCoinbaseCredentials) -> list[dict[str, Any]]:
+        brokerage_accounts = self._list_brokerage_accounts(credentials)
+        if brokerage_accounts:
+            return brokerage_accounts
+
+        return self._list_track_accounts(credentials)
+
+    def _list_brokerage_accounts(self, credentials: ResolvedCoinbaseCredentials) -> list[dict[str, Any]]:
+        base_url = self._settings.coinbase_api_base_url.rstrip("/")
+        next_url: str | None = f"{base_url}/api/v3/brokerage/accounts"
+        accounts: list[dict[str, Any]] = []
+        while next_url:
+            parsed = urlparse(next_url)
+            request_path = parsed.path + (f"?{parsed.query}" if parsed.query else "")
+            headers = self._auth_headers("GET", request_path, credentials)
+            payload = self._request_json(next_url, headers=headers)
+            page_accounts = payload.get("accounts")
+            if not isinstance(page_accounts, list):
+                return []
+            accounts.extend(item for item in page_accounts if isinstance(item, dict))
+            has_next = bool(payload.get("has_next"))
+            cursor = str(payload.get("cursor") or "").strip()
+            next_url = f"{base_url}/api/v3/brokerage/accounts?cursor={cursor}" if has_next and cursor else None
+        return accounts
+
+    def _list_track_accounts(self, credentials: ResolvedCoinbaseCredentials) -> list[dict[str, Any]]:
         base_url = self._settings.coinbase_api_base_url.rstrip("/")
         next_url: str | None = f"{base_url}/v2/accounts"
         accounts: list[dict[str, Any]] = []
@@ -210,6 +261,14 @@ class CoinbaseService:
     ) -> dict[str, str]:
         if credentials.auth_mode == "bearer" and credentials.bearer_token:
             return {"Authorization": f"Bearer {credentials.bearer_token}"}
+        if credentials.auth_mode == "jwt" and credentials.key_id and credentials.key_secret:
+            jwt_token = self._build_ed25519_jwt(
+                request_method=request_method,
+                request_path=request_path,
+                key_id=credentials.key_id,
+                key_secret=credentials.key_secret,
+            )
+            return {"Authorization": f"Bearer {jwt_token}"}
         if credentials.auth_mode == "jwt" and credentials.key_name and credentials.private_key:
             jwt_token = self._build_jwt(
                 request_method=request_method,
@@ -249,6 +308,29 @@ class CoinbaseService:
         )
         return token if isinstance(token, str) else token.decode("utf-8")
 
+    def _build_ed25519_jwt(self, request_method: str, request_path: str, key_id: str, key_secret: str) -> str:
+        import jwt
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+        request_host = urlparse(self._settings.coinbase_api_base_url).netloc or "api.coinbase.com"
+        uri = f"{request_method.upper()} {request_host}{request_path}"
+        raw_secret = _decode_ed25519_secret(key_secret)
+        signing_key = Ed25519PrivateKey.from_private_bytes(raw_secret[:32])
+        payload = {
+            "sub": key_id,
+            "iss": "cdp",
+            "nbf": int(time.time()),
+            "exp": int(time.time()) + 120,
+            "uri": uri,
+        }
+        token = jwt.encode(
+            payload,
+            signing_key,
+            algorithm="EdDSA",
+            headers={"kid": key_id, "nonce": secrets.token_hex(), "typ": "JWT"},
+        )
+        return token if isinstance(token, str) else token.decode("utf-8")
+
     def _request_json(self, url: str, headers: dict[str, str] | None = None) -> dict[str, Any]:
         try:
             response = self._session.get(url, headers=headers, timeout=self._settings.coinbase_timeout_seconds)
@@ -278,9 +360,18 @@ class CoinbaseService:
         if key_file_credentials is not None:
             return key_file_credentials
 
+        key_id = (self._settings.coinbase_api_key_id or "").strip()
         key_name = (self._settings.coinbase_api_key_name or "").strip()
         private_key = (self._settings.coinbase_api_private_key or "").strip()
         key_value = (self._settings.coinbase_api_key or "").strip()
+
+        if key_id and key_value and _looks_like_raw_secret(key_value):
+            return ResolvedCoinbaseCredentials(
+                auth_mode="jwt",
+                detail="Coinbase CDP credentials configured with key id and Ed25519 secret.",
+                key_id=key_id,
+                key_secret=key_value,
+            )
 
         if key_name and private_key:
             return ResolvedCoinbaseCredentials(
@@ -322,16 +413,16 @@ class CoinbaseService:
                 return ResolvedCoinbaseCredentials(
                     auth_mode="unsupported",
                     detail=(
-                        "The current COINBASE_API_KEY value looks like raw key material, not a usable Coinbase App credential. "
-                        "Per Coinbase's docs, account access needs an ECDSA key name plus PEM private key, or a pre-generated bearer token."
+                        "The current COINBASE_API_KEY value looks like a raw Ed25519 secret. Add COINBASE_API_KEY_ID "
+                        "to use it for Coinbase account access."
                     ),
                 )
 
         return ResolvedCoinbaseCredentials(
             auth_mode="missing",
             detail=(
-                "Coinbase is not configured yet. Add a bearer token, or set COINBASE_API_KEY_NAME + COINBASE_API_PRIVATE_KEY "
-                "with an ECDSA Coinbase App key from the CDP portal."
+                "Coinbase is not configured yet. Add a bearer token, set COINBASE_API_KEY_ID + COINBASE_API_KEY for an "
+                "Ed25519 CDP secret key, or set COINBASE_API_KEY_NAME + COINBASE_API_PRIVATE_KEY for a PEM-based key."
             ),
         )
 
@@ -407,8 +498,17 @@ def _credentials_from_key_payload(payload: Any) -> ResolvedCoinbaseCredentials:
             detail="Coinbase key payload must be a JSON object.",
         )
 
+    key_id = str(payload.get("id") or payload.get("keyId") or payload.get("key_id") or "").strip()
     key_name = str(payload.get("name") or payload.get("keyName") or payload.get("key_name") or "").strip()
-    private_key = str(payload.get("privateKey") or payload.get("keySecret") or payload.get("private_key") or "").strip()
+    key_secret = str(payload.get("keySecret") or payload.get("key_secret") or "").strip()
+    private_key = str(payload.get("privateKey") or payload.get("private_key") or "").strip()
+    if key_id and key_secret and _looks_like_raw_secret(key_secret):
+        return ResolvedCoinbaseCredentials(
+            auth_mode="jwt",
+            detail="Coinbase CDP credentials loaded from JSON key material.",
+            key_id=key_id,
+            key_secret=key_secret,
+        )
     if key_name and private_key:
         return ResolvedCoinbaseCredentials(
             auth_mode="jwt",
@@ -427,6 +527,17 @@ def _normalize_private_key(value: str) -> str:
     if not normalized.endswith("\n"):
         normalized = f"{normalized}\n"
     return normalized
+
+
+def _decode_ed25519_secret(value: str) -> bytes:
+    normalized = value.strip()
+    try:
+        decoded = base64.b64decode(normalized, validate=True)
+    except Exception as exc:
+        raise ValueError("Coinbase Ed25519 secret must be base64-encoded.") from exc
+    if len(decoded) not in {32, 64}:
+        raise ValueError("Coinbase Ed25519 secret decoded to an unexpected length.")
+    return decoded
 
 
 def _looks_like_pem_key(value: str) -> bool:
@@ -493,3 +604,7 @@ def _response_error_detail(response: requests.Response) -> str:
         if isinstance(message, str) and message.strip():
             return message.strip()
     return response.text.strip() or response.reason
+
+
+def currency_format(value: float) -> str:
+    return f"${value:,.2f}"
