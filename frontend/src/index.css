@@ -28,32 +28,34 @@ body,
   min-height: 100%;
 }
 
+html {
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
 body {
   margin: 0;
   font-family: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
   background: var(--shell);
   color: var(--text);
+  overflow-x: hidden;
 }
 
 * {
   box-sizing: border-box;
 }
 
-::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
-}
-
-::-webkit-scrollbar-track {
-  background: rgba(255, 255, 255, 0.03);
-}
-
-::-webkit-scrollbar-thumb {
-  background: rgba(143, 176, 172, 0.24);
-  border-radius: 999px;
-}
-
 .grid-shell {
+  position: relative;
+  isolation: isolate;
+}
+
+.grid-shell::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
   background:
     radial-gradient(circle at top left, rgba(102, 208, 191, 0.16), transparent 30%),
     radial-gradient(circle at 88% 0%, rgba(247, 200, 91, 0.14), transparent 18%),
