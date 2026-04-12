@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useDeferredValue, startTransition, type ReactNode } from "react";
+import { Fragment, useEffect, useRef, useState, useDeferredValue, startTransition, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Bar,
@@ -51,6 +51,14 @@ const number = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 2,
 });
 
+const greekNumber = new Intl.NumberFormat("en-US", {
+  maximumFractionDigits: 3,
+});
+
+const wholeNumber = new Intl.NumberFormat("en-US", {
+  maximumFractionDigits: 0,
+});
+
 function fmtCurrency(value: number | null | undefined) {
   if (value == null || Number.isNaN(value)) {
     return "—";
@@ -70,6 +78,20 @@ function fmtNumber(value: number | null | undefined, suffix = "") {
     return "—";
   }
   return `${number.format(value)}${suffix}`;
+}
+
+function fmtGreek(value: number | null | undefined, suffix = "") {
+  if (value == null || Number.isNaN(value)) {
+    return "—";
+  }
+  return `${greekNumber.format(value)}${suffix}`;
+}
+
+function fmtWholeNumber(value: number | null | undefined) {
+  if (value == null || Number.isNaN(value)) {
+    return "—";
+  }
+  return wholeNumber.format(value);
 }
 
 function pnlTone(value: number | null | undefined) {
@@ -136,6 +158,77 @@ type AccountConnectorCard = {
   workspace?: WorkspaceSurface;
 };
 
+type ChainGreekKey = "iv" | "delta" | "gamma" | "theta" | "vega" | "rho";
+
+type ChainGreekOption = {
+  key: ChainGreekKey;
+  label: string;
+  callValue: (row: ChainRow) => number | null;
+  putValue: (row: ChainRow) => number | null;
+  suffix?: string;
+};
+
+const CHAIN_GREEK_STORAGE_KEY = "options-chain-visible-greeks";
+const DEFAULT_VISIBLE_CHAIN_GREEKS: ChainGreekKey[] = ["iv", "delta", "gamma", "theta", "vega"];
+const CHAIN_GREEK_OPTIONS: ChainGreekOption[] = [
+  {
+    key: "iv",
+    label: "IV",
+    callValue: (row) => row.callIV,
+    putValue: (row) => row.putIV,
+    suffix: "%",
+  },
+  {
+    key: "delta",
+    label: "Delta",
+    callValue: (row) => row.callDelta,
+    putValue: (row) => row.putDelta,
+  },
+  {
+    key: "gamma",
+    label: "Gamma",
+    callValue: (row) => row.callGamma,
+    putValue: (row) => row.putGamma,
+  },
+  {
+    key: "theta",
+    label: "Theta",
+    callValue: (row) => row.callTheta,
+    putValue: (row) => row.putTheta,
+  },
+  {
+    key: "vega",
+    label: "Vega",
+    callValue: (row) => row.callVega,
+    putValue: (row) => row.putVega,
+  },
+  {
+    key: "rho",
+    label: "Rho",
+    callValue: (row) => row.callRho,
+    putValue: (row) => row.putRho,
+  },
+];
+
+function readVisibleChainGreeks(): ChainGreekKey[] {
+  if (typeof window === "undefined") {
+    return [...DEFAULT_VISIBLE_CHAIN_GREEKS];
+  }
+  try {
+    const raw = window.localStorage.getItem(CHAIN_GREEK_STORAGE_KEY);
+    if (!raw) {
+      return [...DEFAULT_VISIBLE_CHAIN_GREEKS];
+    }
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return [...DEFAULT_VISIBLE_CHAIN_GREEKS];
+    }
+    return parsed.filter((value): value is ChainGreekKey => CHAIN_GREEK_OPTIONS.some((option) => option.key === value));
+  } catch {
+    return [...DEFAULT_VISIBLE_CHAIN_GREEKS];
+  }
+}
+
 function App() {
   const queryClient = useQueryClient();
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -146,6 +239,7 @@ function App() {
   const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceSurface>("home");
   const [chainSymbol, setChainSymbol] = useState("NVDA");
   const [chainSymbolInput, setChainSymbolInput] = useState("NVDA");
+  const [visibleChainGreeks, setVisibleChainGreeks] = useState<ChainGreekKey[]>(() => readVisibleChainGreeks());
   const [selectedAccountId, setSelectedAccountId] = useState<string | undefined>(undefined);
   const [selectedExpiry, setSelectedExpiry] = useState<string | undefined>(undefined);
   const [ticketDraft, setTicketDraft] = useState<TicketDraft | null>(null);
@@ -326,6 +420,13 @@ function App() {
   useEffect(() => {
     setChainSymbolInput(chainSymbol);
   }, [chainSymbol]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem(CHAIN_GREEK_STORAGE_KEY, JSON.stringify(visibleChainGreeks));
+  }, [visibleChainGreeks]);
 
   useEffect(() => {
     const availableAccounts = uniqueAccounts([
@@ -686,6 +787,12 @@ function App() {
     });
   }
 
+  function toggleVisibleGreek(nextGreek: ChainGreekKey) {
+    setVisibleChainGreeks((current) =>
+      current.includes(nextGreek) ? current.filter((value) => value !== nextGreek) : [...current, nextGreek],
+    );
+  }
+
   function resetTicketFeedback() {
     previewMutation.reset();
     submitMutation.reset();
@@ -695,22 +802,33 @@ function App() {
 
   function renderIbkrOptionsSurface() {
     const busySymbolLabel = chainSymbol;
+    const selectedChainGreekOptions = CHAIN_GREEK_OPTIONS.filter((option) => visibleChainGreeks.includes(option.key));
+    const chainTableColumnCount = 13 + selectedChainGreekOptions.length * 2;
     const selectedContractLabel = ticketDraft
       ? `${ticketDraft.symbol} ${ticketDraft.expiry} ${fmtNumber(ticketDraft.strike)}${ticketDraft.right}`
       : null;
     const chainHeadingLabel = isLoadingDifferentSymbol
-      ? `${chainSymbol} loading…`
+      ? chainSymbol
       : activeDisplayedChain
         ? `${activeDisplayedChain.symbol} ${activeExpiry ?? ""}`.trim()
         : chainSymbol;
     const chainContextLabel = isLoadingDifferentSymbol
-      ? `Keeping ${activeDisplayedChain?.symbol ?? "the previous chain"} visible until ${chainSymbol} arrives.`
+      ? "Showing the last loaded chain until the new one is ready."
       : activeDisplayedChain?.quoteNotice;
     const requestedSymbolPriceLabel = isLoadingDifferentSymbol
-      ? `Loading ${chainSymbol}`
+      ? "Loading spot"
       : activeDisplayedChain
-        ? `${activeDisplayedChain.symbol} ${fmtCurrencySmall(activeDisplayedChain.underlying.price)}`
+        ? `Spot ${fmtCurrencySmall(activeDisplayedChain.underlying.price)}`
         : "No chain loaded";
+    const spotPrice = activeDisplayedChain?.underlying.price ?? null;
+    const hasExactSpotStrike =
+      spotPrice != null && displayedChainRows.some((row) => Math.abs(row.strike - spotPrice) < 0.0001);
+    const spotInsertIndex =
+      spotPrice == null || hasExactSpotStrike
+        ? -1
+        : displayedChainRows.findIndex((row) => row.strike >= spotPrice);
+    const normalizedSpotInsertIndex =
+      spotInsertIndex === -1 && spotPrice != null && !hasExactSpotStrike ? displayedChainRows.length : spotInsertIndex;
 
     return (
       <div className="grid gap-4">
@@ -803,9 +921,7 @@ function App() {
                 <div className="rounded-2xl border border-accent/20 bg-shell/90 px-4 py-3 text-center text-sm text-text shadow-lg">
                   <div className="text-[11px] uppercase tracking-[0.18em] text-accent">Loading requested chain</div>
                   <div className="mt-2 text-base font-medium">{chainSymbol}</div>
-                  <div className="mt-1 text-sm text-muted">
-                    Keeping {activeDisplayedChain?.symbol ?? "the previous chain"} visible until the new chain is ready.
-                  </div>
+                  <div className="mt-1 text-sm text-muted">Showing the last loaded chain until the new one is ready.</div>
                 </div>
               </div>
             ) : null}
@@ -816,6 +932,7 @@ function App() {
                   <div className="mt-1 text-lg font-semibold text-text" data-testid="chain-heading">
                     {chainHeadingLabel}
                   </div>
+                  {chainContextLabel ? <div className="mt-2 max-w-3xl text-xs leading-5 text-muted">{chainContextLabel}</div> : null}
                 </div>
                 <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
                   <InlinePill
@@ -834,79 +951,190 @@ function App() {
                   {activeDisplayedChain?.isStale ? <InlinePill label="Stale" tone="caution" /> : null}
                 </div>
               </div>
-              {chainContextLabel ? (
-                <div className="mt-3 rounded-xl border border-line/80 bg-panelSoft px-3 py-2 text-sm text-muted">{chainContextLabel}</div>
-              ) : null}
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <div className="text-[11px] uppercase tracking-[0.18em] text-muted">Greeks</div>
+                {CHAIN_GREEK_OPTIONS.map((option) => {
+                  const checked = visibleChainGreeks.includes(option.key);
+                  return (
+                    <button
+                      key={option.key}
+                      className={`rounded-full border px-3 py-1.5 text-xs font-medium transition ${
+                        checked
+                          ? "border-accent/45 bg-accent/12 text-accent"
+                          : "border-line/80 bg-panelSoft text-muted hover:border-accent/25 hover:text-text"
+                      }`}
+                      data-testid={`toggle-greek-${option.key}`}
+                      onClick={() => toggleVisibleGreek(option.key)}
+                      type="button"
+                    >
+                      {option.label}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
             {displayedChainRows.length ? (
               <div className={`${isLoadingDifferentSymbol ? "opacity-55" : chainQuery.isFetching ? "opacity-80" : ""} overflow-x-auto`}>
-                <table className="min-w-[1240px] text-left text-sm">
+                <table className="min-w-max text-left text-sm">
                   <thead className="bg-panel/95 text-[11px] uppercase tracking-[0.18em] text-muted">
+                    <tr className="border-b border-line/70 text-[10px] tracking-[0.24em]">
+                      <th className="px-4 pb-2 pt-3 text-accent" colSpan={5 + selectedChainGreekOptions.length}>
+                        Calls
+                      </th>
+                      <th className="px-4 pb-2 pt-3 text-text" colSpan={1}>
+                        Strike
+                      </th>
+                      <th className="px-4 pb-2 pt-3 text-caution" colSpan={selectedChainGreekOptions.length + 5}>
+                        Puts
+                      </th>
+                      <th className="px-4 pb-2 pt-3 text-right text-muted" colSpan={2}>
+                        Ticket
+                      </th>
+                    </tr>
                     <tr>
-                      <th className="px-4 py-3">Call bid</th>
-                      <th className="px-4 py-3">Call ask</th>
-                      <th className="px-4 py-3">Call mark</th>
-                      <th className="px-4 py-3">Call IV</th>
-                      <th className="px-4 py-3">Call delta</th>
-                      <th className="px-4 py-3">Call theta</th>
+                      <th className="px-4 py-3">Bid</th>
+                      <th className="px-4 py-3">Ask</th>
+                      <th className="px-4 py-3">Mark</th>
+                      <th className="px-4 py-3">Vol</th>
+                      <th className="px-4 py-3">OI</th>
+                      {selectedChainGreekOptions.map((option) => (
+                        <th key={`call-${option.key}`} className="px-4 py-3">
+                          {option.label}
+                        </th>
+                      ))}
                       <th className="px-4 py-3">Strike</th>
-                      <th className="px-4 py-3">Distance</th>
-                      <th className="px-4 py-3">Put theta</th>
-                      <th className="px-4 py-3">Put delta</th>
-                      <th className="px-4 py-3">Put IV</th>
-                      <th className="px-4 py-3">Put mark</th>
-                      <th className="px-4 py-3">Put ask</th>
-                      <th className="px-4 py-3">Put bid</th>
+                      {selectedChainGreekOptions.map((option) => (
+                        <th key={`put-${option.key}`} className="px-4 py-3">
+                          {option.label}
+                        </th>
+                      ))}
+                      <th className="px-4 py-3">OI</th>
+                      <th className="px-4 py-3">Vol</th>
+                      <th className="px-4 py-3">Mark</th>
+                      <th className="px-4 py-3">Ask</th>
+                      <th className="px-4 py-3">Bid</th>
                       <th className="px-4 py-3 text-right">Call</th>
                       <th className="px-4 py-3 text-right">Put</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {displayedChainRows.map((row, index) => (
+                    {displayedChainRows.map((row, index) => {
+                      const previousFiveBucket =
+                        index === 0 ? null : Math.floor(Math.abs(displayedChainRows[index - 1].distanceFromSpotPct) / 5);
+                      const currentFiveBucket = Math.floor(Math.abs(row.distanceFromSpotPct) / 5);
+                      const previousTenBucket =
+                        index === 0 ? null : Math.floor(Math.abs(displayedChainRows[index - 1].distanceFromSpotPct) / 10);
+                      const currentTenBucket = Math.floor(Math.abs(row.distanceFromSpotPct) / 10);
+                      const isTenPercentBreak = index > 0 && currentTenBucket !== previousTenBucket;
+                      const isFivePercentBreak = index > 0 && !isTenPercentBreak && currentFiveBucket !== previousFiveBucket;
+                      const boundaryClass = isTenPercentBreak
+                        ? "border-t-2 border-accent/40"
+                        : isFivePercentBreak
+                          ? "border-t-2 border-line/95"
+                          : "border-t border-line/70";
+                      const boundaryToneClass = isTenPercentBreak
+                        ? "bg-accent/[0.035]"
+                        : isFivePercentBreak
+                          ? "bg-white/[0.018] shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]"
+                          : "";
+
+                      return (
+                        <Fragment key={`${activeDisplayedChain?.symbol ?? chainSymbol}-${row.strike}-${index}-group`}>
+                          {normalizedSpotInsertIndex === index && spotPrice != null ? (
+                            <tr
+                              key={`${activeDisplayedChain?.symbol ?? chainSymbol}-spot-row-${index}`}
+                              className="border-t border-line/70"
+                              data-testid="chain-spot-row"
+                            >
+                              <td
+                                className="px-4 py-2"
+                                colSpan={chainTableColumnCount}
+                                style={{
+                                  backgroundImage:
+                                    "repeating-linear-gradient(135deg, rgba(123, 243, 214, 0.08) 0, rgba(123, 243, 214, 0.08) 10px, transparent 10px, transparent 20px)",
+                                }}
+                              >
+                                <div className="flex items-center justify-center gap-3 text-[11px] uppercase tracking-[0.18em] text-accent">
+                                  <span>Spot</span>
+                                  <span className="text-text">{fmtCurrencySmall(spotPrice)}</span>
+                                </div>
+                              </td>
+                            </tr>
+                          ) : null}
+                          <tr
+                            key={`${activeDisplayedChain?.symbol ?? chainSymbol}-${row.strike}-${index}`}
+                            className={`${boundaryClass} ${boundaryToneClass} transition hover:bg-white/[0.02]`}
+                            data-testid={`chain-row-${index}`}
+                          >
+                            <td className="px-4 py-3">{fmtCurrencySmall(row.callBid)}</td>
+                            <td className="px-4 py-3">{fmtCurrencySmall(row.callAsk)}</td>
+                            <td className="px-4 py-3">{fmtCurrencySmall(row.callMid)}</td>
+                            <td className="px-4 py-3">{fmtWholeNumber(row.callVolume)}</td>
+                            <td className="px-4 py-3">{fmtWholeNumber(row.callOpenInterest)}</td>
+                            {selectedChainGreekOptions.map((option) => (
+                              <td key={`call-cell-${option.key}-${row.strike}`} className="px-4 py-3">
+                                {fmtGreek(option.callValue(row), option.suffix ?? "")}
+                              </td>
+                            ))}
+                            <td className="px-4 py-3 font-medium text-text">{fmtCurrencySmall(row.strike)}</td>
+                            {selectedChainGreekOptions.map((option) => (
+                              <td key={`put-cell-${option.key}-${row.strike}`} className="px-4 py-3">
+                                {fmtGreek(option.putValue(row), option.suffix ?? "")}
+                              </td>
+                            ))}
+                            <td className="px-4 py-3">{fmtWholeNumber(row.putOpenInterest)}</td>
+                            <td className="px-4 py-3">{fmtWholeNumber(row.putVolume)}</td>
+                            <td className="px-4 py-3">{fmtCurrencySmall(row.putMid)}</td>
+                            <td className="px-4 py-3">{fmtCurrencySmall(row.putAsk)}</td>
+                            <td className="px-4 py-3">{fmtCurrencySmall(row.putBid)}</td>
+                            <td className="px-4 py-3 text-right">
+                              <button
+                                className="rounded-full border border-accent/30 bg-accent/10 px-3 py-1.5 text-xs font-medium text-accent transition hover:border-accent/50 hover:bg-accent/16"
+                                data-testid={`load-call-${index}`}
+                                disabled={isLoadingDifferentSymbol}
+                                onClick={() => loadTicket(row, "C")}
+                                type="button"
+                              >
+                                Load call
+                              </button>
+                            </td>
+                            <td className="px-4 py-3 text-right">
+                              <button
+                                className="rounded-full border border-caution/30 bg-caution/10 px-3 py-1.5 text-xs font-medium text-caution transition hover:border-caution/50 hover:bg-caution/16"
+                                data-testid={`load-put-${index}`}
+                                disabled={isLoadingDifferentSymbol}
+                                onClick={() => loadTicket(row, "P")}
+                                type="button"
+                              >
+                                Load put
+                              </button>
+                            </td>
+                          </tr>
+                        </Fragment>
+                      );
+                    })}
+                    {normalizedSpotInsertIndex === displayedChainRows.length && spotPrice != null ? (
                       <tr
-                        key={`${activeDisplayedChain?.symbol ?? chainSymbol}-${row.strike}-${index}`}
-                        className="border-t border-line/70 transition hover:bg-white/[0.02]"
-                        data-testid={`chain-row-${index}`}
+                        key={`${activeDisplayedChain?.symbol ?? chainSymbol}-spot-row-tail`}
+                        className="border-t border-line/70"
+                        data-testid="chain-spot-row"
                       >
-                        <td className="px-4 py-3">{fmtCurrencySmall(row.callBid)}</td>
-                        <td className="px-4 py-3">{fmtCurrencySmall(row.callAsk)}</td>
-                        <td className="px-4 py-3">{fmtCurrencySmall(row.callMid)}</td>
-                        <td className="px-4 py-3">{fmtNumber(row.callIV, "%")}</td>
-                        <td className="px-4 py-3">{fmtNumber(row.callDelta)}</td>
-                        <td className="px-4 py-3">{fmtNumber(row.callTheta)}</td>
-                        <td className="px-4 py-3 font-medium text-text">{fmtCurrencySmall(row.strike)}</td>
-                        <td className={`px-4 py-3 ${pnlTone(row.distanceFromSpotPct)}`}>{fmtNumber(row.distanceFromSpotPct, "%")}</td>
-                        <td className="px-4 py-3">{fmtNumber(row.putTheta)}</td>
-                        <td className="px-4 py-3">{fmtNumber(row.putDelta)}</td>
-                        <td className="px-4 py-3">{fmtNumber(row.putIV, "%")}</td>
-                        <td className="px-4 py-3">{fmtCurrencySmall(row.putMid)}</td>
-                        <td className="px-4 py-3">{fmtCurrencySmall(row.putAsk)}</td>
-                        <td className="px-4 py-3">{fmtCurrencySmall(row.putBid)}</td>
-                        <td className="px-4 py-3 text-right">
-                          <button
-                            className="rounded-full border border-accent/30 bg-accent/10 px-3 py-1.5 text-xs font-medium text-accent transition hover:border-accent/50 hover:bg-accent/16"
-                            data-testid={`load-call-${index}`}
-                            disabled={isLoadingDifferentSymbol}
-                            onClick={() => loadTicket(row, "C")}
-                            type="button"
-                          >
-                            Load call
-                          </button>
-                        </td>
-                        <td className="px-4 py-3 text-right">
-                          <button
-                            className="rounded-full border border-caution/30 bg-caution/10 px-3 py-1.5 text-xs font-medium text-caution transition hover:border-caution/50 hover:bg-caution/16"
-                            data-testid={`load-put-${index}`}
-                            disabled={isLoadingDifferentSymbol}
-                            onClick={() => loadTicket(row, "P")}
-                            type="button"
-                          >
-                            Load put
-                          </button>
+                        <td
+                          className="px-4 py-2"
+                          colSpan={chainTableColumnCount}
+                          style={{
+                            backgroundImage:
+                              "repeating-linear-gradient(135deg, rgba(123, 243, 214, 0.08) 0, rgba(123, 243, 214, 0.08) 10px, transparent 10px, transparent 20px)",
+                          }}
+                        >
+                          <div className="flex items-center justify-center gap-3 text-[11px] uppercase tracking-[0.18em] text-accent">
+                            <span>Spot</span>
+                            <span className="text-text">{fmtCurrencySmall(spotPrice)}</span>
+                          </div>
                         </td>
                       </tr>
-                    ))}
+                    ) : null}
                   </tbody>
                 </table>
               </div>

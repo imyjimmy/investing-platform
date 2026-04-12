@@ -645,32 +645,16 @@ class IBGatewayBrokerService(BrokerService):
             )
             call_iv = _extract_greek(call_ticker, "impliedVol", percent=True)
             call_delta = _extract_greek(call_ticker, "delta")
+            call_gamma = _extract_greek(call_ticker, "gamma")
             call_theta = _extract_greek(call_ticker, "theta")
+            call_vega = _extract_greek(call_ticker, "vega")
+            call_rho = _extract_greek(call_ticker, "rho")
             put_iv = _extract_greek(put_ticker, "impliedVol", percent=True)
             put_delta = _extract_greek(put_ticker, "delta")
+            put_gamma = _extract_greek(put_ticker, "gamma")
             put_theta = _extract_greek(put_ticker, "theta")
-            if call_mid and (call_iv is None or call_delta is None or call_theta is None):
-                approx_call = _approximate_option_greeks(
-                    premium=call_mid,
-                    spot=underlying_price,
-                    strike=strike,
-                    dte=dte,
-                    right="C",
-                )
-                call_iv = call_iv if call_iv is not None else approx_call["impliedVolPct"]
-                call_delta = call_delta if call_delta is not None else approx_call["delta"]
-                call_theta = call_theta if call_theta is not None else approx_call["theta"]
-            if put_mid and (put_iv is None or put_delta is None or put_theta is None):
-                approx_put = _approximate_option_greeks(
-                    premium=put_mid,
-                    spot=underlying_price,
-                    strike=strike,
-                    dte=dte,
-                    right="P",
-                )
-                put_iv = put_iv if put_iv is not None else approx_put["impliedVolPct"]
-                put_delta = put_delta if put_delta is not None else approx_put["delta"]
-                put_theta = put_theta if put_theta is not None else approx_put["theta"]
+            put_vega = _extract_greek(put_ticker, "vega")
+            put_rho = _extract_greek(put_ticker, "rho")
             rows.append(
                 ChainRow(
                     strike=round(strike, 2),
@@ -678,16 +662,26 @@ class IBGatewayBrokerService(BrokerService):
                     callBid=_round_or_none(_safe_float(getattr(call_ticker, "bid", None)), 4),
                     callAsk=_round_or_none(_safe_float(getattr(call_ticker, "ask", None)), 4),
                     callMid=_round_or_none(call_mid, 4),
+                    callVolume=_extract_option_volume(call_ticker, "C"),
+                    callOpenInterest=_extract_option_open_interest(call_ticker, "C"),
                     callIV=_round_or_none(call_iv, 2),
                     callDelta=_round_signed_or_none(call_delta, 4),
+                    callGamma=_round_signed_or_none(call_gamma, 4),
                     callTheta=_round_signed_or_none(call_theta, 4),
+                    callVega=_round_signed_or_none(call_vega, 4),
+                    callRho=_round_signed_or_none(call_rho, 4),
                     callAnnualizedYieldPct=_round_or_none(_annualized_yield(call_mid, underlying_price, dte), 2),
                     putBid=_round_or_none(_safe_float(getattr(put_ticker, "bid", None)), 4),
                     putAsk=_round_or_none(_safe_float(getattr(put_ticker, "ask", None)), 4),
                     putMid=_round_or_none(put_mid, 4),
+                    putVolume=_extract_option_volume(put_ticker, "P"),
+                    putOpenInterest=_extract_option_open_interest(put_ticker, "P"),
                     putIV=_round_or_none(put_iv, 2),
                     putDelta=_round_signed_or_none(put_delta, 4),
+                    putGamma=_round_signed_or_none(put_gamma, 4),
                     putTheta=_round_signed_or_none(put_theta, 4),
+                    putVega=_round_signed_or_none(put_vega, 4),
+                    putRho=_round_signed_or_none(put_rho, 4),
                     putAnnualizedYieldPct=_round_or_none(_annualized_yield(put_mid, strike, dte), 2),
                     conservativePutCollateral=round(strike * 100.0, 2),
                 )
@@ -1222,6 +1216,28 @@ def _ticker_option_payload_score(ticker: Any) -> int:
     return score
 
 
+def _extract_option_volume(ticker: Any, right: str) -> int | None:
+    if ticker is None:
+        return None
+    attr_names = ("callVolume", "volume") if right == "C" else ("putVolume", "volume")
+    for attr_name in attr_names:
+        value = _optional_int(getattr(ticker, attr_name, None))
+        if value is not None:
+            return value
+    return None
+
+
+def _extract_option_open_interest(ticker: Any, right: str) -> int | None:
+    if ticker is None:
+        return None
+    attr_names = ("callOpenInterest", "futuresOpenInterest") if right == "C" else ("putOpenInterest", "futuresOpenInterest")
+    for attr_name in attr_names:
+        value = _optional_int(getattr(ticker, attr_name, None))
+        if value is not None:
+            return value
+    return None
+
+
 def _latest_underlying_price(ib: Any, contract: Any) -> float | None:
     try:
         bars = ib.reqHistoricalData(
@@ -1251,18 +1267,21 @@ def _approximate_option_greeks(
     risk_free_rate: float = 0.045,
 ) -> dict[str, float | None]:
     if not _is_valid_number(premium) or not _is_valid_number(spot) or not _is_valid_number(strike):
-        return {"impliedVolPct": None, "delta": None, "theta": None}
+        return {"impliedVolPct": None, "delta": None, "gamma": None, "theta": None, "vega": None, "rho": None}
     years = max(dte / 365.0, 1.0 / 365.0)
     intrinsic_value = max(spot - strike, 0.0) if right == "C" else max(strike - spot, 0.0)
     target_price = max(float(premium), intrinsic_value)
     sigma = _implied_volatility_from_price(target_price, spot, strike, years, right, risk_free_rate)
     if sigma is None:
-        return {"impliedVolPct": None, "delta": None, "theta": None}
-    _, delta, theta = _black_scholes_metrics(spot, strike, years, sigma, right, risk_free_rate)
+        return {"impliedVolPct": None, "delta": None, "gamma": None, "theta": None, "vega": None, "rho": None}
+    _, delta, gamma, theta, vega, rho = _black_scholes_metrics(spot, strike, years, sigma, right, risk_free_rate)
     return {
         "impliedVolPct": sigma * 100.0,
         "delta": delta,
+        "gamma": gamma,
         "theta": theta,
+        "vega": vega,
+        "rho": rho,
     }
 
 
@@ -1276,13 +1295,13 @@ def _implied_volatility_from_price(
 ) -> float | None:
     lower = 0.0001
     upper = 6.0
-    lower_price, _, _ = _black_scholes_metrics(spot, strike, years, lower, right, risk_free_rate)
-    upper_price, _, _ = _black_scholes_metrics(spot, strike, years, upper, right, risk_free_rate)
+    lower_price, _, _, _, _, _ = _black_scholes_metrics(spot, strike, years, lower, right, risk_free_rate)
+    upper_price, _, _, _, _, _ = _black_scholes_metrics(spot, strike, years, upper, right, risk_free_rate)
     if option_price < lower_price - 1e-4 or option_price > upper_price + 1e-4:
         return None
     for _ in range(60):
         midpoint = (lower + upper) / 2.0
-        midpoint_price, _, _ = _black_scholes_metrics(spot, strike, years, midpoint, right, risk_free_rate)
+        midpoint_price, _, _, _, _, _ = _black_scholes_metrics(spot, strike, years, midpoint, right, risk_free_rate)
         if abs(midpoint_price - option_price) <= 1e-4:
             return midpoint
         if midpoint_price > option_price:
@@ -1299,22 +1318,26 @@ def _black_scholes_metrics(
     sigma: float,
     right: str,
     risk_free_rate: float,
-) -> tuple[float, float, float]:
+) -> tuple[float, float, float, float, float, float]:
     sqrt_t = sqrt(max(years, 1e-9))
     sigma = max(sigma, 1e-9)
     d1 = (log(spot / strike) + (risk_free_rate + 0.5 * sigma * sigma) * years) / (sigma * sqrt_t)
     d2 = d1 - sigma * sqrt_t
     discount = exp(-risk_free_rate * years)
     pdf_d1 = _normal_pdf(d1)
+    gamma = pdf_d1 / (spot * sigma * sqrt_t)
+    vega = spot * pdf_d1 * sqrt_t / 100.0
     if right == "C":
         price = spot * _normal_cdf(d1) - strike * discount * _normal_cdf(d2)
         delta = _normal_cdf(d1)
         theta_annual = (-(spot * pdf_d1 * sigma) / (2.0 * sqrt_t)) - (risk_free_rate * strike * discount * _normal_cdf(d2))
+        rho = strike * years * discount * _normal_cdf(d2) / 100.0
     else:
         price = strike * discount * _normal_cdf(-d2) - spot * _normal_cdf(-d1)
         delta = _normal_cdf(d1) - 1.0
         theta_annual = (-(spot * pdf_d1 * sigma) / (2.0 * sqrt_t)) + (risk_free_rate * strike * discount * _normal_cdf(-d2))
-    return price, delta, theta_annual / 365.0
+        rho = -(strike * years * discount * _normal_cdf(-d2)) / 100.0
+    return price, delta, gamma, theta_annual / 365.0, vega, rho
 
 
 def _normal_cdf(value: float) -> float:

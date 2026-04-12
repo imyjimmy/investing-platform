@@ -169,16 +169,26 @@ class ChainRow(DashboardModel):
     callBid: float | None = None
     callAsk: float | None = None
     callMid: float | None = None
+    callVolume: int | None = None
+    callOpenInterest: int | None = None
     callIV: float | None = None
     callDelta: float | None = None
+    callGamma: float | None = None
     callTheta: float | None = None
+    callVega: float | None = None
+    callRho: float | None = None
     callAnnualizedYieldPct: float | None = None
     putBid: float | None = None
     putAsk: float | None = None
     putMid: float | None = None
+    putVolume: int | None = None
+    putOpenInterest: int | None = None
     putIV: float | None = None
     putDelta: float | None = None
+    putGamma: float | None = None
     putTheta: float | None = None
+    putVega: float | None = None
+    putRho: float | None = None
     putAnnualizedYieldPct: float | None = None
     conservativePutCollateral: float | None = None
 

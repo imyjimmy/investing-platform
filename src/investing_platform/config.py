@@ -79,7 +79,7 @@ class DashboardSettings:
     ib_option_exchange: str = "SMART"
     ib_currency: str = "USD"
     chain_expiry_limit: int = 6
-    chain_strike_limit: int = 10
+    chain_strike_limit: int = 30
     chain_moneyness_pct: float = 0.18
     chain_batch_size: int = 40
     chain_historical_fallback_contract_limit: int = 4
@@ -167,7 +167,7 @@ class DashboardSettings:
             chain_strike_limit=_env_int(
                 "INVESTING_PLATFORM_CHAIN_STRIKE_LIMIT",
                 "OPTIONS_DASHBOARD_CHAIN_STRIKE_LIMIT",
-                default=10,
+                default=30,
             ),
             chain_moneyness_pct=_env_float(
                 "INVESTING_PLATFORM_CHAIN_MONEYNESS_PCT",

@@ -183,16 +183,26 @@ export interface ChainRow {
   callBid: number | null;
   callAsk: number | null;
   callMid: number | null;
+  callVolume: number | null;
+  callOpenInterest: number | null;
   callIV: number | null;
   callDelta: number | null;
+  callGamma: number | null;
   callTheta: number | null;
+  callVega: number | null;
+  callRho: number | null;
   callAnnualizedYieldPct: number | null;
   putBid: number | null;
   putAsk: number | null;
   putMid: number | null;
+  putVolume: number | null;
+  putOpenInterest: number | null;
   putIV: number | null;
   putDelta: number | null;
+  putGamma: number | null;
   putTheta: number | null;
+  putVega: number | null;
+  putRho: number | null;
   putAnnualizedYieldPct: number | null;
   conservativePutCollateral: number | null;
 }
