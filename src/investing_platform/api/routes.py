@@ -22,6 +22,7 @@ from investing_platform.services.app_state import (
     get_edgar_service,
     get_investor_pdf_service,
     get_settings,
+    get_universe_screener_service,
 )
 from investing_platform.services.base import BrokerUnavailableError
 
@@ -47,6 +48,10 @@ def _investor_pdfs():
 
 def _coinbase():
     return get_coinbase_service()
+
+
+def _universe():
+    return get_universe_screener_service()
 
 
 @router.get("/health")
@@ -152,6 +157,14 @@ def option_chain(symbol: str, expiry: str | None = Query(default=None)) -> dict:
     try:
         return _service().get_option_chain(symbol, expiry=expiry).model_dump()
     except BrokerUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.get("/market/universe")
+def market_universe() -> dict:
+    try:
+        return _universe().get_latest_snapshot().model_dump()
+    except Exception as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 

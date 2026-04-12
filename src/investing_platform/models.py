@@ -320,6 +320,37 @@ class ScenarioResponse(DashboardModel):
     isStale: bool = False
 
 
+class UniverseCandidate(DashboardModel):
+    symbol: str
+    asOfDate: date
+    lastClose: float | None = None
+    betaQqq60d: float | None = None
+    betaQqq120d: float | None = None
+    betaSpy120d: float | None = None
+    hv20: float | None = None
+    hv60: float | None = None
+    atmFrontMonthIv: float | None = None
+    atm3045dIv: float | None = None
+    ivToHv20: float | None = None
+    avgDailyDollarVolume20d: float | None = None
+    totalOptionVolume: int | None = None
+    totalOptionOpenInterest: int | None = None
+    compositeScore: float | None = None
+    betaComponent: float | None = None
+    impliedVolComponent: float | None = None
+    recommendedStrategy: str | None = None
+    whyItRanked: str | None = None
+    eligible: bool = False
+
+
+class UniverseSnapshotResponse(DashboardModel):
+    snapshotDate: date
+    rows: list[UniverseCandidate]
+    sourceNotice: str | None = None
+    generatedAt: datetime
+    isStale: bool = False
+
+
 class OptionOrderRequest(DashboardModel):
     accountId: str
     symbol: str

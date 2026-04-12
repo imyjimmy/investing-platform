@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import Path
 
 from investing_platform.config import DashboardSettings
 from investing_platform.services.base import BrokerService
@@ -11,6 +12,7 @@ from investing_platform.services.edgar import EdgarDownloader
 from investing_platform.services.ib_gateway import IBGatewayBrokerService
 from investing_platform.services.investor_pdfs import InvestorPdfDownloader
 from investing_platform.services.mock_broker import MockBrokerService
+from investing_platform.services.universe_screener import UniverseScreenerService
 
 
 @lru_cache(maxsize=1)
@@ -39,3 +41,8 @@ def get_investor_pdf_service() -> InvestorPdfDownloader:
 @lru_cache(maxsize=1)
 def get_coinbase_service() -> CoinbaseService:
     return CoinbaseService(get_settings())
+
+
+@lru_cache(maxsize=1)
+def get_universe_screener_service() -> UniverseScreenerService:
+    return UniverseScreenerService(Path(__file__).resolve().parents[3])

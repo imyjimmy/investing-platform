@@ -6,7 +6,7 @@ import asyncio
 from concurrent.futures import Future
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
-from math import isfinite
+from math import erf, exp, isfinite, log, pi, sqrt
 from queue import Empty, Queue
 import threading
 import time
@@ -45,6 +45,7 @@ except ImportError:  # pragma: no cover - runtime guard
 
 
 TaskResultT = TypeVar("TaskResultT")
+OPTION_GENERIC_TICKS = "100,101,106,221"
 
 
 @dataclass(slots=True)
@@ -426,10 +427,10 @@ class IBGatewayBrokerService(BrokerService):
                     marketValue=round(float(item.marketValue), 2),
                     unrealizedPnL=round(float(item.unrealizedPNL), 2),
                     realizedPnL=round(float(item.realizedPNL), 2),
-                    delta=round(delta, 4) if _is_valid_number(delta) else None,
-                    gamma=round(gamma, 4) if _is_valid_number(gamma) else None,
-                    theta=round(theta, 4) if _is_valid_number(theta) else None,
-                    vega=round(vega, 4) if _is_valid_number(vega) else None,
+                    delta=_round_signed_or_none(delta, 4),
+                    gamma=_round_signed_or_none(gamma, 4),
+                    theta=_round_signed_or_none(theta, 4),
+                    vega=_round_signed_or_none(vega, 4),
                     impliedVol=round(iv * 100.0, 2) if _is_valid_number(iv) else None,
                     dte=dte,
                     underlyingSpot=round(underlying_spot, 4) if _is_valid_number(underlying_spot) else None,
@@ -511,6 +512,8 @@ class IBGatewayBrokerService(BrokerService):
         ticker, resolved_market_data_type = self._request_underlying_ticker(ib, qualified)
         generated_at = datetime.now(UTC)
         price = _ticker_market_price(ticker)
+        if not _is_valid_number(price):
+            price = _latest_underlying_price(ib, qualified) or 0.0
         return UnderlyingQuote(
             symbol=symbol,
             price=round(price, 4),
@@ -528,11 +531,17 @@ class IBGatewayBrokerService(BrokerService):
         underlying_contract = self._qualify_one(ib, Stock(symbol, self.settings.ib_underlying_exchange, self.settings.ib_currency))
         underlying_ticker, resolved_market_data_type = self._request_underlying_ticker(ib, underlying_contract)
         underlying_price = _ticker_market_price(underlying_ticker)
+        if not _is_valid_number(underlying_price):
+            underlying_price = _latest_underlying_price(ib, underlying_contract) or 0.0
+        if not _is_valid_number(underlying_price):
+            raise RuntimeError(
+                f"No market or recent historical price returned for {symbol}. Check the symbol and market data permissions in IB Gateway."
+            )
 
         definitions = ib.reqSecDefOptParams(symbol, "", underlying_contract.secType, underlying_contract.conId)
         if not definitions:
             raise RuntimeError(f"IB Gateway returned no option definitions for {symbol}.")
-        definition = _select_definition(definitions, self.settings.ib_option_exchange)
+        definition = _select_definition(definitions, self.settings.ib_option_exchange, symbol)
         expiries = _select_expiries(
             definition.expirations,
             min_days=0,
@@ -574,12 +583,19 @@ class IBGatewayBrokerService(BrokerService):
         contracts_by_strike: dict[float, dict[str, Any]] = {}
         for contract in qualified_contracts:
             contracts_by_strike.setdefault(float(contract.strike), {})[contract.right] = contract
-        tickers = self._req_market_data_in_batches(ib, qualified_contracts, resolved_market_data_type)
-        quote_source = "streaming" if any(_ticker_has_quote_payload(ticker) for ticker in tickers) else "unavailable"
+        if not qualified_contracts:
+            raise RuntimeError(f"No option contracts qualified for {symbol} {selected_expiry}.")
+        tickers, resolved_market_data_type = self._request_option_tickers(ib, qualified_contracts, resolved_market_data_type)
+        quote_source = "streaming" if any(_ticker_has_option_payload(ticker) for ticker in tickers) else "unavailable"
         quote_as_of: datetime | None = None
         historical_midpoints: dict[int, float] = {}
         if quote_source == "unavailable":
-            historical_midpoints, quote_as_of = self._fetch_recent_option_midpoints(ib, qualified_contracts)
+            fallback_contracts = _select_historical_fallback_contracts(
+                qualified_contracts,
+                underlying_price,
+                self.settings.chain_historical_fallback_contract_limit,
+            )
+            historical_midpoints, quote_as_of = self._fetch_recent_option_midpoints(ib, fallback_contracts)
             if historical_midpoints:
                 quote_source = "historical"
         by_strike: dict[float, dict[str, Any]] = {}
@@ -588,9 +604,10 @@ class IBGatewayBrokerService(BrokerService):
             by_strike.setdefault(float(contract.strike), {})[contract.right] = ticker
         rows: list[ChainRow] = []
         dte = max((date.fromisoformat(selected_expiry) - date.today()).days, 1)
-        for strike in sorted(by_strike):
-            call_ticker = by_strike[strike].get("C")
-            put_ticker = by_strike[strike].get("P")
+        for strike in sorted(contracts_by_strike):
+            strike_tickers = by_strike.get(strike, {})
+            call_ticker = strike_tickers.get("C")
+            put_ticker = strike_tickers.get("P")
             call_contract = contracts_by_strike[strike].get("C")
             put_contract = contracts_by_strike[strike].get("P")
             call_historical_mid = historical_midpoints.get(int(call_contract.conId)) if call_contract is not None else None
@@ -605,6 +622,34 @@ class IBGatewayBrokerService(BrokerService):
                 or _ticker_option_mark(put_ticker)
                 or put_historical_mid
             )
+            call_iv = _extract_greek(call_ticker, "impliedVol", percent=True)
+            call_delta = _extract_greek(call_ticker, "delta")
+            call_theta = _extract_greek(call_ticker, "theta")
+            put_iv = _extract_greek(put_ticker, "impliedVol", percent=True)
+            put_delta = _extract_greek(put_ticker, "delta")
+            put_theta = _extract_greek(put_ticker, "theta")
+            if call_mid and (call_iv is None or call_delta is None or call_theta is None):
+                approx_call = _approximate_option_greeks(
+                    premium=call_mid,
+                    spot=underlying_price,
+                    strike=strike,
+                    dte=dte,
+                    right="C",
+                )
+                call_iv = call_iv if call_iv is not None else approx_call["impliedVolPct"]
+                call_delta = call_delta if call_delta is not None else approx_call["delta"]
+                call_theta = call_theta if call_theta is not None else approx_call["theta"]
+            if put_mid and (put_iv is None or put_delta is None or put_theta is None):
+                approx_put = _approximate_option_greeks(
+                    premium=put_mid,
+                    spot=underlying_price,
+                    strike=strike,
+                    dte=dte,
+                    right="P",
+                )
+                put_iv = put_iv if put_iv is not None else approx_put["impliedVolPct"]
+                put_delta = put_delta if put_delta is not None else approx_put["delta"]
+                put_theta = put_theta if put_theta is not None else approx_put["theta"]
             rows.append(
                 ChainRow(
                     strike=round(strike, 2),
@@ -612,16 +657,16 @@ class IBGatewayBrokerService(BrokerService):
                     callBid=_round_or_none(_safe_float(getattr(call_ticker, "bid", None)), 4),
                     callAsk=_round_or_none(_safe_float(getattr(call_ticker, "ask", None)), 4),
                     callMid=_round_or_none(call_mid, 4),
-                    callIV=_round_or_none(_extract_greek(call_ticker, "impliedVol", percent=True), 2),
-                    callDelta=_round_or_none(_extract_greek(call_ticker, "delta"), 4),
-                    callTheta=_round_or_none(_extract_greek(call_ticker, "theta"), 4),
+                    callIV=_round_or_none(call_iv, 2),
+                    callDelta=_round_signed_or_none(call_delta, 4),
+                    callTheta=_round_signed_or_none(call_theta, 4),
                     callAnnualizedYieldPct=_round_or_none(_annualized_yield(call_mid, underlying_price, dte), 2),
                     putBid=_round_or_none(_safe_float(getattr(put_ticker, "bid", None)), 4),
                     putAsk=_round_or_none(_safe_float(getattr(put_ticker, "ask", None)), 4),
                     putMid=_round_or_none(put_mid, 4),
-                    putIV=_round_or_none(_extract_greek(put_ticker, "impliedVol", percent=True), 2),
-                    putDelta=_round_or_none(_extract_greek(put_ticker, "delta"), 4),
-                    putTheta=_round_or_none(_extract_greek(put_ticker, "theta"), 4),
+                    putIV=_round_or_none(put_iv, 2),
+                    putDelta=_round_signed_or_none(put_delta, 4),
+                    putTheta=_round_signed_or_none(put_theta, 4),
                     putAnnualizedYieldPct=_round_or_none(_annualized_yield(put_mid, strike, dte), 2),
                     conservativePutCollateral=round(strike * 100.0, 2),
                 )
@@ -655,7 +700,7 @@ class IBGatewayBrokerService(BrokerService):
         definitions = ib.reqSecDefOptParams(request.symbol, "", underlying_contract.secType, underlying_contract.conId)
         if not definitions:
             raise RuntimeError(f"IB Gateway returned no option definitions for {request.symbol}.")
-        definition = _select_definition(definitions, self.settings.ib_option_exchange)
+        definition = _select_definition(definitions, self.settings.ib_option_exchange, request.symbol)
         contract = self._qualify_one(
             ib,
             Option(
@@ -672,7 +717,7 @@ class IBGatewayBrokerService(BrokerService):
 
     def _request_option_reference_price(self, ib: Any, contract: Any) -> float | None:
         for market_data_type in _market_data_type_candidates(self.settings.ib_market_data_type):
-            ticker = self._req_market_data_snapshot(ib, contract, market_data_type)
+            ticker = self._req_market_data_snapshot(ib, contract, market_data_type, generic_tick_list=OPTION_GENERIC_TICKS)
             mark = _ticker_option_mark(ticker)
             if _is_valid_number(mark):
                 return round(float(mark), 4)
@@ -868,18 +913,52 @@ class IBGatewayBrokerService(BrokerService):
 
     def _request_underlying_ticker(self, ib: Any, contract: Any) -> tuple[Any, int]:
         last_ticker: Any | None = None
+        last_market_data_type = self.settings.ib_market_data_type
         for market_data_type in _market_data_type_candidates(self.settings.ib_market_data_type):
-            ticker = self._req_market_data_snapshot(ib, contract, market_data_type)
+            ticker = self._req_ticker_snapshot(ib, contract, market_data_type) or self._req_market_data_snapshot(ib, contract, market_data_type)
             last_ticker = ticker
+            last_market_data_type = market_data_type
             if _is_valid_number(_ticker_market_price(ticker)):
                 return ticker, market_data_type
-        raise RuntimeError(
-            f"No market data returned for {contract.symbol}. Check the symbol and market data permissions in IB Gateway."
-        )
+        if last_ticker is not None:
+            return last_ticker, last_market_data_type
+        raise RuntimeError(f"No market data returned for {contract.symbol}. Check the symbol and market data permissions in IB Gateway.")
 
-    def _req_market_data_snapshot(self, ib: Any, contract: Any, market_data_type: int) -> Any:
+    def _req_ticker_snapshot(self, ib: Any, contract: Any, market_data_type: int) -> Any | None:
         ib.reqMarketDataType(market_data_type)
-        ticker = ib.reqMktData(contract, "", False, False)
+        try:
+            tickers = ib.reqTickers(contract)
+        except Exception:
+            return None
+        if not tickers:
+            return None
+        return tickers[0]
+
+    def _request_option_tickers(self, ib: Any, contracts: list[Any], preferred_market_data_type: int) -> tuple[list[Any], int]:
+        best_tickers: list[Any] = []
+        best_market_data_type = preferred_market_data_type
+        best_score = -1
+        minimum_useful_payloads = max(4, min(len(contracts), 10))
+        for market_data_type in _market_data_type_candidates(preferred_market_data_type):
+            tickers = self._req_market_data_in_batches(
+                ib,
+                contracts,
+                market_data_type,
+                generic_tick_list=OPTION_GENERIC_TICKS,
+            )
+            payload_count = sum(1 for ticker in tickers if _ticker_has_option_payload(ticker))
+            score = sum(_ticker_option_payload_score(ticker) for ticker in tickers)
+            if score > best_score:
+                best_tickers = tickers
+                best_market_data_type = market_data_type
+                best_score = score
+            if payload_count >= minimum_useful_payloads:
+                break
+        return best_tickers, best_market_data_type
+
+    def _req_market_data_snapshot(self, ib: Any, contract: Any, market_data_type: int, generic_tick_list: str = "") -> Any:
+        ib.reqMarketDataType(market_data_type)
+        ticker = ib.reqMktData(contract, generic_tick_list, False, False)
         try:
             deadline = time.monotonic() + min(max(self.settings.ib_request_timeout_seconds / 4.0, 1.5), 4.0)
             while time.monotonic() < deadline:
@@ -893,12 +972,18 @@ class IBGatewayBrokerService(BrokerService):
             except Exception:
                 pass
 
-    def _req_market_data_in_batches(self, ib: Any, contracts: list[Any], market_data_type: int) -> list[Any]:
+    def _req_market_data_in_batches(
+        self,
+        ib: Any,
+        contracts: list[Any],
+        market_data_type: int,
+        generic_tick_list: str = "",
+    ) -> list[Any]:
         tickers: list[Any] = []
         for batch in _batched(contracts, self.settings.chain_batch_size):
             ib.reqMarketDataType(market_data_type)
-            batch_tickers = [ib.reqMktData(contract, "", False, False) for contract in batch]
-            deadline = time.monotonic() + min(max(self.settings.ib_request_timeout_seconds / 3.0, 1.5), 4.0)
+            batch_tickers = [ib.reqMktData(contract, generic_tick_list, False, False) for contract in batch]
+            deadline = time.monotonic() + min(max(self.settings.ib_request_timeout_seconds / 5.0, 1.0), 2.5)
             while time.monotonic() < deadline:
                 ib.sleep(0.2)
                 if all(_ticker_has_quote_payload(ticker) for ticker in batch_tickers):
@@ -1079,6 +1164,128 @@ def _ticker_has_quote_payload(ticker: Any) -> bool:
         _is_valid_number(_extract_greek(ticker, field_name))
         for field_name in ("delta", "gamma", "theta", "vega", "impliedVol")
     )
+
+
+def _ticker_has_option_payload(ticker: Any) -> bool:
+    return _ticker_option_payload_score(ticker) > 0
+
+
+def _ticker_option_payload_score(ticker: Any) -> int:
+    score = 0
+    bid = _safe_float(getattr(ticker, "bid", None))
+    ask = _safe_float(getattr(ticker, "ask", None))
+    if _is_valid_number(bid) or _is_valid_number(ask):
+        score += 3
+    if any(_is_valid_number(_extract_greek(ticker, field_name)) for field_name in ("delta", "theta", "impliedVol")):
+        score += 2
+    if _is_valid_number(_ticker_option_mark(ticker)):
+        score += 1
+    if _is_valid_number(_safe_float(getattr(ticker, "last", None))) or _is_valid_number(_safe_float(getattr(ticker, "close", None))):
+        score += 1
+    return score
+
+
+def _latest_underlying_price(ib: Any, contract: Any) -> float | None:
+    try:
+        bars = ib.reqHistoricalData(
+            contract,
+            endDateTime="",
+            durationStr="5 D",
+            barSizeSetting="1 hour",
+            whatToShow="TRADES",
+            useRTH=False,
+            formatDate=1,
+            keepUpToDate=False,
+        )
+    except Exception:
+        return None
+    if not bars:
+        return None
+    close_value = _safe_float(getattr(bars[-1], "close", None))
+    return close_value if _is_valid_number(close_value) else None
+
+
+def _approximate_option_greeks(
+    premium: float,
+    spot: float,
+    strike: float,
+    dte: int,
+    right: str,
+    risk_free_rate: float = 0.045,
+) -> dict[str, float | None]:
+    if not _is_valid_number(premium) or not _is_valid_number(spot) or not _is_valid_number(strike):
+        return {"impliedVolPct": None, "delta": None, "theta": None}
+    years = max(dte / 365.0, 1.0 / 365.0)
+    intrinsic_value = max(spot - strike, 0.0) if right == "C" else max(strike - spot, 0.0)
+    target_price = max(float(premium), intrinsic_value)
+    sigma = _implied_volatility_from_price(target_price, spot, strike, years, right, risk_free_rate)
+    if sigma is None:
+        return {"impliedVolPct": None, "delta": None, "theta": None}
+    _, delta, theta = _black_scholes_metrics(spot, strike, years, sigma, right, risk_free_rate)
+    return {
+        "impliedVolPct": sigma * 100.0,
+        "delta": delta,
+        "theta": theta,
+    }
+
+
+def _implied_volatility_from_price(
+    option_price: float,
+    spot: float,
+    strike: float,
+    years: float,
+    right: str,
+    risk_free_rate: float,
+) -> float | None:
+    lower = 0.0001
+    upper = 6.0
+    lower_price, _, _ = _black_scholes_metrics(spot, strike, years, lower, right, risk_free_rate)
+    upper_price, _, _ = _black_scholes_metrics(spot, strike, years, upper, right, risk_free_rate)
+    if option_price < lower_price - 1e-4 or option_price > upper_price + 1e-4:
+        return None
+    for _ in range(60):
+        midpoint = (lower + upper) / 2.0
+        midpoint_price, _, _ = _black_scholes_metrics(spot, strike, years, midpoint, right, risk_free_rate)
+        if abs(midpoint_price - option_price) <= 1e-4:
+            return midpoint
+        if midpoint_price > option_price:
+            upper = midpoint
+        else:
+            lower = midpoint
+    return (lower + upper) / 2.0
+
+
+def _black_scholes_metrics(
+    spot: float,
+    strike: float,
+    years: float,
+    sigma: float,
+    right: str,
+    risk_free_rate: float,
+) -> tuple[float, float, float]:
+    sqrt_t = sqrt(max(years, 1e-9))
+    sigma = max(sigma, 1e-9)
+    d1 = (log(spot / strike) + (risk_free_rate + 0.5 * sigma * sigma) * years) / (sigma * sqrt_t)
+    d2 = d1 - sigma * sqrt_t
+    discount = exp(-risk_free_rate * years)
+    pdf_d1 = _normal_pdf(d1)
+    if right == "C":
+        price = spot * _normal_cdf(d1) - strike * discount * _normal_cdf(d2)
+        delta = _normal_cdf(d1)
+        theta_annual = (-(spot * pdf_d1 * sigma) / (2.0 * sqrt_t)) - (risk_free_rate * strike * discount * _normal_cdf(d2))
+    else:
+        price = strike * discount * _normal_cdf(-d2) - spot * _normal_cdf(-d1)
+        delta = _normal_cdf(d1) - 1.0
+        theta_annual = (-(spot * pdf_d1 * sigma) / (2.0 * sqrt_t)) + (risk_free_rate * strike * discount * _normal_cdf(-d2))
+    return price, delta, theta_annual / 365.0
+
+
+def _normal_cdf(value: float) -> float:
+    return 0.5 * (1.0 + erf(value / sqrt(2.0)))
+
+
+def _normal_pdf(value: float) -> float:
+    return exp(-0.5 * value * value) / sqrt(2.0 * pi)
 
 
 def _latest_option_midpoint(ib: Any, contract: Any) -> tuple[float | None, datetime | None]:
@@ -1291,13 +1498,17 @@ def _chain_highlights(rows: list[ChainRow], expiry: str) -> list[ChainHighlight]
     return highlights
 
 
-def _select_definition(definitions: Iterable[Any], preferred_exchange: str) -> Any:
+def _select_definition(definitions: Iterable[Any], preferred_exchange: str, symbol: str) -> Any:
     preferred_exchange = preferred_exchange.upper()
+    symbol = symbol.upper()
     ordered = sorted(
         definitions,
         key=lambda definition: (
             0 if str(getattr(definition, "exchange", "")).upper() == preferred_exchange else 1,
             0 if str(getattr(definition, "exchange", "")).upper() == "SMART" else 1,
+            0 if str(getattr(definition, "tradingClass", "")).upper() == symbol else 1,
+            -len(getattr(definition, "expirations", []) or []),
+            -len(getattr(definition, "strikes", []) or []),
         ),
     )
     return ordered[0]
@@ -1322,16 +1533,32 @@ def _select_expiries(expiries: Iterable[str], min_days: int, max_days: int, limi
 def _select_strikes(strikes: Iterable[float], spot: float, moneyness_pct: float, limit: int) -> list[float]:
     lower = spot * (1.0 - moneyness_pct)
     upper = spot * (1.0 + moneyness_pct)
-    eligible = [float(strike) for strike in strikes if lower <= float(strike) <= upper]
-    eligible.sort(key=lambda strike: (abs(strike - spot), strike))
-    unique: list[float] = []
-    for strike in eligible:
-        if strike not in unique:
-            unique.append(strike)
-        if len(unique) >= limit * 2:
-            break
-    unique.sort()
-    return unique
+    unique_all = sorted({float(strike) for strike in strikes})
+    eligible = [strike for strike in unique_all if lower <= strike <= upper]
+    if not eligible:
+        eligible = unique_all
+    if len(eligible) <= limit:
+        return eligible
+    pivot = min(range(len(eligible)), key=lambda index: (abs(eligible[index] - spot), eligible[index]))
+    half_window = limit // 2
+    start = max(0, pivot - half_window)
+    end = start + limit
+    if end > len(eligible):
+        end = len(eligible)
+        start = max(0, end - limit)
+    return eligible[start:end]
+
+
+def _select_historical_fallback_contracts(contracts: Iterable[Any], spot: float, limit: int) -> list[Any]:
+    ordered = sorted(
+        contracts,
+        key=lambda contract: (
+            abs(float(getattr(contract, "strike", 0.0)) - spot),
+            str(getattr(contract, "right", "")),
+            float(getattr(contract, "strike", 0.0)),
+        ),
+    )
+    return ordered[: max(limit, 0)]
 
 
 def _batched(items: list[Any], size: int) -> Iterable[list[Any]]:
@@ -1341,6 +1568,12 @@ def _batched(items: list[Any], size: int) -> Iterable[list[Any]]:
 
 def _round_or_none(value: float | None, precision: int) -> float | None:
     if not _is_valid_number(value):
+        return None
+    return round(float(value), precision)
+
+
+def _round_signed_or_none(value: float | None, precision: int) -> float | None:
+    if value is None or not isfinite(float(value)):
         return None
     return round(float(value), precision)
 

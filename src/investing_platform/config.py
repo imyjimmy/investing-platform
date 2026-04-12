@@ -82,6 +82,7 @@ class DashboardSettings:
     chain_strike_limit: int = 14
     chain_moneyness_pct: float = 0.18
     chain_batch_size: int = 40
+    chain_historical_fallback_contract_limit: int = 12
     chain_cache_ttl_seconds: float = 12.0
     snapshot_cache_ttl_seconds: float = 10.0
     safety_buffer: float = 25_000.0
@@ -177,6 +178,11 @@ class DashboardSettings:
                 "INVESTING_PLATFORM_CHAIN_BATCH_SIZE",
                 "OPTIONS_DASHBOARD_CHAIN_BATCH_SIZE",
                 default=40,
+            ),
+            chain_historical_fallback_contract_limit=_env_int(
+                "INVESTING_PLATFORM_CHAIN_HISTORICAL_FALLBACK_CONTRACT_LIMIT",
+                "OPTIONS_DASHBOARD_CHAIN_HISTORICAL_FALLBACK_CONTRACT_LIMIT",
+                default=12,
             ),
             chain_cache_ttl_seconds=_env_float(
                 "INVESTING_PLATFORM_CHAIN_CACHE_TTL_SECONDS",
