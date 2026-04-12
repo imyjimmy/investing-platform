@@ -59,6 +59,8 @@ const wholeNumber = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 0,
 });
 
+const ITM_PROBABILITY_RISK_FREE_RATE = 0.045;
+
 function fmtCurrency(value: number | null | undefined) {
   if (value == null || Number.isNaN(value)) {
     return "—";
@@ -92,6 +94,45 @@ function fmtWholeNumber(value: number | null | undefined) {
     return "—";
   }
   return wholeNumber.format(value);
+}
+
+function normalCdf(value: number) {
+  const sign = value < 0 ? -1 : 1;
+  const x = Math.abs(value) / Math.sqrt(2);
+  const t = 1 / (1 + 0.3275911 * x);
+  const a1 = 0.254829592;
+  const a2 = -0.284496736;
+  const a3 = 1.421413741;
+  const a4 = -1.453152027;
+  const a5 = 1.061405429;
+  const erf =
+    1 -
+    (((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t) *
+      Math.exp(-x * x);
+  return 0.5 * (1 + sign * erf);
+}
+
+function probabilityItmPct(
+  spot: number | null | undefined,
+  strike: number | null | undefined,
+  ivPct: number | null | undefined,
+  expiry: string | undefined,
+  right: "C" | "P",
+) {
+  if (spot == null || strike == null || ivPct == null || Number.isNaN(spot) || Number.isNaN(strike) || Number.isNaN(ivPct) || !expiry) {
+    return null;
+  }
+  const expiryDate = new Date(`${expiry}T23:59:59`);
+  const millisToExpiry = expiryDate.getTime() - Date.now();
+  const years = Math.max(millisToExpiry / (365 * 24 * 60 * 60 * 1000), 1 / 365);
+  const sigma = ivPct / 100;
+  if (sigma <= 0 || spot <= 0 || strike <= 0) {
+    return null;
+  }
+  const sqrtT = Math.sqrt(years);
+  const d2 = (Math.log(spot / strike) + (ITM_PROBABILITY_RISK_FREE_RATE - 0.5 * sigma * sigma) * years) / (sigma * sqrtT);
+  const probability = right === "C" ? normalCdf(d2) : normalCdf(-d2);
+  return Math.max(0, Math.min(100, probability * 100));
 }
 
 function pnlTone(value: number | null | undefined) {
@@ -803,7 +844,7 @@ function App() {
   function renderIbkrOptionsSurface() {
     const busySymbolLabel = chainSymbol;
     const selectedChainGreekOptions = CHAIN_GREEK_OPTIONS.filter((option) => visibleChainGreeks.includes(option.key));
-    const chainTableColumnCount = 13 + selectedChainGreekOptions.length * 2;
+    const chainTableColumnCount = 15 + selectedChainGreekOptions.length * 2;
     const selectedContractLabel = ticketDraft
       ? `${ticketDraft.symbol} ${ticketDraft.expiry} ${fmtNumber(ticketDraft.strike)}${ticketDraft.right}`
       : null;
@@ -979,13 +1020,13 @@ function App() {
                 <table className="min-w-max text-left text-sm">
                   <thead className="bg-panel/95 text-[11px] uppercase tracking-[0.18em] text-muted">
                     <tr className="border-b border-line/70 text-[10px] tracking-[0.24em]">
-                      <th className="px-4 pb-2 pt-3 text-accent" colSpan={5 + selectedChainGreekOptions.length}>
+                      <th className="px-4 pb-2 pt-3 text-accent" colSpan={6 + selectedChainGreekOptions.length}>
                         Calls
                       </th>
                       <th className="px-4 pb-2 pt-3 text-text" colSpan={1}>
                         Strike
                       </th>
-                      <th className="px-4 pb-2 pt-3 text-caution" colSpan={selectedChainGreekOptions.length + 5}>
+                      <th className="px-4 pb-2 pt-3 text-caution" colSpan={selectedChainGreekOptions.length + 6}>
                         Puts
                       </th>
                       <th className="px-4 pb-2 pt-3 text-right text-muted" colSpan={2}>
@@ -1003,7 +1044,9 @@ function App() {
                           {option.label}
                         </th>
                       ))}
+                      <th className="px-4 py-3">ITM %</th>
                       <th className="px-4 py-3">Strike</th>
+                      <th className="px-4 py-3">ITM %</th>
                       {selectedChainGreekOptions.map((option) => (
                         <th key={`put-${option.key}`} className="px-4 py-3">
                           {option.label}
@@ -1020,6 +1063,8 @@ function App() {
                   </thead>
                   <tbody>
                     {displayedChainRows.map((row, index) => {
+                      const callItmPct = probabilityItmPct(spotPrice, row.strike, row.callIV, activeExpiry, "C");
+                      const putItmPct = probabilityItmPct(spotPrice, row.strike, row.putIV, activeExpiry, "P");
                       const previousFiveBucket =
                         index === 0 ? null : Math.floor(Math.abs(displayedChainRows[index - 1].distanceFromSpotPct) / 5);
                       const currentFiveBucket = Math.floor(Math.abs(row.distanceFromSpotPct) / 5);
@@ -1077,7 +1122,9 @@ function App() {
                                 {fmtGreek(option.callValue(row), option.suffix ?? "")}
                               </td>
                             ))}
+                            <td className="px-4 py-3">{fmtNumber(callItmPct, "%")}</td>
                             <td className="px-4 py-3 font-medium text-text">{fmtCurrencySmall(row.strike)}</td>
+                            <td className="px-4 py-3">{fmtNumber(putItmPct, "%")}</td>
                             {selectedChainGreekOptions.map((option) => (
                               <td key={`put-cell-${option.key}-${row.strike}`} className="px-4 py-3">
                                 {fmtGreek(option.putValue(row), option.suffix ?? "")}
