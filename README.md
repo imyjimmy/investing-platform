@@ -1,6 +1,6 @@
-# IBKR Options Visualization Dashboard
+# Investing Platform
 
-This repo now includes a local-first trader dashboard for **Van Aken Investments LLC** that connects to the **Interactive Brokers socket API through IB Gateway or TWS**, using `ib_insync` on the backend.
+This repo now includes a local-first investing platform for **Van Aken Investments LLC** that connects to the **Interactive Brokers socket API through IB Gateway or TWS**, using `ib_insync` on the backend.
 
 The original options-scanner pipeline is still present under `src/options_scanner/`, but the new MVP is built around a FastAPI service plus a React workstation UI for:
 
@@ -52,25 +52,25 @@ The original options-scanner pipeline is still present under `src/options_scanne
 cp .env.example .env
 ```
 
-3. For offline development, leave `OPTIONS_DASHBOARD_DATA_MODE=mock`.
+3. For offline development, leave `INVESTING_PLATFORM_DATA_MODE=mock`.
 
 4. For a live IB Gateway session, change these values in `.env`:
 
 ```env
-OPTIONS_DASHBOARD_DATA_MODE=ibkr
-OPTIONS_DASHBOARD_EXECUTION_MODE=paper
-OPTIONS_DASHBOARD_IB_HOST=127.0.0.1
-OPTIONS_DASHBOARD_IB_PORT=4002
-OPTIONS_DASHBOARD_IB_CLIENT_ID=17
-OPTIONS_DASHBOARD_IB_MARKET_DATA_TYPE=1
+INVESTING_PLATFORM_DATA_MODE=ibkr
+INVESTING_PLATFORM_EXECUTION_MODE=paper
+INVESTING_PLATFORM_IB_HOST=127.0.0.1
+INVESTING_PLATFORM_IB_PORT=4002
+INVESTING_PLATFORM_IB_CLIENT_ID=17
+INVESTING_PLATFORM_IB_MARKET_DATA_TYPE=1
 ```
 
 For the EDGAR source, also set your research root and a descriptive SEC user agent:
 
 ```env
-OPTIONS_DASHBOARD_RESEARCH_ROOT=~/Documents/Finances/research
-OPTIONS_DASHBOARD_EDGAR_USER_AGENT=Your Name your_email@example.com
-OPTIONS_DASHBOARD_EDGAR_MAX_REQUESTS_PER_SECOND=5
+INVESTING_PLATFORM_RESEARCH_ROOT=~/Documents/Finances/research
+INVESTING_PLATFORM_EDGAR_USER_AGENT=Your Name your_email@example.com
+INVESTING_PLATFORM_EDGAR_MAX_REQUESTS_PER_SECOND=5
 ```
 
 For Coinbase account access, either add a CDP Ed25519 key id + secret, a bearer token, or a PEM-style key:
@@ -213,12 +213,12 @@ SEC EDGAR download helper:
 ## Repo layout
 
 ```text
-options-platform/
+investing-platform/
   frontend/
     src-tauri/
   scripts/
   src/
-    options_dashboard/
+    investing_platform/
     options_scanner/
   .env.example
   requirements.txt

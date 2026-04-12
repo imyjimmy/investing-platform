@@ -11,14 +11,14 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from options_dashboard.config import DashboardSettings  # noqa: E402
-from options_dashboard.services.ib_gateway import IBGatewayBrokerService  # noqa: E402
+from investing_platform.config import DashboardSettings  # noqa: E402
+from investing_platform.services.ib_gateway import IBGatewayBrokerService  # noqa: E402
 
 
 def main() -> int:
     settings = DashboardSettings.load()
     if settings.data_mode != "ibkr":
-        print("OPTIONS_DASHBOARD_DATA_MODE is not set to `ibkr`. The smoke test will still try the configured gateway.")
+        print("INVESTING_PLATFORM_DATA_MODE is not set to `ibkr`. The smoke test will still try the configured gateway.")
     service = IBGatewayBrokerService(settings)
     try:
         status = service.connect(force=True)
