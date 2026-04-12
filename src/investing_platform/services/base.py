@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Generic, TypeVar
 
-from options_dashboard.models import (
+from investing_platform.models import (
     AccountSnapshot,
     ConnectionStatus,
     OpenOrderExposure,

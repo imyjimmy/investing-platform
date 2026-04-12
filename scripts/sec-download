@@ -14,4 +14,4 @@ fi
 
 cd "${PROJECT_ROOT}"
 PYTHONPATH="${PROJECT_ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-  ./scripts/venv.sh run "${VENV_DIR}" -- python -m options_dashboard.edgar_cli "$@"
+  ./scripts/venv.sh run "${VENV_DIR}" -- python -m investing_platform.edgar_cli "$@"

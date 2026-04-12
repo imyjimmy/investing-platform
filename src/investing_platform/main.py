@@ -1,4 +1,4 @@
-"""FastAPI application entrypoint for the local options dashboard."""
+"""FastAPI application entrypoint for the local investing platform."""
 
 from __future__ import annotations
 
@@ -9,15 +9,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from options_dashboard.api.routes import router
-from options_dashboard.services.app_state import get_settings
+from investing_platform.api.routes import router
+from investing_platform.services.app_state import get_settings
 
 
 settings = get_settings()
 app = FastAPI(
-    title="IBKR Options Visualization Dashboard",
+    title="Investing Platform API",
     version="0.1.0",
-    description="Local-first dashboard for IB Gateway paper trading and options income analytics.",
+    description="Local-first investing platform for multi-connector portfolio workflows and options analytics.",
 )
 
 app.add_middleware(

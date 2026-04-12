@@ -6,8 +6,8 @@ import argparse
 import json
 import sys
 
-from options_dashboard.models import EdgarDownloadRequest
-from options_dashboard.services.app_state import get_edgar_service
+from investing_platform.models import EdgarDownloadRequest
+from investing_platform.services.app_state import get_edgar_service
 
 
 def build_parser() -> argparse.ArgumentParser:

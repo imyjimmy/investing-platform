@@ -1,4 +1,4 @@
-"""FastAPI routes for the options dashboard."""
+"""FastAPI routes for the investing platform."""
 
 from __future__ import annotations
 
@@ -6,9 +6,9 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, Query
 
-from options_dashboard import __version__
-from options_dashboard.models import EdgarDownloadRequest, InvestorPdfDownloadRequest, OptionOrderRequest
-from options_dashboard.services.analytics import (
+from investing_platform import __version__
+from investing_platform.models import EdgarDownloadRequest, InvestorPdfDownloadRequest, OptionOrderRequest
+from investing_platform.services.analytics import (
     build_collateral_summary,
     build_exposure_by_expiry,
     build_exposure_by_ticker,
@@ -16,14 +16,14 @@ from options_dashboard.services.analytics import (
     build_risk_summary,
     build_scenario,
 )
-from options_dashboard.services.app_state import (
+from investing_platform.services.app_state import (
     get_broker_service,
     get_coinbase_service,
     get_edgar_service,
     get_investor_pdf_service,
     get_settings,
 )
-from options_dashboard.services.base import BrokerUnavailableError
+from investing_platform.services.base import BrokerUnavailableError
 
 
 router = APIRouter(prefix="/api")
@@ -54,7 +54,7 @@ def health() -> dict:
     service = _service()
     return {
         "ok": True,
-        "service": "options-dashboard",
+        "service": "investing-platform",
         "version": __version__,
         "timestamp": datetime.now(UTC),
         "connection": service.connection_status().model_dump(),

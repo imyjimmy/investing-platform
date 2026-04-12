@@ -5,8 +5,8 @@ from __future__ import annotations
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
-from options_dashboard.config import DashboardSettings
-from options_dashboard.models import (
+from investing_platform.config import DashboardSettings
+from investing_platform.models import (
     AccountSnapshot,
     ChainHighlight,
     ChainRow,
@@ -21,8 +21,8 @@ from options_dashboard.models import (
     SubmittedOrder,
     UnderlyingQuote,
 )
-from options_dashboard.services.analytics import build_collateral_summary
-from options_dashboard.services.base import BrokerService, BrokerServiceError, PortfolioSnapshot
+from investing_platform.services.analytics import build_collateral_summary
+from investing_platform.services.base import BrokerService, BrokerServiceError, PortfolioSnapshot
 from options_scanner.providers.mock_provider import MockOptionsChainProvider, MockPriceDataProvider
 
 

@@ -22,8 +22,8 @@ from reportlab.lib.pagesizes import letter
 from reportlab.lib.utils import simpleSplit
 from reportlab.pdfgen import canvas
 
-from options_dashboard.config import DashboardSettings
-from options_dashboard.models import EdgarDownloadRequest, EdgarDownloadResponse, EdgarSourceStatus
+from investing_platform.config import DashboardSettings
+from investing_platform.models import EdgarDownloadRequest, EdgarDownloadResponse, EdgarSourceStatus
 
 
 COMPANY_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
@@ -887,7 +887,7 @@ class EdgarDownloader:
         pdf_path.parent.mkdir(parents=True, exist_ok=True)
 
         pdf = canvas.Canvas(str(temp_path), pagesize=letter)
-        pdf.setAuthor("Options Dashboard EDGAR")
+        pdf.setAuthor("Investing Platform EDGAR")
         pdf.setTitle(title)
         page_width, page_height = letter
         margin = 54

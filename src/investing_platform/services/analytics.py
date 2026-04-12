@@ -6,7 +6,7 @@ from collections import defaultdict
 from datetime import UTC, date, datetime
 from math import fabs
 
-from options_dashboard.models import (
+from investing_platform.models import (
     AlertItem,
     CollateralSummary,
     ExpiryExposureRow,
@@ -16,7 +16,7 @@ from options_dashboard.models import (
     ScenarioTickerImpact,
     TickerExposureRow,
 )
-from options_dashboard.services.base import PortfolioSnapshot
+from investing_platform.services.base import PortfolioSnapshot
 
 
 def build_collateral_summary(snapshot: PortfolioSnapshot, safety_buffer: float) -> CollateralSummary:

@@ -108,7 +108,7 @@ fn spawn_backend() -> tauri::Result<Child> {
     )
     .arg("-m")
     .arg("uvicorn")
-    .arg("options_dashboard.main:app")
+    .arg("investing_platform.main:app")
     .arg("--host")
     .arg("127.0.0.1")
     .arg("--port")

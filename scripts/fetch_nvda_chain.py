@@ -11,8 +11,8 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from options_dashboard.config import DashboardSettings  # noqa: E402
-from options_dashboard.services.ib_gateway import IBGatewayBrokerService  # noqa: E402
+from investing_platform.config import DashboardSettings  # noqa: E402
+from investing_platform.services.ib_gateway import IBGatewayBrokerService  # noqa: E402
 
 
 def main() -> int:

@@ -12,8 +12,8 @@ import threading
 import time
 from typing import Any, Callable, Iterable, TypeVar, cast
 
-from options_dashboard.config import DashboardSettings
-from options_dashboard.models import (
+from investing_platform.config import DashboardSettings
+from investing_platform.models import (
     AccountSnapshot,
     ChainHighlight,
     ChainRow,
@@ -28,8 +28,8 @@ from options_dashboard.models import (
     SubmittedOrder,
     UnderlyingQuote,
 )
-from options_dashboard.services.analytics import build_collateral_summary
-from options_dashboard.services.base import BrokerService, BrokerUnavailableError, CacheEntry, PortfolioSnapshot
+from investing_platform.services.analytics import build_collateral_summary
+from investing_platform.services.base import BrokerService, BrokerUnavailableError, CacheEntry, PortfolioSnapshot
 
 
 try:

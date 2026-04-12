@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from options_dashboard.config import DashboardSettings
-from options_dashboard.services.base import BrokerService
-from options_dashboard.services.coinbase import CoinbaseService
-from options_dashboard.services.edgar import EdgarDownloader
-from options_dashboard.services.ib_gateway import IBGatewayBrokerService
-from options_dashboard.services.investor_pdfs import InvestorPdfDownloader
-from options_dashboard.services.mock_broker import MockBrokerService
+from investing_platform.config import DashboardSettings
+from investing_platform.services.base import BrokerService
+from investing_platform.services.coinbase import CoinbaseService
+from investing_platform.services.edgar import EdgarDownloader
+from investing_platform.services.ib_gateway import IBGatewayBrokerService
+from investing_platform.services.investor_pdfs import InvestorPdfDownloader
+from investing_platform.services.mock_broker import MockBrokerService
 
 
 @lru_cache(maxsize=1)

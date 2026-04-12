@@ -15,9 +15,9 @@ from urllib.parse import urljoin, urlparse
 
 import requests
 
-from options_dashboard.config import DashboardSettings
-from options_dashboard.models import CoinbaseHolding, CoinbasePortfolioResponse, CoinbaseSourceStatus
-from options_dashboard.services.base import CacheEntry
+from investing_platform.config import DashboardSettings
+from investing_platform.models import CoinbaseHolding, CoinbasePortfolioResponse, CoinbaseSourceStatus
+from investing_platform.services.base import CacheEntry
 
 
 @dataclass(slots=True)

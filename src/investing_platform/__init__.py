@@ -1,4 +1,4 @@
-"""IBKR options dashboard package."""
+"""Investing platform package."""
 
 from __future__ import annotations
 

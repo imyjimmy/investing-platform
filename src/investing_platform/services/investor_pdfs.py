@@ -18,8 +18,8 @@ from urllib.parse import parse_qs, unquote, urljoin, urlparse
 from bs4 import BeautifulSoup
 import requests
 
-from options_dashboard.config import DashboardSettings
-from options_dashboard.models import (
+from investing_platform.config import DashboardSettings
+from investing_platform.models import (
     InvestorPdfArtifact,
     InvestorPdfCategory,
     InvestorPdfDownloadRequest,
