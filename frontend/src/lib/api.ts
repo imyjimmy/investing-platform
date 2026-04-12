@@ -17,6 +17,7 @@ import type {
     RiskSummaryResponse,
     ScenarioResponse,
     SubmittedOrder,
+    UniverseSnapshotResponse,
 } from "./types";
 
 function resolveApiBaseUrl() {
@@ -129,6 +130,7 @@ export const api = {
   openOrders: (accountId?: string) => fetchJson<OpenOrdersResponse>(withAccountId("/api/account/open-orders", accountId)),
   chain: (symbol: string, expiry?: string) =>
     fetchJson<OptionChainResponse>(`/api/market/chain/${symbol}${expiry ? `?expiry=${expiry}` : ""}`),
+  marketUniverse: () => fetchJson<UniverseSnapshotResponse>("/api/market/universe"),
   scenario: (movePct: number, daysForward: number, ivShockPct: number, accountId?: string) =>
     fetchJson<ScenarioResponse>(
       withAccountId(`/api/analytics/scenario?movePct=${movePct}&daysForward=${daysForward}&ivShockPct=${ivShockPct}`, accountId),

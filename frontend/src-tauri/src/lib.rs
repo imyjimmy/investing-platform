@@ -51,7 +51,7 @@ pub fn run() {
         .get_webview_window("main")
         .expect("main window should be configured");
 
-      if !backend_is_available() {
+      if !cfg!(debug_assertions) && !backend_is_available() {
         let child = spawn_backend()?;
         app.state::<BackendProcess>().set(child);
       }

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from concurrent.futures import Future
+from concurrent.futures import Future, TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from math import erf, exp, isfinite, log, pi, sqrt
@@ -159,10 +159,16 @@ class IBGatewayBrokerService(BrokerService):
         try:
             chain = cast(
                 OptionChainResponse,
-                self._submit(lambda ib: self._fetch_option_chain(ib, symbol, expiry), timeout=self.settings.ib_request_timeout_seconds + 8.0),
+                self._submit(lambda ib: self._fetch_option_chain(ib, symbol, expiry), timeout=self.settings.ib_request_timeout_seconds + 18.0),
             )
             self._chain_cache[cache_key] = CacheEntry(chain, datetime.now(UTC))
             return chain
+        except FutureTimeoutError as exc:
+            if cached is not None:
+                return cached.value.model_copy(update={"isStale": True})
+            raise BrokerUnavailableError(
+                f"Timed out loading the option chain for {symbol}. The IBKR session may be missing option quote entitlements or responding slowly."
+            ) from exc
         except Exception as exc:
             if cached is not None:
                 return cached.value.model_copy(update={"isStale": True})
@@ -228,31 +234,46 @@ class IBGatewayBrokerService(BrokerService):
         )
 
     def preview_option_order(self, request: OptionOrderRequest) -> OptionOrderPreview:
-        return cast(
-            OptionOrderPreview,
-            self._submit(
-                lambda ib: self._preview_option_order_on_thread(ib, request),
-                timeout=self.settings.ib_request_timeout_seconds + 4.0,
-            ),
-        )
+        try:
+            return cast(
+                OptionOrderPreview,
+                self._submit(
+                    lambda ib: self._preview_option_order_on_thread(ib, request),
+                    timeout=self.settings.ib_request_timeout_seconds + 18.0,
+                ),
+            )
+        except FutureTimeoutError as exc:
+            raise BrokerUnavailableError(
+                f"Timed out previewing {request.symbol} {request.expiry} {request.right}{request.strike:.2f}. The IBKR worker is busy or the contract lookup is slow."
+            ) from exc
 
     def submit_option_order(self, request: OptionOrderRequest) -> SubmittedOrder:
-        return cast(
-            SubmittedOrder,
-            self._submit(
-                lambda ib: self._submit_option_order_on_thread(ib, request),
-                timeout=self.settings.ib_request_timeout_seconds + self.settings.ib_order_ack_timeout_seconds + 4.0,
-            ),
-        )
+        try:
+            return cast(
+                SubmittedOrder,
+                self._submit(
+                    lambda ib: self._submit_option_order_on_thread(ib, request),
+                    timeout=self.settings.ib_request_timeout_seconds + self.settings.ib_order_ack_timeout_seconds + 18.0,
+                ),
+            )
+        except FutureTimeoutError as exc:
+            raise BrokerUnavailableError(
+                f"Timed out submitting {request.symbol} {request.expiry} {request.right}{request.strike:.2f}. The IBKR worker is busy or order routing is slow."
+            ) from exc
 
     def cancel_order(self, account_id: str, order_id: int) -> OrderCancelResponse:
-        return cast(
-            OrderCancelResponse,
-            self._submit(
-                lambda ib: self._cancel_order_on_thread(ib, account_id, order_id),
-                timeout=self.settings.ib_request_timeout_seconds + self.settings.ib_order_ack_timeout_seconds + 3.0,
-            ),
-        )
+        try:
+            return cast(
+                OrderCancelResponse,
+                self._submit(
+                    lambda ib: self._cancel_order_on_thread(ib, account_id, order_id),
+                    timeout=self.settings.ib_request_timeout_seconds + self.settings.ib_order_ack_timeout_seconds + 12.0,
+                ),
+            )
+        except FutureTimeoutError as exc:
+            raise BrokerUnavailableError(
+                f"Timed out cancelling order {order_id} for {account_id}. The IBKR worker is busy or order routing is slow."
+            ) from exc
 
     def _submit(self, callback: Callable[[Any], TaskResultT], timeout: float) -> TaskResultT:
         future: Future[Any] = Future()
@@ -852,9 +873,13 @@ class IBGatewayBrokerService(BrokerService):
         for trade in open_trades:
             order = trade.order
             contract = trade.contract
+            order_status = trade.orderStatus
             side = str(order.action).upper()
             quantity = float(order.totalQuantity or 0.0)
             limit_price = _safe_float(getattr(order, "lmtPrice", None))
+            status = str(getattr(order_status, "status", "") or "Submitted")
+            filled_quantity = float(getattr(order_status, "filled", 0.0) or 0.0)
+            remaining_quantity = float(getattr(order_status, "remaining", quantity) or 0.0)
             opening_or_closing = _order_open_or_close(contract, side, quantity, stock_qty, option_qty)
             strategy_tag = _strategy_tag(contract.right, -1 if side == "SELL" else 1, 0) if contract.secType == "OPT" else "stock"
             estimated_credit = 0.0
@@ -879,11 +904,14 @@ class IBGatewayBrokerService(BrokerService):
             orders.append(
                 OpenOrderExposure(
                     orderId=int(order.orderId),
+                    status=status,
                     symbol=contract.symbol,
                     secType=contract.secType,
                     orderType=str(order.orderType),
                     side=side,
                     quantity=quantity,
+                    filledQuantity=round(filled_quantity, 4),
+                    remainingQuantity=round(remaining_quantity, 4),
                     limitPrice=round(limit_price, 4) if _is_valid_number(limit_price) else None,
                     estimatedCapitalImpact=round(estimated_capital, 2),
                     estimatedCredit=round(estimated_credit, 2),
@@ -939,7 +967,7 @@ class IBGatewayBrokerService(BrokerService):
         best_market_data_type = preferred_market_data_type
         best_score = -1
         minimum_useful_payloads = max(4, min(len(contracts), 10))
-        for market_data_type in _market_data_type_candidates(preferred_market_data_type):
+        for market_data_type in _option_market_data_type_candidates(preferred_market_data_type):
             tickers = self._req_market_data_in_batches(
                 ib,
                 contracts,
@@ -983,7 +1011,7 @@ class IBGatewayBrokerService(BrokerService):
         for batch in _batched(contracts, self.settings.chain_batch_size):
             ib.reqMarketDataType(market_data_type)
             batch_tickers = [ib.reqMktData(contract, generic_tick_list, False, False) for contract in batch]
-            deadline = time.monotonic() + min(max(self.settings.ib_request_timeout_seconds / 5.0, 1.0), 2.5)
+            deadline = time.monotonic() + min(max(self.settings.ib_request_timeout_seconds / 18.0, 0.4), 0.8)
             while time.monotonic() < deadline:
                 ib.sleep(0.2)
                 if all(_ticker_has_quote_payload(ticker) for ticker in batch_tickers):
@@ -1097,6 +1125,15 @@ def _market_data_mode_label(market_data_type: int) -> str:
 
 def _market_data_type_candidates(preferred_type: int) -> list[int]:
     candidates = [preferred_type, 3, 4]
+    deduped: list[int] = []
+    for candidate in candidates:
+        if candidate not in deduped:
+            deduped.append(candidate)
+    return deduped
+
+
+def _option_market_data_type_candidates(preferred_type: int) -> list[int]:
+    candidates = [preferred_type, 3]
     deduped: list[int] = []
     for candidate in candidates:
         if candidate not in deduped:

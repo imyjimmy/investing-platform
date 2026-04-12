@@ -132,11 +132,14 @@ class OptionPosition(DashboardModel):
 
 class OpenOrderExposure(DashboardModel):
     orderId: int
+    status: str = "Submitted"
     symbol: str
     secType: str
     orderType: str
     side: str
     quantity: float
+    filledQuantity: float = 0.0
+    remainingQuantity: float | None = None
     limitPrice: float | None = None
     estimatedCapitalImpact: float
     estimatedCredit: float = 0.0

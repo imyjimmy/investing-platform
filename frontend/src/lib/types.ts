@@ -82,11 +82,14 @@ export interface OptionPosition {
 
 export interface OpenOrderExposure {
   orderId: number;
+  status: string;
   symbol: string;
   secType: string;
   orderType: string;
   side: string;
   quantity: number;
+  filledQuantity: number;
+  remainingQuantity: number | null;
   limitPrice: number | null;
   estimatedCapitalImpact: number;
   estimatedCredit: number;
@@ -254,6 +257,37 @@ export interface ScenarioResponse {
   totalCallAwayNotional: number;
   impacts: ScenarioTickerImpact[];
   methodology: string;
+  generatedAt: string;
+  isStale: boolean;
+}
+
+export interface UniverseCandidate {
+  symbol: string;
+  asOfDate: string;
+  lastClose: number | null;
+  betaQqq60d: number | null;
+  betaQqq120d: number | null;
+  betaSpy120d: number | null;
+  hv20: number | null;
+  hv60: number | null;
+  atmFrontMonthIv: number | null;
+  atm3045dIv: number | null;
+  ivToHv20: number | null;
+  avgDailyDollarVolume20d: number | null;
+  totalOptionVolume: number | null;
+  totalOptionOpenInterest: number | null;
+  compositeScore: number | null;
+  betaComponent: number | null;
+  impliedVolComponent: number | null;
+  recommendedStrategy: string | null;
+  whyItRanked: string | null;
+  eligible: boolean;
+}
+
+export interface UniverseSnapshotResponse {
+  snapshotDate: string;
+  rows: UniverseCandidate[];
+  sourceNotice: string | null;
   generatedAt: string;
   isStale: boolean;
 }

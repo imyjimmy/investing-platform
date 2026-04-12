@@ -79,11 +79,11 @@ class DashboardSettings:
     ib_option_exchange: str = "SMART"
     ib_currency: str = "USD"
     chain_expiry_limit: int = 6
-    chain_strike_limit: int = 14
+    chain_strike_limit: int = 10
     chain_moneyness_pct: float = 0.18
     chain_batch_size: int = 40
-    chain_historical_fallback_contract_limit: int = 12
-    chain_cache_ttl_seconds: float = 12.0
+    chain_historical_fallback_contract_limit: int = 4
+    chain_cache_ttl_seconds: float = 120.0
     snapshot_cache_ttl_seconds: float = 10.0
     safety_buffer: float = 25_000.0
     watchlist_symbols: list[str] = field(
@@ -136,7 +136,7 @@ class DashboardSettings:
             ib_request_timeout_seconds=_env_float(
                 "INVESTING_PLATFORM_IB_REQUEST_TIMEOUT_SECONDS",
                 "OPTIONS_DASHBOARD_IB_REQUEST_TIMEOUT_SECONDS",
-                default=12.0,
+                default=120.0,
             ),
             ib_order_ack_timeout_seconds=_env_float(
                 "INVESTING_PLATFORM_IB_ORDER_ACK_TIMEOUT_SECONDS",
@@ -162,12 +162,12 @@ class DashboardSettings:
             chain_expiry_limit=_env_int(
                 "INVESTING_PLATFORM_CHAIN_EXPIRY_LIMIT",
                 "OPTIONS_DASHBOARD_CHAIN_EXPIRY_LIMIT",
-                default=6,
+                default=4,
             ),
             chain_strike_limit=_env_int(
                 "INVESTING_PLATFORM_CHAIN_STRIKE_LIMIT",
                 "OPTIONS_DASHBOARD_CHAIN_STRIKE_LIMIT",
-                default=14,
+                default=10,
             ),
             chain_moneyness_pct=_env_float(
                 "INVESTING_PLATFORM_CHAIN_MONEYNESS_PCT",
@@ -182,7 +182,7 @@ class DashboardSettings:
             chain_historical_fallback_contract_limit=_env_int(
                 "INVESTING_PLATFORM_CHAIN_HISTORICAL_FALLBACK_CONTRACT_LIMIT",
                 "OPTIONS_DASHBOARD_CHAIN_HISTORICAL_FALLBACK_CONTRACT_LIMIT",
-                default=12,
+                default=6,
             ),
             chain_cache_ttl_seconds=_env_float(
                 "INVESTING_PLATFORM_CHAIN_CACHE_TTL_SECONDS",
