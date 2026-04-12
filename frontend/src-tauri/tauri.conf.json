@@ -1,8 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "IBKR Options Workstation",
+  "productName": "Investing Platform",
   "version": "0.1.0",
-  "identifier": "llc.vanaken.ibkr-options-workstation",
+  "identifier": "llc.vanaken.investing-platform",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://127.0.0.1:5173",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "IBKR Options Workstation",
+        "title": "Investing Platform",
         "width": 1600,
         "height": 1040,
         "minWidth": 1280,
