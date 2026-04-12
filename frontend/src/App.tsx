@@ -1015,7 +1015,6 @@ function App() {
                             title={ibkrConnectorTitle}
                           />
 
-                          {!ibkrConnectorCollapsed ? <Panel title="Chain Explorer" eyebrow={ibkrConnectorLabel} /> : null}
                           {renderCoinbasePanel()}
                         </>
                       )}
