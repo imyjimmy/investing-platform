@@ -12,9 +12,7 @@ import {
 
 import { api } from "./lib/api";
 import type {
-  CoinbaseSourceStatus,
   ChainRow,
-  ConnectionStatus,
   EdgarDownloadRequest,
   EdgarDownloadResponse,
   InvestorPdfDownloadRequest,
@@ -32,8 +30,6 @@ import { EdgarWorkspace } from "./components/EdgarWorkspace";
 import { InvestorPdfsWorkspace } from "./components/InvestorPdfsWorkspace";
 import { MetricCard } from "./components/MetricCard";
 import { Panel } from "./components/Panel";
-import { RiskBadge } from "./components/RiskBadge";
-import { StatusBadge } from "./components/StatusBadge";
 
 const currency = new Intl.NumberFormat("en-US", {
   style: "currency",
@@ -195,8 +191,18 @@ type TicketDraft = {
 };
 
 type SourceTone = "live" | "off" | "planned";
-type WorkspaceSurface = "home" | "ibkr" | "coinbase" | "edgar" | "investorPdfs";
+type WorkspaceSurface =
+  | "dashboard"
+  | "ticker"
+  | "options"
+  | "crypto"
+  | "universe"
+  | "earnings"
+  | "filings"
+  | "research"
+  | "globalSettings";
 type ConnectionHealthTone = "safe" | "caution" | "danger" | "planned";
+type DashboardAccountKey = "vanAken" | "personal";
 
 type AccountConnectorCard = {
   id: string;
@@ -206,7 +212,6 @@ type AccountConnectorCard = {
   tone: ConnectionHealthTone;
   countsTowardHealth: boolean;
   icon: ReactNode;
-  workspace?: WorkspaceSurface;
 };
 
 type ChainGreekKey = "iv" | "delta" | "gamma" | "theta" | "vega" | "rho";
@@ -261,6 +266,37 @@ const CHAIN_GREEK_OPTIONS: ChainGreekOption[] = [
   },
 ];
 
+const DASHBOARD_ACCOUNTS: Array<{
+  key: DashboardAccountKey;
+  name: string;
+  eyebrow: string;
+  description: string;
+  routeAccountIds: string[];
+}> = [
+  {
+    key: "vanAken",
+    name: "Van Aken",
+    eyebrow: "Van Aken Investments LLC",
+    description: "LLC portfolio, balances, routed orders, and account-owned source sections.",
+    routeAccountIds: ["DUP433635"],
+  },
+  {
+    key: "personal",
+    name: "Personal",
+    eyebrow: "Personal investing account",
+    description: "Personal portfolio, balances, routed orders, and execution context.",
+    routeAccountIds: ["U25316101"],
+  },
+];
+
+function dashboardAccountOwnsRoute(accountKey: DashboardAccountKey, routedAccount: string | null | undefined) {
+  if (!routedAccount) {
+    return false;
+  }
+  const account = DASHBOARD_ACCOUNTS.find((candidate) => candidate.key === accountKey);
+  return Boolean(account?.routeAccountIds.includes(routedAccount.trim().toUpperCase()));
+}
+
 function readVisibleChainGreeks(): ChainGreekKey[] {
   if (typeof window === "undefined") {
     return [...DEFAULT_VISIBLE_CHAIN_GREEKS];
@@ -283,11 +319,12 @@ function readVisibleChainGreeks(): ChainGreekKey[] {
 function App() {
   const queryClient = useQueryClient();
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
   const [ibkrConnectorCollapsed, setIbkrConnectorCollapsed] = useState(false);
   const [coinbaseConnectorCollapsed, setCoinbaseConnectorCollapsed] = useState(false);
-  const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceSurface>("home");
+  const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceSurface>("dashboard");
+  const [selectedDashboardAccountKey, setSelectedDashboardAccountKey] = useState<DashboardAccountKey>("vanAken");
+  const [dashboardAccountSelectionLocked, setDashboardAccountSelectionLocked] = useState(false);
   const [chainSymbol, setChainSymbol] = useState("NVDA");
   const [chainSymbolInput, setChainSymbolInput] = useState("NVDA");
   const [visibleChainGreeks, setVisibleChainGreeks] = useState<ChainGreekKey[]>(() => readVisibleChainGreeks());
@@ -365,6 +402,13 @@ function App() {
     queryFn: () => api.chain(chainSymbol, selectedExpiry),
     refetchInterval: false,
     staleTime: 120_000,
+  });
+
+  const universeQuery = useQuery({
+    queryKey: ["market-universe"],
+    queryFn: api.marketUniverse,
+    refetchInterval: false,
+    staleTime: 300_000,
   });
 
   const scenarioQuery = useQuery({
@@ -494,6 +538,21 @@ function App() {
   }, [connectionQuery.data?.accountId, connectionQuery.data?.managedAccounts, riskSummaryQuery.data?.account.accountId, selectedAccountId]);
 
   useEffect(() => {
+    if (dashboardAccountSelectionLocked) {
+      return;
+    }
+    const routedAccount = connectionQuery.data?.accountId;
+    if (!routedAccount) {
+      return;
+    }
+    const matchingAccount =
+      DASHBOARD_ACCOUNTS.find((account) => account.routeAccountIds.includes(routedAccount.trim().toUpperCase()))?.key ?? null;
+    if (matchingAccount && matchingAccount !== selectedDashboardAccountKey) {
+      setSelectedDashboardAccountKey(matchingAccount);
+    }
+  }, [connectionQuery.data?.accountId, dashboardAccountSelectionLocked, selectedDashboardAccountKey]);
+
+  useEffect(() => {
     if (!ticketDraft) {
       return;
     }
@@ -559,8 +618,6 @@ function App() {
   const routedAccount = connectionQuery.data?.accountId ?? selectedAccount;
   const routedAccountType = connectionQuery.data?.routedAccountType ?? routeKindFromAccountId(routedAccount);
   const routedAccountPill = routePresentation(routedAccountType);
-  const ibkrConnectorLabel = "IBKR Connector";
-  const ibkrConnectorTitle = "Broker Account";
   const parsedLimitPrice = ticketOrderType === "LMT" ? Number(ticketLimitPrice) : null;
   const validLimitPrice =
     ticketOrderType === "MKT" ? null : Number.isFinite(parsedLimitPrice) && parsedLimitPrice != null && parsedLimitPrice > 0 ? parsedLimitPrice : null;
@@ -643,26 +700,8 @@ function App() {
   const reconnectError = reconnectMutation.error instanceof Error ? reconnectMutation.error.message : null;
   const connectionEndpoint = connectionQuery.data ? `${connectionQuery.data.host}:${connectionQuery.data.port}` : "127.0.0.1:4002";
   const sourceError = connectError ?? reconnectError ?? connectionQuery.data?.lastError ?? null;
-  const sourceTone: SourceTone = connectionQuery.data?.connected ? "live" : "off";
-  const sourceBadge = connectionQuery.data?.connected ? (connectionQuery.data?.mode === "mock" ? "Mock" : "Live") : "Off";
-  const sourceMeta = connectionQuery.data?.connected
-    ? `${connectionEndpoint} · ${connectionQuery.data.marketDataMode}`
-    : `${connectionEndpoint} · waiting for gateway`;
   const coinbaseStatusError = coinbaseStatusQuery.error instanceof Error ? coinbaseStatusQuery.error.message : null;
   const coinbasePortfolioError = coinbasePortfolioQuery.error instanceof Error ? coinbasePortfolioQuery.error.message : null;
-  const coinbaseSourceTone: SourceTone = coinbaseStatusQuery.isLoading ? "planned" : coinbaseStatusQuery.data?.available ? "live" : "off";
-  const coinbaseBadge = coinbaseStatusQuery.isLoading
-    ? "Checking"
-    : coinbaseStatusQuery.data?.available
-      ? "Ready"
-      : coinbaseStatusQuery.data?.authMode === "missing"
-        ? "Setup"
-        : "Off";
-  const coinbaseMeta = coinbaseStatusQuery.isLoading
-    ? "Assigned to Van Aken dashboard"
-    : coinbaseStatusQuery.data?.available
-      ? "Assigned to Van Aken dashboard"
-      : "Connector settings for Van Aken dashboard";
   const coinbaseConnectorTone: ConnectionHealthTone = coinbaseStatusQuery.isLoading
     ? "caution"
     : coinbaseStatusQuery.data?.available
@@ -687,47 +726,30 @@ function App() {
       ? "Assigned to Van Aken dashboard"
       : "Connector settings for Van Aken dashboard";
   const edgarStatusError = edgarStatusQuery.error instanceof Error ? edgarStatusQuery.error.message : null;
-  const edgarSourceTone: SourceTone = edgarStatusQuery.data?.available ? "live" : edgarStatusError ? "off" : "off";
-  const edgarBadge = edgarSyncing ? "Syncing" : edgarStatusQuery.data?.available ? "Ready" : "Off";
-  const edgarMeta = "SEC API";
   const investorPdfStatusError = investorPdfStatusQuery.error instanceof Error ? investorPdfStatusQuery.error.message : null;
-  const investorPdfSourceTone: SourceTone = investorPdfStatusQuery.data?.available ? "live" : investorPdfStatusError ? "off" : "off";
-  const investorPdfBadge = investorPdfSyncing ? "Syncing" : investorPdfStatusQuery.data?.available ? "Ready" : "Off";
-  const investorPdfMeta = "Annual reports + SEC PDF exhibits";
   const dataModeLabel = connectionQuery.data?.mode === "ibkr" ? "IBKR gateway session" : "Mock snapshot";
   const executionModeLabel = executionEnabled ? "Gateway-routed execution" : "Disabled";
   const refreshCadenceLabel = "Conn 10s · Risk 15s · Chain 20s";
   const heartbeatLabel = connectionQuery.data?.lastHeartbeatAt ? formatTimestamp(connectionQuery.data.lastHeartbeatAt) : "No heartbeat";
-  const accountSettingsConnectors: AccountConnectorCard[] = [
-    {
-      id: "ibkr",
-      title: "IBKR",
-      status: connectionQuery.isLoading
-        ? "Checking"
-        : connectionQuery.data?.connected
-          ? risk?.isStale
-            ? "Connected · stale snapshot"
-            : "Connected"
-          : "Disconnected",
-      detail: connectionQuery.isLoading
-        ? "Loading broker connector status"
-        : connectionQuery.data?.connected
-          ? `${connectionEndpoint} · ${executionEnabled ? "execution enabled" : "read-only session"}`
-          : sourceError ?? `${connectionEndpoint} · waiting for gateway`,
-      tone: connectionQuery.isLoading ? "caution" : connectionQuery.data?.connected ? (risk?.isStale ? "caution" : "safe") : "danger",
-      countsTowardHealth: true,
-      icon: <BrokerIcon />,
-      workspace: "ibkr",
-    },
+  const selectedDashboardAccount =
+    DASHBOARD_ACCOUNTS.find((account) => account.key === selectedDashboardAccountKey) ?? DASHBOARD_ACCOUNTS[0];
+  const selectedDashboardOwnsRoute = dashboardAccountOwnsRoute(selectedDashboardAccount.key, routedAccount);
+  const dashboardRisk = selectedDashboardOwnsRoute ? risk : null;
+  const dashboardOptionPositions = selectedDashboardOwnsRoute ? optionPositions : [];
+  const dashboardOpenOrders = selectedDashboardOwnsRoute ? openOrders : [];
+  const dashboardSourceNotice =
+    selectedDashboardOwnsRoute || !routedAccount
+      ? null
+      : `${selectedDashboardAccount.name} is selected, but the current Gateway route is ${routedAccount}. Switch the Gateway session to this account to view routed balances, orders, and positions here.`;
+  const globalSourceCards: AccountConnectorCard[] = [
     {
       id: "edgar",
       title: "EDGAR",
       status: edgarStatusQuery.isLoading ? "Checking" : edgarSyncing ? "Syncing" : edgarStatusQuery.data?.available ? "Ready" : "Offline",
-      detail: edgarStatusQuery.isLoading ? "Loading EDGAR source state" : edgarStatusError ?? "SEC filing research source",
+      detail: edgarStatusQuery.isLoading ? "Loading SEC filing source state" : edgarStatusError ?? "SEC filing research source",
       tone: edgarStatusQuery.isLoading ? "caution" : edgarStatusQuery.data?.available ? "safe" : "danger",
       countsTowardHealth: true,
       icon: <DocumentIcon />,
-      workspace: "edgar",
     },
     {
       id: "investor-pdfs",
@@ -737,42 +759,116 @@ function App() {
       tone: investorPdfStatusQuery.isLoading ? "caution" : investorPdfStatusQuery.data?.available ? "safe" : "danger",
       countsTowardHealth: true,
       icon: <PdfLibraryIcon />,
-      workspace: "investorPdfs",
-    },
-    {
-      id: "coinbase",
-      title: "Coinbase",
-      status: coinbaseConnectorStatus,
-      detail: coinbaseConnectorDetail,
-      tone: coinbaseConnectorTone,
-      countsTowardHealth: true,
-      icon: <CoinbaseIcon />,
-      workspace: "coinbase",
-    },
-    {
-      id: "plaid-fidelity",
-      title: "Plaid · Fidelity",
-      status: "Planned",
-      detail: "Future linked brokerage cash and holdings sync",
-      tone: "planned",
-      countsTowardHealth: false,
-      icon: <BankIcon />,
-    },
-    {
-      id: "plaid-chase",
-      title: "Plaid · Chase",
-      status: "Planned",
-      detail: "Future banking cash movement and treasury feed",
-      tone: "planned",
-      countsTowardHealth: false,
-      icon: <BankIcon />,
     },
   ];
+  const accountConnectorCardsByKey: Record<DashboardAccountKey, AccountConnectorCard[]> = {
+    vanAken: [
+      {
+        id: "ibkr-van-aken",
+        title: "IBKR route",
+        status: connectionQuery.isLoading
+          ? "Checking"
+          : dashboardAccountOwnsRoute("vanAken", routedAccount)
+            ? risk?.isStale
+              ? "Connected · stale snapshot"
+              : "Connected"
+            : connectionQuery.data?.connected
+              ? "Connected to another route"
+              : "Disconnected",
+        detail: connectionQuery.isLoading
+          ? "Loading broker route state"
+          : dashboardAccountOwnsRoute("vanAken", routedAccount)
+            ? `${connectionEndpoint} · ${executionEnabled ? "execution enabled" : "execution disabled"}`
+            : sourceError ?? (routedAccount ? `Current Gateway route is ${routedAccount}` : `${connectionEndpoint} · waiting for gateway`),
+        tone: connectionQuery.isLoading
+          ? "caution"
+          : dashboardAccountOwnsRoute("vanAken", routedAccount)
+            ? (risk?.isStale ? "caution" : "safe")
+            : connectionQuery.data?.connected
+              ? "caution"
+              : "danger",
+        countsTowardHealth: true,
+        icon: <BrokerIcon />,
+      },
+      {
+        id: "coinbase-van-aken",
+        title: "Coinbase account",
+        status: coinbaseConnectorStatus,
+        detail: coinbaseConnectorDetail,
+        tone: coinbaseConnectorTone,
+        countsTowardHealth: true,
+        icon: <CoinbaseIcon />,
+      },
+      {
+        id: "plaid-fidelity",
+        title: "Plaid · Fidelity",
+        status: "Planned",
+        detail: "Future linked brokerage cash and holdings sync",
+        tone: "planned",
+        countsTowardHealth: false,
+        icon: <BankIcon />,
+      },
+      {
+        id: "plaid-chase",
+        title: "Plaid · Chase",
+        status: "Planned",
+        detail: "Future banking cash movement and treasury feed",
+        tone: "planned",
+        countsTowardHealth: false,
+        icon: <BankIcon />,
+      },
+    ],
+    personal: [
+      {
+        id: "ibkr-personal",
+        title: "IBKR route",
+        status: connectionQuery.isLoading
+          ? "Checking"
+          : dashboardAccountOwnsRoute("personal", routedAccount)
+            ? risk?.isStale
+              ? "Connected · stale snapshot"
+              : "Connected"
+            : connectionQuery.data?.connected
+              ? "Connected to another route"
+              : "Disconnected",
+        detail: connectionQuery.isLoading
+          ? "Loading broker route state"
+          : dashboardAccountOwnsRoute("personal", routedAccount)
+            ? `${connectionEndpoint} · ${executionEnabled ? "execution enabled" : "execution disabled"}`
+            : sourceError ?? (routedAccount ? `Current Gateway route is ${routedAccount}` : `${connectionEndpoint} · waiting for gateway`),
+        tone: connectionQuery.isLoading
+          ? "caution"
+          : dashboardAccountOwnsRoute("personal", routedAccount)
+            ? (risk?.isStale ? "caution" : "safe")
+            : connectionQuery.data?.connected
+              ? "caution"
+              : "danger",
+        countsTowardHealth: true,
+        icon: <BrokerIcon />,
+      },
+    ],
+  };
+  const accountSettingsConnectors = accountConnectorCardsByKey[selectedDashboardAccount.key];
   const definedConnectors = accountSettingsConnectors.filter((connector) => connector.countsTowardHealth);
   const definedConnectorCount = definedConnectors.length;
   const liveConnectorCount = definedConnectors.filter((connector) => connector.tone === "safe").length;
   const connectedConnectorCount = definedConnectors.filter((connector) => connector.tone === "safe" || connector.tone === "caution").length;
   const plannedConnectorCount = accountSettingsConnectors.length - definedConnectorCount;
+  const dashboardAccountStatuses = Object.fromEntries(
+    DASHBOARD_ACCOUNTS.map((account) => {
+      const connectors = accountConnectorCardsByKey[account.key];
+      const accountDefinedConnectors = connectors.filter((connector) => connector.countsTowardHealth);
+      const accountLiveConnectors = accountDefinedConnectors.filter((connector) => connector.tone === "safe").length;
+      const accountConnectedConnectors = accountDefinedConnectors.filter(
+        (connector) => connector.tone === "safe" || connector.tone === "caution",
+      ).length;
+      const tone: ConnectionHealthTone =
+        accountConnectedConnectors === 0 ? "danger" : accountLiveConnectors === accountDefinedConnectors.length ? "safe" : "caution";
+      const label =
+        tone === "safe" ? "Ready" : tone === "caution" ? `${accountConnectedConnectors}/${accountDefinedConnectors.length || 0} online` : "Offline";
+      return [account.key, { label, tone }];
+    }),
+  ) as Record<DashboardAccountKey, { label: string; tone: ConnectionHealthTone }>;
   const accountStatusTone: ConnectionHealthTone =
     connectedConnectorCount === 0 ? "danger" : liveConnectorCount === definedConnectorCount ? "safe" : "caution";
   const accountStatusLabel =
@@ -781,12 +877,7 @@ function App() {
       : accountStatusTone === "caution"
         ? "Partial connector coverage"
         : "No live connectors";
-  const accountTabBadge =
-    accountStatusTone === "safe"
-      ? "All live"
-      : accountStatusTone === "caution"
-        ? `${connectedConnectorCount}/${definedConnectorCount} online`
-        : "Offline";
+  const universeError = universeQuery.error instanceof Error ? universeQuery.error.message : null;
 
   async function runEdgarDownload(request: EdgarDownloadRequest) {
     setEdgarSyncing(true);
@@ -1448,100 +1539,559 @@ function App() {
     );
   }
 
-  function renderCoinbasePanel() {
-    return (
-      <AccountConnectorSection
-        collapsed={coinbaseConnectorCollapsed}
-        eyebrow="Van Aken Coinbase"
-        onToggle={() => setCoinbaseConnectorCollapsed((value) => !value)}
-        title="Coinbase Holdings"
-      >
-        {coinbaseStatusQuery.isLoading ? (
-          <div className="text-sm text-muted">Checking Coinbase connector...</div>
-        ) : !coinbaseStatusQuery.data?.available ? (
-          <div className="grid gap-4">
-            <div className="grid gap-4 md:grid-cols-3">
-              <MetricCard
-                label="Connector"
-                value={coinbaseStatusQuery.data?.authMode === "missing" ? "Not configured" : "Unavailable"}
-              />
-              <MetricCard
-                label="Auth mode"
-                value={coinbaseStatusQuery.data?.authMode ? coinbaseStatusQuery.data.authMode.toUpperCase() : "—"}
-              />
-              <MetricCard label="API base" value={coinbaseStatusQuery.data?.apiBaseUrl ?? "https://api.coinbase.com"} />
-            </div>
-            <ErrorState message={coinbaseStatusError ?? coinbaseStatusQuery.data?.detail ?? "Coinbase connector is unavailable."} />
+  function renderCoinbasePanelContent() {
+    return coinbaseStatusQuery.isLoading ? (
+      <div className="text-sm text-muted">Checking Coinbase connector...</div>
+    ) : !coinbaseStatusQuery.data?.available ? (
+      <div className="grid gap-4">
+        <div className="grid gap-4 md:grid-cols-3">
+          <MetricCard
+            label="Connector"
+            value={coinbaseStatusQuery.data?.authMode === "missing" ? "Not configured" : "Unavailable"}
+          />
+          <MetricCard
+            label="Auth mode"
+            value={coinbaseStatusQuery.data?.authMode ? coinbaseStatusQuery.data.authMode.toUpperCase() : "—"}
+          />
+          <MetricCard label="API base" value={coinbaseStatusQuery.data?.apiBaseUrl ?? "https://api.coinbase.com"} />
+        </div>
+        <ErrorState message={coinbaseStatusError ?? coinbaseStatusQuery.data?.detail ?? "Coinbase connector is unavailable."} />
+      </div>
+    ) : coinbasePortfolioQuery.isLoading ? (
+      <div className="text-sm text-muted">Loading Coinbase balances...</div>
+    ) : coinbasePortfolioQuery.error instanceof Error ? (
+      <ErrorState message={coinbasePortfolioQuery.error.message} />
+    ) : coinbasePortfolioQuery.data ? (
+      <div className="grid gap-4">
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <MetricCard label="Total value" value={fmtCurrency(coinbasePortfolioQuery.data.totalUsdValue)} />
+          <MetricCard label="Cash-like" value={fmtCurrency(coinbasePortfolioQuery.data.cashLikeUsdValue)} />
+          <MetricCard label="Crypto" value={fmtCurrency(coinbasePortfolioQuery.data.cryptoUsdValue)} />
+          <MetricCard
+            hint={`${coinbasePortfolioQuery.data.totalAccountsCount} total accounts returned`}
+            label="Visible holdings"
+            value={fmtNumber(coinbasePortfolioQuery.data.visibleHoldingsCount)}
+          />
+        </div>
+        {coinbasePortfolioQuery.data.sourceNotice ? (
+          <div
+            className={`rounded-2xl border px-4 py-3 text-sm ${
+              coinbasePortfolioQuery.data.isStale
+                ? "border-caution/25 bg-caution/8 text-caution"
+                : "border-line/80 bg-panelSoft text-muted"
+            }`}
+          >
+            {coinbasePortfolioQuery.data.sourceNotice}
           </div>
-        ) : coinbasePortfolioQuery.isLoading ? (
-          <div className="text-sm text-muted">Loading Coinbase balances...</div>
-        ) : coinbasePortfolioQuery.error instanceof Error ? (
-          <ErrorState message={coinbasePortfolioQuery.error.message} />
-        ) : coinbasePortfolioQuery.data ? (
+        ) : null}
+        <div className="overflow-x-auto">
+          <table className="min-w-[900px] text-left text-sm">
+            <thead className="text-[11px] uppercase tracking-[0.16em] text-muted">
+              <tr>
+                <th className="pb-3 pr-4">Asset</th>
+                <th className="pb-3 pr-4">Account</th>
+                <th className="pb-3 pr-4">Type</th>
+                <th className="pb-3 pr-4">Balance</th>
+                <th className="pb-3 pr-4">Available</th>
+                <th className="pb-3 pr-4">On hold</th>
+                <th className="pb-3 pr-4">USD rate</th>
+                <th className="pb-3 pr-4">Value</th>
+                <th className="pb-3">Allocation</th>
+              </tr>
+            </thead>
+            <tbody>
+              {coinbasePortfolioQuery.data.holdings.map((holding) => (
+                <tr key={`${holding.accountId}-${holding.currencyCode}`} className="border-t border-line/70 align-top">
+                  <td className="py-3 pr-4">
+                    <div className="font-medium text-text">{holding.currencyCode}</div>
+                    <div className="mt-1 text-xs text-muted">{holding.currencyName ?? "Coinbase asset"}</div>
+                  </td>
+                  <td className="py-3 pr-4">
+                    <div className="text-text">{holding.accountName}</div>
+                    <div className="mt-1 text-xs text-muted">
+                      {holding.primary ? "Primary" : "Secondary"}
+                      {holding.ready === false ? " · Pending" : ""}
+                    </div>
+                  </td>
+                  <td className="py-3 pr-4">
+                    <div className="text-text capitalize">{holding.accountType}</div>
+                    <div className="mt-1 text-xs text-muted">{holding.isCashLike ? "Cash-like" : holding.currencyType ?? "Crypto"}</div>
+                  </td>
+                  <td className="py-3 pr-4">
+                    {fmtNumber(holding.balance)}
+                    <div className="mt-1 text-xs text-muted">{holding.currencyCode}</div>
+                  </td>
+                  <td className="py-3 pr-4">{fmtNumber(holding.availableBalance)}</td>
+                  <td className="py-3 pr-4">{fmtNumber(holding.holdBalance)}</td>
+                  <td className="py-3 pr-4">{fmtCurrencySmall(holding.usdRate)}</td>
+                  <td className="py-3 pr-4 font-medium text-text">{fmtCurrency(holding.usdValue)}</td>
+                  <td className="py-3">{fmtNumber(holding.allocationPct, "%")}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    ) : (
+      <ErrorState message="Coinbase balances are unavailable." />
+    );
+  }
+
+  function renderDashboardWorkspace() {
+    return (
+      <div className="chrome-header-frame">
+        <div className="chrome-tabs-shell">
+          <div className="chrome-tab-strip">
+            {DASHBOARD_ACCOUNTS.map((account) => {
+              const status = dashboardAccountStatuses[account.key];
+              return (
+                <button
+                  key={account.key}
+                  aria-current={selectedDashboardAccount.key === account.key ? "page" : undefined}
+                  className={`chrome-tab ${selectedDashboardAccount.key === account.key ? "is-active" : ""}`}
+                  onClick={() => {
+                    setSelectedDashboardAccountKey(account.key);
+                    setDashboardAccountSelectionLocked(true);
+                    setAccountSettingsOpen(false);
+                    setActiveWorkspace("dashboard");
+                  }}
+                  type="button"
+                >
+                  <span className={`chrome-tab-dot ${connectionToneDotClass(status.tone)}`} />
+                  <span className="chrome-tab-title truncate text-sm font-medium">{account.name}</span>
+                  <span className="chrome-tab-badge">{status.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="account-workspace panel rounded-[16px]">
+          <header className="chrome-header-body relative px-10 py-5 lg:px-12">
+            <button
+              aria-expanded={accountSettingsOpen}
+              aria-label={accountSettingsOpen ? "Return to account page" : "Open account settings"}
+              className={`absolute right-10 top-3 inline-flex h-8 w-8 items-center justify-center transition ${
+                accountSettingsOpen ? "rounded-md bg-accent/10 text-accent" : "rounded-md text-muted hover:text-text"
+              }`}
+              onClick={() => setAccountSettingsOpen((value) => !value)}
+              type="button"
+            >
+              <GearIcon />
+            </button>
+
+            <div className="flex flex-col gap-5 pr-12 lg:flex-row lg:items-start lg:justify-between">
+              <div>
+                <div className="mb-2 text-[11px] uppercase tracking-[0.32em] text-accent">{selectedDashboardAccount.eyebrow}</div>
+                <div className="flex flex-wrap items-center gap-3">
+                  <h1 className="text-3xl font-semibold tracking-tight text-text">
+                    {accountSettingsOpen ? `${selectedDashboardAccount.name} Settings` : selectedDashboardAccount.name}
+                  </h1>
+                  {!accountSettingsOpen ? <AccountStatusBadge label={accountStatusLabel} tone={accountStatusTone} /> : null}
+                </div>
+                <p className="mt-2 max-w-3xl text-sm text-muted">
+                  {accountSettingsOpen
+                    ? `Manage the account-bound connectors and defaults for ${selectedDashboardAccount.name}.`
+                    : selectedDashboardAccount.description}
+                </p>
+              </div>
+              {!accountSettingsOpen ? (
+                <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
+                  <InlinePill
+                    label={selectedDashboardOwnsRoute && routedAccount ? `Acct ${routedAccount}` : "Route not active"}
+                    tone={selectedDashboardOwnsRoute ? "safe" : "neutral"}
+                  />
+                  <InlinePill
+                    label={selectedDashboardOwnsRoute ? routedAccountPill.label : "Awaiting route"}
+                    tone={selectedDashboardOwnsRoute ? routedAccountPill.tone : "neutral"}
+                  />
+                </div>
+              ) : null}
+            </div>
+
+            {!accountSettingsOpen ? (
+              <>
+                <div className="mt-6">
+                  <div className="text-[11px] uppercase tracking-[0.22em] text-muted">{selectedDashboardAccount.name} overview</div>
+                  <div className="mt-2 text-lg font-semibold text-text">Account Summary</div>
+                  <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                    <MetricCard
+                      hint={selectedDashboardOwnsRoute && routedAccount ? `${routedAccount} · ${routedAccountPill.label}` : "Current Gateway route is not this account"}
+                      label="Total net worth"
+                      value={dashboardRisk ? fmtCurrency(dashboardRisk.account.netLiquidation) : "—"}
+                    />
+                    <MetricCard label="Available funds" value={dashboardRisk ? fmtCurrency(dashboardRisk.account.availableFunds) : "—"} />
+                    <MetricCard label="Excess liquidity" value={dashboardRisk ? fmtCurrency(dashboardRisk.account.excessLiquidity) : "—"} />
+                    <MetricCard
+                      hint={dashboardRisk?.isStale ? "Snapshot is stale" : selectedDashboardOwnsRoute ? undefined : "Route this account through Gateway to populate broker metrics"}
+                      label="Margin usage"
+                      tone={
+                        dashboardRisk?.account.marginUsagePct == null
+                          ? "neutral"
+                          : dashboardRisk.account.marginUsagePct > 60
+                            ? "danger"
+                            : dashboardRisk.account.marginUsagePct > 40
+                              ? "caution"
+                              : "safe"
+                      }
+                      value={dashboardRisk ? fmtNumber(dashboardRisk.account.marginUsagePct, "%") : "—"}
+                    />
+                  </div>
+                </div>
+
+                {connectionQuery.data?.lastError || connectError || reconnectError ? (
+                  <div className="mt-4 rounded-2xl border border-danger/20 bg-danger/8 px-4 py-3 text-sm text-danger">
+                    {connectError ?? reconnectError ?? connectionQuery.data?.lastError}
+                  </div>
+                ) : null}
+              </>
+            ) : null}
+          </header>
+
+          <div className="account-workspace-body flex flex-col gap-6 px-10 pt-6 pb-6 lg:px-12">
+            {accountSettingsOpen ? (
+              <Panel
+                action={<div className="text-[11px] uppercase tracking-[0.18em] text-muted">{plannedConnectorCount} planned</div>}
+                title={`${selectedDashboardAccount.name} Connectors`}
+              >
+                <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
+                  {accountSettingsConnectors.map((connector) => (
+                    <ConnectorStatusCard
+                      key={connector.id}
+                      detail={connector.detail}
+                      icon={connector.icon}
+                      status={connector.status}
+                      title={connector.title}
+                      tone={connector.tone}
+                    />
+                  ))}
+                </div>
+              </Panel>
+            ) : (
+              <>
+                {dashboardSourceNotice ? (
+                  <div className="rounded-2xl border border-caution/25 bg-caution/8 px-4 py-3 text-sm text-caution">
+                    {dashboardSourceNotice}
+                  </div>
+                ) : null}
+
+                <AccountConnectorSection
+                  collapsed={ibkrConnectorCollapsed}
+                  details={
+                    <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
+                      <InlinePill
+                        label={routedAccount ? `Acct ${routedAccount}` : "Acct pending"}
+                        tone={connectionQuery.data?.connected ? "safe" : "neutral"}
+                      />
+                      <InlinePill label={routedAccountPill.label} tone={routedAccountPill.tone} />
+                    </div>
+                  }
+                  eyebrow="IBKR source"
+                  onToggle={() => setIbkrConnectorCollapsed((value) => !value)}
+                  title="Interactive Brokers"
+                >
+                  <div className="grid gap-6 xl:grid-cols-2">
+                    <div className="grid gap-3">
+                      <h3 className="text-lg font-semibold text-text">Working Orders</h3>
+                      {dashboardOpenOrders.length > 0 ? (
+                        <div className="grid gap-3">
+                          {dashboardOpenOrders.slice(0, 6).map((order) => (
+                            <div key={order.orderId} className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-3">
+                              <div className="flex items-start justify-between gap-3">
+                                <div>
+                                  <div className="text-sm font-medium text-text">
+                                    {order.side} {fmtWholeNumber(order.quantity)} {order.symbol}
+                                    {order.expiry && order.strike && order.right ? ` ${order.expiry} ${fmtNumber(order.strike)}${order.right}` : ""}
+                                  </div>
+                                  <div className="mt-1 text-sm text-muted">
+                                    {order.orderType}
+                                    {order.limitPrice != null ? ` ${fmtCurrencySmall(order.limitPrice)}` : ""}
+                                    {" · "}
+                                    {order.status}
+                                  </div>
+                                </div>
+                                <div className="text-sm text-muted">{fmtCurrency(order.estimatedCapitalImpact)}</div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-4 text-sm text-muted">
+                          {selectedDashboardOwnsRoute ? "No working orders in the routed IBKR account." : "Route this account through Gateway to view IBKR working orders here."}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="grid gap-3">
+                      <h3 className="text-lg font-semibold text-text">Open Option Positions</h3>
+                      {dashboardOptionPositions.length > 0 ? (
+                        <div className="grid gap-3">
+                          {dashboardOptionPositions.slice(0, 6).map((position) => (
+                            <div key={`${position.symbol}-${position.expiry}-${position.strike}-${position.right}`} className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-3">
+                              <div className="flex items-start justify-between gap-3">
+                                <div>
+                                  <div className="text-sm font-medium text-text">
+                                    {position.symbol} {position.expiry} {fmtNumber(position.strike)}{position.right}
+                                  </div>
+                                  <div className="mt-1 text-sm text-muted">
+                                    {position.shortOrLong} {fmtWholeNumber(Math.abs(position.quantity))} · delta {fmtGreek(position.delta)}
+                                  </div>
+                                </div>
+                                <div className={`text-sm font-medium ${pnlTone(position.unrealizedPnL)}`}>{fmtCurrency(position.unrealizedPnL)}</div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-4 text-sm text-muted">
+                          {selectedDashboardOwnsRoute ? "No open option positions in the routed IBKR account." : "Route this account through Gateway to view IBKR option positions here."}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </AccountConnectorSection>
+
+                {selectedDashboardAccount.key === "vanAken" ? (
+                  <AccountConnectorSection
+                    collapsed={coinbaseConnectorCollapsed}
+                    details={
+                      <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
+                        <InlinePill
+                          label={coinbaseConnectorStatus}
+                          tone={coinbaseConnectorTone === "danger" ? "danger" : coinbaseConnectorTone === "safe" ? "safe" : "neutral"}
+                        />
+                      </div>
+                    }
+                    eyebrow="Coinbase source"
+                    onToggle={() => setCoinbaseConnectorCollapsed((value) => !value)}
+                    title="Coinbase"
+                  >
+                    {renderCoinbasePanelContent()}
+                  </AccountConnectorSection>
+                ) : null}
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function renderGlobalSettingsWorkspace() {
+    return (
+      <ToolWorkspaceFrame
+        description="Configure app-wide behavior and the product-wide data sources that sit behind the tools."
+        eyebrow="Global settings"
+        title="Global Settings"
+      >
+        <div className="grid gap-6">
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <MetricCard label="Data mode" value={dataModeLabel} />
+            <MetricCard label="Execution" value={executionModeLabel} />
+            <MetricCard hint={connectionEndpoint} label="Endpoint" value={connectionEndpoint} />
+            <MetricCard label="Last heartbeat" value={heartbeatLabel} />
+          </div>
+
+          <Panel eyebrow="Global data sources" title="Data Sources">
+            <div className="grid gap-3 lg:grid-cols-2">
+              {globalSourceCards.map((source) => (
+                <ConnectorStatusCard
+                  key={source.id}
+                  detail={source.detail}
+                  icon={source.icon}
+                  status={source.status}
+                  title={source.title}
+                  tone={source.tone}
+                />
+              ))}
+            </div>
+          </Panel>
+
+          <Panel eyebrow="Shared defaults" title="App Defaults">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-3">
+                <div className="text-[11px] uppercase tracking-[0.18em] text-muted">Refresh cadence</div>
+                <div className="mt-2 text-sm font-medium text-text">{refreshCadenceLabel}</div>
+              </div>
+              <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-3">
+                <div className="text-[11px] uppercase tracking-[0.18em] text-muted">Research root</div>
+                <div className="mt-2 text-sm font-medium text-text">
+                  {edgarStatusQuery.data ? shortenPath(edgarStatusQuery.data.researchRootPath) : "Loading"}
+                </div>
+              </div>
+            </div>
+          </Panel>
+        </div>
+      </ToolWorkspaceFrame>
+    );
+  }
+
+  function renderTickerWorkspace() {
+    return (
+      <ToolWorkspaceFrame
+        description="Inspect an underlying without entering an account view. This workspace keeps the market lookup separate from portfolio state."
+        eyebrow="Tool"
+        title="Ticker"
+      >
+        <div className="grid gap-6">
+          <div className="grid gap-3 rounded-2xl border border-line/80 bg-panel px-4 py-4">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div className="flex min-w-0 flex-1 flex-col gap-3 sm:flex-row sm:items-center">
+                <label className="flex-1">
+                  <span className="sr-only">Ticker symbol</span>
+                  <input
+                    className="w-full rounded-xl border border-line/80 bg-panelSoft px-4 py-3 text-base text-text outline-none transition focus:border-accent/60"
+                    onChange={(event) => setChainSymbolInput(event.target.value.toUpperCase())}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        submitChainSymbolInput();
+                      }
+                    }}
+                    placeholder="Enter ticker"
+                    ref={chainSymbolInputRef}
+                    spellCheck={false}
+                    type="text"
+                    value={chainSymbolInput}
+                  />
+                </label>
+                <button
+                  className="inline-flex h-12 items-center justify-center rounded-xl border border-accent/30 bg-accent/10 px-4 text-sm font-medium text-accent transition hover:border-accent/50 hover:bg-accent/16 disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={!chainSymbolInput.trim() || connectMutation.isPending || reconnectMutation.isPending}
+                  onClick={submitChainSymbolInput}
+                  type="button"
+                >
+                  {chainQuery.isFetching && chainSymbolInput.trim().toUpperCase() === chainSymbol ? `Loading ${chainSymbol}…` : "Load ticker"}
+                </button>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
+                <InlinePill
+                  label={connectionQuery.data?.marketDataMode ?? "DATA"}
+                  tone={connectionQuery.data?.marketDataMode === "LIVE" ? "safe" : "neutral"}
+                />
+                <InlinePill
+                  label={activeDisplayedChain ? `Spot ${fmtCurrencySmall(activeDisplayedChain.underlying.price)}` : "No quote loaded"}
+                  tone="neutral"
+                />
+              </div>
+            </div>
+          </div>
+
+          {chainErrorHeaderLabel ? (
+            <div className="rounded-2xl border border-danger/20 bg-danger/8 px-4 py-3 text-sm text-danger">{chainErrorHeaderLabel}</div>
+          ) : null}
+
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <MetricCard label="Ticker" value={chainSymbol} />
+            <MetricCard label="Spot" value={activeDisplayedChain ? fmtCurrency(activeDisplayedChain.underlying.price) : "—"} />
+            <MetricCard label="Selected expiry" value={activeDisplayedChain?.selectedExpiry ?? "—"} />
+            <MetricCard label="Expiries loaded" value={activeDisplayedChain ? fmtNumber(activeDisplayedChain.expiries.length) : "—"} />
+          </div>
+
+          {activeDisplayedChain?.quoteNotice ? (
+            <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-3 text-sm text-muted">
+              {activeDisplayedChain.quoteNotice}
+            </div>
+          ) : null}
+        </div>
+      </ToolWorkspaceFrame>
+    );
+  }
+
+  function renderOptionsWorkspace() {
+    return (
+      <ToolWorkspaceFrame
+        description="Inspect options chains as a tool workspace. Market data, execution route, and overlays stay explicit instead of leaking in from the dashboard."
+        eyebrow="Tool"
+        title="Options"
+      >
+        <div className="mb-4 flex flex-wrap items-center gap-2 text-xs text-muted">
+          <InlinePill
+            label={connectionQuery.data?.marketDataMode ? `Data source · ${connectionQuery.data.marketDataMode}` : "Data source · pending"}
+            tone={connectionQuery.data?.marketDataMode === "LIVE" ? "safe" : "neutral"}
+          />
+          <InlinePill
+            label={routedAccount ? `Execution route · ${routedAccount}` : "Execution route · pending"}
+            tone={routedAccount ? "safe" : "neutral"}
+          />
+          <InlinePill label="Overlay account · off" tone="neutral" />
+        </div>
+        {renderIbkrOptionsSurface()}
+      </ToolWorkspaceFrame>
+    );
+  }
+
+  function renderCryptoWorkspace() {
+    return (
+      <ToolWorkspaceFrame
+        description="Observe crypto markets without jumping directly into one account's holdings. Account-owned crypto balances stay on the dashboard."
+        eyebrow="Tool"
+        title="Crypto"
+      >
+        <div className="grid gap-6">
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <MetricCard label="Primary data source" value="Coinbase" />
+            <MetricCard label="Status" value={coinbaseConnectorStatus} />
+            <MetricCard label="Scope" value="Market perception" />
+            <MetricCard label="Account overlay" value="Off" />
+          </div>
+
+          <Panel eyebrow="Why this is separate" title="Tool Boundary">
+            <div className="grid gap-3 lg:grid-cols-2">
+              <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-4 text-sm text-muted">
+                Sidebar tools should not open directly into per-account balances or holdings.
+              </div>
+              <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-4 text-sm text-muted">
+                Use the dashboard account pages for account-owned crypto holdings and connector-backed balances.
+              </div>
+            </div>
+          </Panel>
+        </div>
+      </ToolWorkspaceFrame>
+    );
+  }
+
+  function renderUniverseWorkspace() {
+    return (
+      <ToolWorkspaceFrame
+        description="Scan a universe of names without tying the view to any one account."
+        eyebrow="Tool"
+        title="Universe"
+      >
+        {universeQuery.isLoading ? (
+          <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-4 text-sm text-muted">Loading market universe…</div>
+        ) : universeError ? (
+          <ErrorState message={universeError} />
+        ) : universeQuery.data ? (
           <div className="grid gap-4">
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-              <MetricCard label="Total value" value={fmtCurrency(coinbasePortfolioQuery.data.totalUsdValue)} />
-              <MetricCard label="Cash-like" value={fmtCurrency(coinbasePortfolioQuery.data.cashLikeUsdValue)} />
-              <MetricCard label="Crypto" value={fmtCurrency(coinbasePortfolioQuery.data.cryptoUsdValue)} />
-              <MetricCard
-                hint={`${coinbasePortfolioQuery.data.totalAccountsCount} total accounts returned`}
-                label="Visible holdings"
-                value={fmtNumber(coinbasePortfolioQuery.data.visibleHoldingsCount)}
-              />
+              <MetricCard label="Snapshot date" value={universeQuery.data.snapshotDate} />
+              <MetricCard label="Names" value={fmtNumber(universeQuery.data.rows.length)} />
+              <MetricCard label="Source" value={universeQuery.data.sourceNotice ?? "Scanner snapshot"} />
+              <MetricCard label="Staleness" value={universeQuery.data.isStale ? "Stale" : "Fresh"} />
             </div>
-            {coinbasePortfolioQuery.data.sourceNotice ? (
-              <div
-                className={`rounded-2xl border px-4 py-3 text-sm ${
-                  coinbasePortfolioQuery.data.isStale
-                    ? "border-caution/25 bg-caution/8 text-caution"
-                    : "border-line/80 bg-panelSoft text-muted"
-                }`}
-              >
-                {coinbasePortfolioQuery.data.sourceNotice}
-              </div>
-            ) : null}
-            <div className="overflow-x-auto">
-              <table className="min-w-[900px] text-left text-sm">
-                <thead className="text-[11px] uppercase tracking-[0.16em] text-muted">
+            <div className="overflow-x-auto rounded-2xl border border-line/80 bg-panel">
+              <table className="min-w-[960px] text-left text-sm">
+                <thead className="border-b border-line/70 text-[11px] uppercase tracking-[0.16em] text-muted">
                   <tr>
-                    <th className="pb-3 pr-4">Asset</th>
-                    <th className="pb-3 pr-4">Account</th>
-                    <th className="pb-3 pr-4">Type</th>
-                    <th className="pb-3 pr-4">Balance</th>
-                    <th className="pb-3 pr-4">Available</th>
-                    <th className="pb-3 pr-4">On hold</th>
-                    <th className="pb-3 pr-4">USD rate</th>
-                    <th className="pb-3 pr-4">Value</th>
-                    <th className="pb-3">Allocation</th>
+                    <th className="px-4 py-3">Symbol</th>
+                    <th className="px-4 py-3">Close</th>
+                    <th className="px-4 py-3">Beta (QQQ 60d)</th>
+                    <th className="px-4 py-3">HV20</th>
+                    <th className="px-4 py-3">ATM IV</th>
+                    <th className="px-4 py-3">IV / HV20</th>
+                    <th className="px-4 py-3">Strategy</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {coinbasePortfolioQuery.data.holdings.map((holding) => (
-                    <tr key={`${holding.accountId}-${holding.currencyCode}`} className="border-t border-line/70 align-top">
-                      <td className="py-3 pr-4">
-                        <div className="font-medium text-text">{holding.currencyCode}</div>
-                        <div className="mt-1 text-xs text-muted">{holding.currencyName ?? "Coinbase asset"}</div>
-                      </td>
-                      <td className="py-3 pr-4">
-                        <div className="text-text">{holding.accountName}</div>
-                        <div className="mt-1 text-xs text-muted">
-                          {holding.primary ? "Primary" : "Secondary"}
-                          {holding.ready === false ? " · Pending" : ""}
-                        </div>
-                      </td>
-                      <td className="py-3 pr-4">
-                        <div className="text-text capitalize">{holding.accountType}</div>
-                        <div className="mt-1 text-xs text-muted">{holding.isCashLike ? "Cash-like" : holding.currencyType ?? "Crypto"}</div>
-                      </td>
-                      <td className="py-3 pr-4">
-                        {fmtNumber(holding.balance)}
-                        <div className="mt-1 text-xs text-muted">{holding.currencyCode}</div>
-                      </td>
-                      <td className="py-3 pr-4">{fmtNumber(holding.availableBalance)}</td>
-                      <td className="py-3 pr-4">{fmtNumber(holding.holdBalance)}</td>
-                      <td className="py-3 pr-4">{fmtCurrencySmall(holding.usdRate)}</td>
-                      <td className="py-3 pr-4 font-medium text-text">{fmtCurrency(holding.usdValue)}</td>
-                      <td className="py-3">{fmtNumber(holding.allocationPct, "%")}</td>
+                  {universeQuery.data.rows.slice(0, 20).map((row) => (
+                    <tr key={row.symbol} className="border-t border-line/70">
+                      <td className="px-4 py-3 font-medium text-text">{row.symbol}</td>
+                      <td className="px-4 py-3">{fmtCurrencySmall(row.lastClose)}</td>
+                      <td className="px-4 py-3">{fmtNumber(row.betaQqq60d)}</td>
+                      <td className="px-4 py-3">{fmtNumber(row.hv20, "%")}</td>
+                      <td className="px-4 py-3">{fmtNumber(row.atmFrontMonthIv, "%")}</td>
+                      <td className="px-4 py-3">{fmtNumber(row.ivToHv20)}</td>
+                      <td className="px-4 py-3">{row.recommendedStrategy ?? "—"}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -1549,9 +2099,23 @@ function App() {
             </div>
           </div>
         ) : (
-          <ErrorState message="Coinbase balances are unavailable." />
+          <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-4 text-sm text-muted">No universe snapshot is available yet.</div>
         )}
-      </AccountConnectorSection>
+      </ToolWorkspaceFrame>
+    );
+  }
+
+  function renderEarningsWorkspace() {
+    return (
+      <ToolWorkspaceFrame
+        description="Track earnings as a market event workspace, separate from account views and connector plumbing."
+        eyebrow="Tool"
+        title="Earnings"
+      >
+        <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-4 text-sm text-muted">
+          Earnings will live here as its own workspace rather than being buried under a connector or an account page.
+        </div>
+      </ToolWorkspaceFrame>
     );
   }
 
@@ -1570,9 +2134,12 @@ function App() {
           </button>
           <button
             aria-label="Go to dashboard"
-            aria-pressed={activeWorkspace === "home"}
-            className={`shell-toggle shell-home-button ${activeWorkspace === "home" ? "is-active" : ""}`}
-            onClick={() => setActiveWorkspace("home")}
+            aria-pressed={activeWorkspace === "dashboard"}
+            className={`shell-toggle shell-home-button ${activeWorkspace === "dashboard" ? "is-active" : ""}`}
+            onClick={() => {
+              setActiveWorkspace("dashboard");
+              setAccountSettingsOpen(false);
+            }}
             type="button"
           >
             <HomeIcon />
@@ -1587,105 +2154,100 @@ function App() {
                 <div className="shell-sidebar-scroll">
                   <div className="shell-source-list">
                     <ShellSourceRow
-                      active={activeWorkspace === "ibkr"}
-                      badge={sourceBadge}
+                      active={activeWorkspace === "dashboard"}
+                      badge={`${DASHBOARD_ACCOUNTS.length} accounts`}
+                      icon={<HomeIcon />}
+                      meta="Portfolio state, balances, holdings, and routed execution context"
+                      onSelect={() => {
+                        setActiveWorkspace("dashboard");
+                        setAccountSettingsOpen(false);
+                      }}
+                      title="Dashboard"
+                      tone="live"
+                    />
+
+                    <ShellSourceRow
+                      active={activeWorkspace === "ticker"}
+                      badge="Tool"
                       icon={<BrokerIcon />}
-                      meta={sourceMeta}
-                      onSelect={() => setActiveWorkspace("ibkr")}
-                      title="Interactive Brokers"
-                      tone={sourceTone}
-                    >
-                      <div className="shell-source-actions">
-                        <button
-                          className="shell-inline-action"
-                          disabled={connectMutation.isPending}
-                          onClick={() => connectMutation.mutate()}
-                          type="button"
-                        >
-                          {connectMutation.isPending ? "Connecting..." : "Connect"}
-                        </button>
-                        <button
-                          className="shell-inline-action"
-                          disabled={reconnectMutation.isPending}
-                          onClick={() => reconnectMutation.mutate()}
-                          type="button"
-                        >
-                          {reconnectMutation.isPending ? "Refreshing..." : "Reconnect"}
-                        </button>
-                      </div>
-                      {sourceError ? <div className="shell-source-note is-danger">{sourceError}</div> : null}
-                    </ShellSourceRow>
-
-                    <ShellSourceRow
-                      active={activeWorkspace === "edgar"}
-                      badge={edgarBadge}
-                      icon={<DocumentIcon />}
-                      meta={edgarMeta}
-                      onSelect={() => setActiveWorkspace("edgar")}
-                      title="EDGAR"
-                      tone={edgarSourceTone}
+                      meta="Inspect stocks and underlying symbols without account context"
+                      onSelect={() => setActiveWorkspace("ticker")}
+                      title="Ticker"
+                      tone="live"
                     />
 
                     <ShellSourceRow
-                      active={activeWorkspace === "investorPdfs"}
-                      badge={investorPdfBadge}
-                      icon={<PdfLibraryIcon />}
-                      meta={investorPdfMeta}
-                      onSelect={() => setActiveWorkspace("investorPdfs")}
-                      title="Investor PDFs"
-                      tone={investorPdfSourceTone}
+                      active={activeWorkspace === "options"}
+                      badge="Tool"
+                      icon={<OptionsIcon />}
+                      meta="Inspect chains, Greeks, and order tickets as a neutral workspace"
+                      onSelect={() => setActiveWorkspace("options")}
+                      title="Options"
+                      tone="live"
                     />
 
                     <ShellSourceRow
-                      active={activeWorkspace === "coinbase"}
-                      badge={coinbaseBadge}
+                      active={activeWorkspace === "crypto"}
+                      badge="Tool"
                       icon={<CoinbaseIcon />}
-                      meta={coinbaseMeta}
-                      onSelect={() => setActiveWorkspace("coinbase")}
-                      title="Coinbase"
-                      tone={coinbaseSourceTone}
+                      meta="Observe crypto markets without jumping into per-account holdings"
+                      onSelect={() => setActiveWorkspace("crypto")}
+                      title="Crypto"
+                      tone="live"
                     />
 
                     <ShellSourceRow
-                      badge="Planned"
-                      icon={<BankIcon />}
-                      meta="Future Fidelity-linked cash and holdings sync"
-                      title="Plaid · Fidelity"
-                      tone="planned"
+                      active={activeWorkspace === "universe"}
+                      badge="Tool"
+                      icon={<UniverseIcon />}
+                      meta="Scan ranked names, volatility, and market-wide candidates"
+                      onSelect={() => setActiveWorkspace("universe")}
+                      title="Universe"
+                      tone="live"
                     />
 
                     <ShellSourceRow
-                      badge="Planned"
-                      icon={<BankIcon />}
-                      meta="Future Chase treasury and cash flow sync"
-                      title="Plaid · Chase"
-                      tone="planned"
+                      active={activeWorkspace === "earnings"}
+                      badge="Tool"
+                      icon={<CalendarIcon />}
+                      meta="Track earnings events as their own market workspace"
+                      onSelect={() => setActiveWorkspace("earnings")}
+                      title="Earnings"
+                      tone="live"
+                    />
+
+                    <ShellSourceRow
+                      active={activeWorkspace === "filings"}
+                      badge="Tool"
+                      icon={<DocumentIcon />}
+                      meta="Search SEC filings and filing bundles"
+                      onSelect={() => setActiveWorkspace("filings")}
+                      title="Filings"
+                      tone="live"
+                    />
+
+                    <ShellSourceRow
+                      active={activeWorkspace === "research"}
+                      badge="Tool"
+                      icon={<PdfLibraryIcon />}
+                      meta="Investor reports, annual reports, and PDF research flows"
+                      onSelect={() => setActiveWorkspace("research")}
+                      title="Research"
+                      tone="live"
                     />
                   </div>
                 </div>
 
                 <div className="shell-sidebar-footer">
-                  <div className={`shell-settings-panel ${settingsOpen ? "is-open" : ""}`}>
-                    <ShellSettingRow label="Data mode" value={dataModeLabel} />
-                    <ShellSettingRow label="Execution" value={executionModeLabel} />
-                    <ShellSettingRow label="Endpoint" value={connectionEndpoint} />
-                    <ShellSettingRow label="Refresh" value={refreshCadenceLabel} />
-                    <ShellSettingRow label="Last heartbeat" value={heartbeatLabel} />
-                    <ShellSettingRow
-                      label="Research root"
-                      value={edgarStatusQuery.data ? shortenPath(edgarStatusQuery.data.researchRootPath) : "Loading"}
-                    />
-                  </div>
-
                   <button
-                    className={`shell-settings-row ${settingsOpen ? "is-active" : ""}`}
-                    onClick={() => setSettingsOpen((value) => !value)}
+                    className={`shell-settings-row ${activeWorkspace === "globalSettings" ? "is-active" : ""}`}
+                    onClick={() => setActiveWorkspace("globalSettings")}
                     type="button"
                   >
                     <span className="shell-row-icon">
                       <GearIcon />
                     </span>
-                    <span className="shell-settings-label">Settings</span>
+                    <span className="shell-settings-label">Global Settings</span>
                   </button>
                 </div>
               </div>
@@ -1694,24 +2256,13 @@ function App() {
 
           <div className="shell-stage">
             <div className="mx-auto w-full max-w-[1600px]">
-              {activeWorkspace === "ibkr" ? (
-                <IbkrWorkspace
-                  connectPending={connectMutation.isPending}
-                  endpoint={connectionEndpoint}
-                  onConnect={() => connectMutation.mutate()}
-                  onReconnect={() => reconnectMutation.mutate()}
-                  reconnectPending={reconnectMutation.isPending}
-                  selectedAccount={selectedAccount}
-                  sourceError={sourceError}
-                  status={connectionQuery.data}
-                />
-              ) : activeWorkspace === "coinbase" ? (
-                <CoinbaseWorkspace
-                  status={coinbaseStatusQuery.data}
-                  statusError={coinbaseStatusError}
-                  statusLoading={coinbaseStatusQuery.isLoading}
-                />
-              ) : activeWorkspace === "edgar" ? (
+              {activeWorkspace === "dashboard" ? renderDashboardWorkspace() : null}
+              {activeWorkspace === "ticker" ? renderTickerWorkspace() : null}
+              {activeWorkspace === "options" ? renderOptionsWorkspace() : null}
+              {activeWorkspace === "crypto" ? renderCryptoWorkspace() : null}
+              {activeWorkspace === "universe" ? renderUniverseWorkspace() : null}
+              {activeWorkspace === "earnings" ? renderEarningsWorkspace() : null}
+              {activeWorkspace === "filings" ? (
                 <EdgarWorkspace
                   defaultTicker={chainSymbol}
                   onRun={(request) => {
@@ -1724,7 +2275,8 @@ function App() {
                   syncResult={edgarSyncResult}
                   syncing={edgarSyncing}
                 />
-              ) : activeWorkspace === "investorPdfs" ? (
+              ) : null}
+              {activeWorkspace === "research" ? (
                 <InvestorPdfsWorkspace
                   defaultTicker={chainSymbol}
                   onRun={(request) => {
@@ -1738,146 +2290,7 @@ function App() {
                   syncing={investorPdfSyncing}
                 />
               ) : null}
-              <div className={activeWorkspace === "home" ? "" : "hidden"}>
-                <div className="chrome-header-frame">
-                  <div className="chrome-tabs-shell">
-                    <div className="chrome-tab-strip">
-                      <button aria-current="page" className="chrome-tab is-active" type="button">
-                        <span className={`chrome-tab-dot ${connectionToneDotClass(accountStatusTone)}`} />
-                        <span className="chrome-tab-title truncate text-sm font-medium">Van Aken</span>
-                        <span className="chrome-tab-badge">{accountTabBadge}</span>
-                      </button>
-                    </div>
-                  </div>
-                  <div className="account-workspace panel rounded-[16px]">
-                    <header className="chrome-header-body relative px-10 py-5 lg:px-12">
-                      <button
-                        aria-expanded={accountSettingsOpen}
-                        aria-label={accountSettingsOpen ? "Return to dashboard" : "Open account settings"}
-                        className={`absolute right-10 top-3 inline-flex h-8 w-8 items-center justify-center transition ${
-                          accountSettingsOpen
-                            ? "rounded-md bg-accent/10 text-accent"
-                            : "rounded-md text-muted hover:text-text"
-                        }`}
-                        onClick={() => setAccountSettingsOpen((value) => !value)}
-                        type="button"
-                      >
-                        <GearIcon />
-                      </button>
-                      {accountSettingsOpen ? (
-                        <div className="flex flex-col gap-5 pr-12 lg:flex-row lg:items-start lg:justify-between">
-                          <div>
-                            <div className="mb-2 text-[11px] uppercase tracking-[0.32em] text-accent">Van Aken Investments LLC</div>
-                            <div className="flex flex-wrap items-center gap-3">
-                              <h1 className="text-3xl font-semibold tracking-tight text-text">Account Settings</h1>
-                            </div>
-                            <p className="mt-2 max-w-3xl text-sm text-muted">
-                              Manage the connectors and sources routed into the Van Aken dashboard.
-                            </p>
-                          </div>
-                        </div>
-                      ) : (
-                        <>
-                          <div className="flex flex-col gap-5 pr-12 lg:flex-row lg:items-start lg:justify-between">
-                            <div>
-                              <div className="mb-2 text-[11px] uppercase tracking-[0.32em] text-accent">Van Aken Investments LLC</div>
-                              <div className="flex flex-wrap items-center gap-3">
-                                <h1 className="text-3xl font-semibold tracking-tight text-text">Account Snapshot</h1>
-                                <AccountStatusBadge label={accountStatusLabel} tone={accountStatusTone} />
-                              </div>
-                            </div>
-                          </div>
-                          <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                            <MetricCard
-                              hint={routedAccount ? `${routedAccount} · ${routedAccountPill.label}` : undefined}
-                              label="Total net worth"
-                              value={riskSummaryQuery.isLoading ? "Loading" : fmtCurrency(risk?.account.netLiquidation)}
-                            />
-                            <MetricCard
-                              label="Available funds"
-                              value={riskSummaryQuery.isLoading ? "Loading" : fmtCurrency(risk?.account.availableFunds)}
-                            />
-                            <MetricCard
-                              label="Excess liquidity"
-                              value={riskSummaryQuery.isLoading ? "Loading" : fmtCurrency(risk?.account.excessLiquidity)}
-                            />
-                            <MetricCard
-                              hint={risk?.isStale ? "Snapshot is stale" : undefined}
-                              label="Margin usage"
-                              tone={
-                                risk?.account.marginUsagePct == null
-                                  ? "neutral"
-                                  : risk.account.marginUsagePct > 60
-                                    ? "danger"
-                                    : risk.account.marginUsagePct > 40
-                                      ? "caution"
-                                      : "safe"
-                              }
-                              value={riskSummaryQuery.isLoading ? "Loading" : fmtNumber(risk?.account.marginUsagePct, "%")}
-                            />
-                          </div>
-                          {connectionQuery.data?.lastError || connectError || reconnectError ? (
-                            <div className="mt-4 rounded-2xl border border-danger/20 bg-danger/8 px-4 py-3 text-sm text-danger">
-                              {connectError ?? reconnectError ?? connectionQuery.data?.lastError}
-                            </div>
-                          ) : null}
-                        </>
-                      )}
-                    </header>
-                    <div className="account-workspace-body flex flex-col gap-6 px-10 pb-6 lg:px-12">
-                      {accountSettingsOpen ? (
-                        <Panel
-                          action={<div className="text-[11px] uppercase tracking-[0.18em] text-muted">{plannedConnectorCount} planned</div>}
-                          title="Account Settings"
-                        >
-                          <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
-                            {accountSettingsConnectors.map((connector) => (
-                              <ConnectorStatusCard
-                                key={connector.id}
-                                detail={connector.detail}
-                                icon={connector.icon}
-                                onOpen={connector.workspace ? () => setActiveWorkspace(connector.workspace!) : undefined}
-                                status={connector.status}
-                                title={connector.title}
-                                tone={connector.tone}
-                              />
-                            ))}
-                          </div>
-                        </Panel>
-                      ) : (
-                        <>
-                          <AccountConnectorSection
-                            action={
-                              chainErrorHeaderLabel ? (
-                                <div className="max-w-[52rem] rounded-full border border-danger/25 bg-danger/8 px-3 py-1.5 text-xs leading-5 text-danger">
-                                  {chainErrorHeaderLabel}
-                                </div>
-                              ) : null
-                            }
-                            collapsed={ibkrConnectorCollapsed}
-                            details={
-                              <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
-                                <InlinePill
-                                  label={routedAccount ? `Acct ${routedAccount}` : "Acct pending"}
-                                  tone={connectionQuery.data?.connected ? "safe" : "neutral"}
-                                />
-                                <InlinePill label={routedAccountPill.label} tone={routedAccountPill.tone} />
-                              </div>
-                            }
-                            eyebrow={ibkrConnectorLabel}
-                            onToggle={() => setIbkrConnectorCollapsed((value) => !value)}
-                            title={ibkrConnectorTitle}
-                          >
-                            {renderIbkrOptionsSurface()}
-                          </AccountConnectorSection>
-
-                          {renderCoinbasePanel()}
-                        </>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </div>
+              {activeWorkspace === "globalSettings" ? renderGlobalSettingsWorkspace() : null}
             </div>
           </div>
         </div>
@@ -1886,245 +2299,34 @@ function App() {
   );
 }
 
-function IbkrWorkspace({
-  status,
-  endpoint,
-  sourceError,
-  selectedAccount,
-  connectPending,
-  reconnectPending,
-  onConnect,
-  onReconnect,
+function ToolWorkspaceFrame({
+  eyebrow,
+  title,
+  description,
+  children,
 }: {
-  status: ConnectionStatus | undefined;
-  endpoint: string;
-  sourceError: string | null;
-  selectedAccount: string | undefined;
-  connectPending: boolean;
-  reconnectPending: boolean;
-  onConnect: () => void;
-  onReconnect: () => void;
+  eyebrow: string;
+  title: string;
+  description: string;
+  children: ReactNode;
 }) {
-  const managedAccounts = uniqueAccounts([...(status?.managedAccounts ?? []), status?.accountId]);
-  const routedAccount = status?.accountId ?? selectedAccount;
-  const routedAccountType = status?.routedAccountType ?? routeKindFromAccountId(routedAccount);
-  const routedAccountPill = routePresentation(routedAccountType);
-  const connectionLabel = status?.connected ? "Connected" : "Disconnected";
-  const sessionModeLabel = status?.mode === "ibkr" ? "IBKR gateway session" : "Mock snapshot";
-  const executionLabel = status?.executionMode === "enabled" ? "Enabled" : "Disabled";
-  const lastConnectedLabel = status?.lastSuccessfulConnectAt ? formatTimestamp(status.lastSuccessfulConnectAt) : "Never";
-  const lastHeartbeatLabel = status?.lastHeartbeatAt ? formatTimestamp(status.lastHeartbeatAt) : "No heartbeat";
-  const nextReconnectLabel = status?.nextReconnectAttemptAt ? formatTimestamp(status.nextReconnectAttemptAt) : "None scheduled";
-
   return (
     <div className="chrome-header-frame">
       <div className="account-workspace panel overflow-hidden rounded-[16px]">
         <header className="border-b border-line/70 px-10 py-7 lg:px-12">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div>
-              <div className="mb-2 text-[11px] uppercase tracking-[0.32em] text-accent">Broker connector</div>
+              <div className="mb-2 text-[11px] uppercase tracking-[0.32em] text-accent">{eyebrow}</div>
               <div className="flex flex-wrap items-center gap-3">
-                <h1 className="text-3xl font-semibold tracking-tight text-text">Interactive Brokers</h1>
-                <StatusBadge status={status} />
+                <h1 className="text-3xl font-semibold tracking-tight text-text">{title}</h1>
               </div>
-              <p className="mt-2 max-w-3xl text-sm text-muted">
-                Use this connector workspace to manage the IB Gateway or TWS session. The Home button returns to the Van Aken account dashboard.
-              </p>
-            </div>
-            <div className="flex flex-wrap gap-3">
-              <button
-                className="rounded-full border border-accent/35 bg-accent/10 px-4 py-2 text-sm font-medium text-accent transition hover:border-accent/50 hover:text-white disabled:cursor-default disabled:opacity-45"
-                disabled={connectPending}
-                onClick={onConnect}
-                type="button"
-              >
-                {connectPending ? "Connecting..." : "Connect"}
-              </button>
-              <button
-                className="rounded-full border border-line bg-panelSoft px-4 py-2 text-sm font-medium text-text transition hover:border-accent/35 disabled:cursor-default disabled:opacity-45"
-                disabled={reconnectPending}
-                onClick={onReconnect}
-                type="button"
-              >
-                {reconnectPending ? "Refreshing..." : "Reconnect"}
-              </button>
+              <p className="mt-2 max-w-3xl text-sm text-muted">{description}</p>
             </div>
           </div>
         </header>
 
-        <section className="px-10 py-8 lg:px-12">
-          <div className="grid gap-6">
-            {sourceError ? <ErrorState message={sourceError} /> : null}
-
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-              <MetricCard
-                hint={endpoint}
-                label="Connection"
-                tone={status?.connected ? "safe" : "danger"}
-                value={connectionLabel}
-              />
-              <MetricCard label="Session mode" value={sessionModeLabel} />
-              <MetricCard
-                hint="Trade preview, submit, and cancel follow the current Gateway route."
-                label="Execution"
-                tone={status?.executionMode === "enabled" ? "safe" : "neutral"}
-                value={executionLabel}
-              />
-              <MetricCard
-                hint={routedAccount ? "Gateway reports this as the active account route." : "Connect to discover the active account route"}
-                kicker={<InlinePill label={routedAccountPill.label} tone={routedAccountPill.tone} />}
-                label="Routed account"
-                value={routedAccount ?? "Pending"}
-              />
-            </div>
-
-            <div className="grid gap-6 xl:grid-cols-[0.92fr,1.08fr]">
-              <Panel title="Gateway Session" eyebrow="Connector State">
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <ConnectorFact label="Endpoint" value={endpoint} />
-                  <ConnectorFact label="Client ID" value={status ? String(status.clientId) : "—"} />
-                  <ConnectorFact label="Routed account" value={routedAccount ?? "Pending"} />
-                  <ConnectorFact label="Trading route" value={routedAccountPill.label} />
-                  <ConnectorFact label="Market data" value={status?.marketDataMode ?? "Unknown"} />
-                  <ConnectorFact label="Last connect" value={lastConnectedLabel} />
-                  <ConnectorFact label="Last heartbeat" value={lastHeartbeatLabel} />
-                  <ConnectorFact label="Next reconnect" value={nextReconnectLabel} />
-                </div>
-              </Panel>
-
-              <Panel title="Managed Accounts" eyebrow="Connector Routing">
-                {managedAccounts.length > 0 ? (
-                  <div className="grid gap-3">
-                    {managedAccounts.map((accountId) => {
-                      const isCurrent = routedAccount === accountId;
-                      const accountPill = routePresentation(routeKindFromAccountId(accountId));
-                      const accountPillClasses =
-                        accountPill.tone === "danger"
-                          ? "border-danger/35 bg-danger/10 text-danger"
-                          : accountPill.tone === "accent"
-                            ? "border-accent/35 bg-accent/10 text-accent"
-                            : isCurrent
-                              ? "border-accent/35 bg-accent/10 text-accent"
-                              : "border-line bg-panel text-text";
-                      return (
-                        <div
-                          key={accountId}
-                          className={`rounded-2xl border px-4 py-3 ${
-                            isCurrent ? "border-accent/35 bg-accent/8" : "border-line/80 bg-panelSoft"
-                          }`}
-                        >
-                          <div className="flex flex-wrap items-center justify-between gap-3">
-                            <div>
-                              <div className="text-sm font-medium text-text">{accountId}</div>
-                              <div className="mt-1 text-sm text-muted">
-                                {isCurrent ? "Gateway is currently routed into this account." : "Available account reported by Gateway."}
-                              </div>
-                            </div>
-                            <span
-                              className={`rounded-full border px-3 py-1 text-xs font-medium ${accountPillClasses}`}
-                            >
-                              {isCurrent ? `${accountPill.label} · current` : accountPill.label}
-                            </span>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-4 text-sm text-muted">
-                    Connect to IB Gateway or TWS to populate the Van Aken home dashboard.
-                  </div>
-                )}
-              </Panel>
-            </div>
-          </div>
-        </section>
+        <section className="px-10 py-8 lg:px-12">{children}</section>
       </div>
-    </div>
-  );
-}
-
-function CoinbaseWorkspace({
-  status,
-  statusLoading,
-  statusError,
-}: {
-  status: CoinbaseSourceStatus | undefined;
-  statusLoading: boolean;
-  statusError: string | null;
-}) {
-  const connectorTone: ConnectionHealthTone = statusLoading ? "caution" : status?.available ? "safe" : "danger";
-  const connectorLabel = statusLoading ? "Checking" : status?.available ? "Ready" : status?.authMode === "missing" ? "Needs setup" : "Unavailable";
-  const linkedAccountCount = 1;
-
-  return (
-    <div className="chrome-header-frame">
-      <div className="account-workspace panel overflow-hidden rounded-[16px]">
-        <header className="border-b border-line/70 px-10 py-7 lg:px-12">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-            <div>
-              <div className="mb-2 text-[11px] uppercase tracking-[0.32em] text-accent">Connector settings</div>
-              <div className="flex flex-wrap items-center gap-3">
-                <h1 className="text-3xl font-semibold tracking-tight text-text">Coinbase</h1>
-                <AccountStatusBadge label={connectorLabel} tone={connectorTone} />
-              </div>
-              <p className="mt-2 max-w-3xl text-sm text-muted">
-                This workspace only shows which dashboard accounts use the Coinbase connector. Coinbase balances only appear on the Van Aken Dashboard.
-              </p>
-            </div>
-          </div>
-        </header>
-
-        <section className="px-10 py-8 lg:px-12">
-          <div className="grid gap-6">
-            {statusError ? <ErrorState message={statusError} /> : null}
-
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-              <MetricCard label="Connector" tone={status?.available ? "safe" : "neutral"} value={connectorLabel} />
-              <MetricCard label="Linked dashboard accounts" value={fmtNumber(linkedAccountCount)} />
-              <MetricCard label="Primary dashboard" value="Van Aken" />
-            </div>
-
-            <div className="grid gap-6 xl:grid-cols-[1.08fr,0.92fr]">
-              <Panel title="Linked Accounts" eyebrow="Connector Usage">
-                <div className="grid gap-3">
-                  <div className="rounded-2xl border border-accent/25 bg-accent/8 px-4 py-4">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <div>
-                        <div className="text-sm font-medium text-text">Van Aken</div>
-                        <div className="mt-1 text-sm text-muted">This Coinbase connector feeds the Van Aken dashboard holdings section.</div>
-                      </div>
-                      <span className="rounded-full border border-accent/25 bg-panel px-3 py-1 text-xs font-medium uppercase tracking-[0.16em] text-accent">
-                        Dashboard
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              </Panel>
-
-              <Panel title="Workspace Role" eyebrow="Notes">
-                <div className="grid gap-3">
-                  <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-4 text-sm text-muted">
-                    This screen intentionally avoids showing balances or credential details.
-                  </div>
-                  <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-4 text-sm text-muted">
-                    To view actual Coinbase holdings, use the Van Aken Dashboard.
-                  </div>
-                </div>
-              </Panel>
-            </div>
-          </div>
-        </section>
-      </div>
-    </div>
-  );
-}
-
-function ConnectorFact({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-3">
-      <div className="text-[11px] uppercase tracking-[0.18em] text-muted">{label}</div>
-      <div className="mt-2 text-sm font-medium text-text">{value}</div>
     </div>
   );
 }
@@ -2237,15 +2439,6 @@ function ShellSourceRow({
   );
 }
 
-function ShellSettingRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="shell-setting-row">
-      <span className="shell-setting-label">{label}</span>
-      <span className="shell-setting-value">{value}</span>
-    </div>
-  );
-}
-
 function SidebarToggleIcon({ open }: { open: boolean }) {
   const dividerX = open ? 7.8 : 9.45;
   const dividerY = open ? 5.9 : 3.5;
@@ -2288,16 +2481,31 @@ function PdfLibraryIcon() {
   );
 }
 
-function FolderIcon() {
+function OptionsIcon() {
   return (
     <svg aria-hidden="true" fill="none" height="18" viewBox="0 0 20 20" width="18">
-      <path
-        d="M3.75 6.75h4.1l1.3 1.3h7.1v5.7a1.5 1.5 0 0 1-1.5 1.5H5.25a1.5 1.5 0 0 1-1.5-1.5z"
-        stroke="currentColor"
-        strokeLinejoin="round"
-        strokeWidth="1.5"
-      />
-      <path d="M3.75 6.75v-.5a1.5 1.5 0 0 1 1.5-1.5H7.2l1.15 1.2" opacity="0.55" stroke="currentColor" strokeLinejoin="round" strokeWidth="1.5" />
+      <path d="M4.25 14.75h11.5" opacity="0.45" stroke="currentColor" strokeLinecap="round" strokeWidth="1.4" />
+      <path d="M6.2 11.7c1.15-2.6 2.67-3.9 4.55-3.9 1.36 0 2.54.63 3.55 1.9" stroke="currentColor" strokeLinecap="round" strokeWidth="1.55" />
+      <circle cx="6" cy="12" r="1.1" fill="currentColor" />
+      <circle cx="14.2" cy="9.6" r="1.1" fill="currentColor" />
+    </svg>
+  );
+}
+
+function UniverseIcon() {
+  return (
+    <svg aria-hidden="true" fill="none" height="18" viewBox="0 0 20 20" width="18">
+      <circle cx="10" cy="10" r="6.1" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M4.4 10h11.2M10 4.4c1.7 1.65 2.55 3.52 2.55 5.6S11.7 13.95 10 15.6M10 4.4C8.3 6.05 7.45 7.92 7.45 10s.85 3.95 2.55 5.6" opacity="0.55" stroke="currentColor" strokeLinecap="round" strokeWidth="1.35" />
+    </svg>
+  );
+}
+
+function CalendarIcon() {
+  return (
+    <svg aria-hidden="true" fill="none" height="18" viewBox="0 0 20 20" width="18">
+      <rect height="11.2" rx="2" stroke="currentColor" strokeWidth="1.45" width="12.5" x="3.75" y="5.15" />
+      <path d="M6.4 3.75v2.7M13.6 3.75v2.7M3.75 8.2h12.5" stroke="currentColor" strokeLinecap="round" strokeWidth="1.45" />
     </svg>
   );
 }

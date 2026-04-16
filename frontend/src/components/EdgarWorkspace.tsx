@@ -200,9 +200,9 @@ export function EdgarWorkspace({
         <header className="border-b border-line/70 px-10 py-7 lg:px-12">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div>
-              <div className="mb-2 text-[11px] uppercase tracking-[0.32em] text-accent">SEC API</div>
+              <div className="mb-2 text-[11px] uppercase tracking-[0.32em] text-accent">Filings tool</div>
               <div className="flex flex-wrap items-center gap-3">
-                <h1 className="text-3xl font-semibold tracking-tight text-text">EDGAR</h1>
+                <h1 className="text-3xl font-semibold tracking-tight text-text">Filings</h1>
                 <div className="inline-flex items-center rounded-full border border-line bg-panelSoft px-4 py-1 text-sm font-medium text-text">
                   {status?.available ? "Ready" : statusLoading ? "Checking" : "Needs config"}
                 </div>
