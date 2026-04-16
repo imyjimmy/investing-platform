@@ -4,7 +4,8 @@ export interface ConnectionStatus {
   mode: "mock" | "ibkr";
   connected: boolean;
   status: "connected" | "disconnected" | "degraded";
-  executionMode: "disabled" | "paper";
+  executionMode: "disabled" | "enabled";
+  routedAccountType: "live" | "paper" | "unknown";
   host: string;
   port: number;
   clientId: number;

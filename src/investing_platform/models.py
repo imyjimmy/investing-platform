@@ -17,7 +17,8 @@ class DashboardModel(BaseModel):
 RiskLevel = Literal["Low", "Moderate", "Elevated", "High"]
 StrategyTag = Literal["covered-call", "cash-secured-put", "short-option", "long-option", "stock", "other"]
 QuoteSource = Literal["streaming", "historical", "unavailable"]
-ExecutionMode = Literal["disabled", "paper"]
+ExecutionMode = Literal["disabled", "enabled"]
+RouteKind = Literal["live", "paper", "unknown"]
 OrderAction = Literal["BUY", "SELL"]
 OrderType = Literal["LMT", "MKT"]
 TimeInForce = Literal["DAY", "GTC"]
@@ -31,6 +32,7 @@ class ConnectionStatus(DashboardModel):
     connected: bool
     status: Literal["connected", "disconnected", "degraded"]
     executionMode: ExecutionMode = "disabled"
+    routedAccountType: RouteKind = "unknown"
     host: str
     port: int
     clientId: int

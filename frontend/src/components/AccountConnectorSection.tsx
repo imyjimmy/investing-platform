@@ -1,4 +1,5 @@
 import type { PropsWithChildren } from "react";
+import type { ReactNode } from "react";
 
 import { Panel } from "./Panel";
 
@@ -8,6 +9,8 @@ interface AccountConnectorSectionProps extends PropsWithChildren {
   collapsed: boolean;
   onToggle: () => void;
   className?: string;
+  action?: ReactNode;
+  details?: ReactNode;
 }
 
 export function AccountConnectorSection({
@@ -16,6 +19,8 @@ export function AccountConnectorSection({
   collapsed,
   onToggle,
   className = "",
+  action,
+  details,
   children,
 }: AccountConnectorSectionProps) {
   return (
@@ -23,19 +28,23 @@ export function AccountConnectorSection({
       className={className}
       eyebrow={eyebrow}
       title={
-        <div className="flex items-center gap-3">
-          <span>{title}</span>
-          <button
-            aria-expanded={!collapsed}
-            aria-label={collapsed ? `Expand ${title}` : `Collapse ${title}`}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-line/70 bg-panelSoft text-muted transition hover:border-accent/30 hover:text-text"
-            onClick={onToggle}
-            type="button"
-          >
-            <ChevronIcon collapsed={collapsed} />
-          </button>
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <span>{title}</span>
+            <button
+              aria-expanded={!collapsed}
+              aria-label={collapsed ? `Expand ${title}` : `Collapse ${title}`}
+              className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-line/70 bg-panelSoft text-muted transition hover:border-accent/30 hover:text-text"
+              onClick={onToggle}
+              type="button"
+            >
+              <ChevronIcon collapsed={collapsed} />
+            </button>
+          </div>
+          {details ? <div>{details}</div> : null}
         </div>
       }
+      action={action}
     >
       {!collapsed ? children : null}
     </Panel>

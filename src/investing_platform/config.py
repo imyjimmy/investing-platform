@@ -37,6 +37,13 @@ def _env_str(*names: str, default: str) -> str:
     return value if value is not None else default
 
 
+def _env_execution_mode(*names: str, default: str) -> Literal["disabled", "enabled"]:
+    value = _env_str(*names, default=default).strip().lower()
+    if value in {"enabled", "paper"}:
+        return "enabled"
+    return "disabled"
+
+
 def _env_optional_str(*names: str) -> str | None:
     return _first_env(*names)
 
@@ -65,7 +72,7 @@ class DashboardSettings:
     """Environment-backed settings for the platform."""
 
     data_mode: Literal["mock", "ibkr"] = "mock"
-    execution_mode: Literal["disabled", "paper"] = "paper"
+    execution_mode: Literal["disabled", "enabled"] = "enabled"
     ib_host: str = "127.0.0.1"
     ib_port: int = 4002
     ib_client_id: int = 17
@@ -110,11 +117,11 @@ class DashboardSettings:
     def load(cls) -> "DashboardSettings":
         return cls(
             data_mode=_env_str("INVESTING_PLATFORM_DATA_MODE", "OPTIONS_DASHBOARD_DATA_MODE", default="mock").lower(),  # type: ignore[arg-type]
-            execution_mode=_env_str(
+            execution_mode=_env_execution_mode(
                 "INVESTING_PLATFORM_EXECUTION_MODE",
                 "OPTIONS_DASHBOARD_EXECUTION_MODE",
-                default="paper",
-            ).lower(),  # type: ignore[arg-type]
+                default="enabled",
+            ),
             ib_host=_env_str("INVESTING_PLATFORM_IB_HOST", "OPTIONS_DASHBOARD_IB_HOST", default="127.0.0.1"),
             ib_port=_env_int("INVESTING_PLATFORM_IB_PORT", "OPTIONS_DASHBOARD_IB_PORT", default=4002),
             ib_client_id=_env_int(

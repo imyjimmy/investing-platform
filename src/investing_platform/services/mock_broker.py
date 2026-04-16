@@ -47,6 +47,7 @@ class MockBrokerService(BrokerService):
             connected=True,
             status="connected",
             executionMode="disabled",
+            routedAccountType="paper",
             host="localhost",
             port=0,
             clientId=0,
@@ -152,13 +153,13 @@ class MockBrokerService(BrokerService):
         )
 
     def preview_option_order(self, request: OptionOrderRequest) -> OptionOrderPreview:
-        raise BrokerServiceError("Trade execution is disabled in mock mode. Switch to the live IB Gateway adapter to preview or submit paper orders.")
+        raise BrokerServiceError("Trade execution is disabled in mock mode. Switch to the live IB Gateway adapter to preview or submit orders.")
 
     def submit_option_order(self, request: OptionOrderRequest) -> SubmittedOrder:
-        raise BrokerServiceError("Trade execution is disabled in mock mode. Switch to the live IB Gateway adapter to submit paper orders.")
+        raise BrokerServiceError("Trade execution is disabled in mock mode. Switch to the live IB Gateway adapter to submit orders.")
 
     def cancel_order(self, account_id: str, order_id: int) -> OrderCancelResponse:
-        raise BrokerServiceError("Trade execution is disabled in mock mode. Switch to the live IB Gateway adapter to cancel paper orders.")
+        raise BrokerServiceError("Trade execution is disabled in mock mode. Switch to the live IB Gateway adapter to cancel orders.")
 
     def _build_stock_positions(self, today: date) -> list[Position]:
         allocations = [

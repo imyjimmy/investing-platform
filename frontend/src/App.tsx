@@ -161,15 +161,25 @@ function orderRiskLabel(order: OpenOrderExposure) {
   return "Order capital";
 }
 
-function isPaperTradingAccountId(accountId: string | null | undefined) {
-  if (!accountId) {
-    return false;
-  }
-  return accountId.trim().toUpperCase().startsWith("DU");
-}
-
 function uniqueAccounts(accounts: Array<string | null | undefined>) {
   return Array.from(new Set(accounts.map((accountId) => accountId?.trim().toUpperCase()).filter(Boolean) as string[]));
+}
+
+function routeKindFromAccountId(accountId: string | null | undefined): "live" | "paper" | "unknown" {
+  if (!accountId) {
+    return "unknown";
+  }
+  return accountId.trim().toUpperCase().startsWith("DU") ? "paper" : "live";
+}
+
+function routePresentation(routeKind: "live" | "paper" | "unknown") {
+  if (routeKind === "paper") {
+    return { label: "Paper trading", tone: "accent" as const };
+  }
+  if (routeKind === "live") {
+    return { label: "Live trading", tone: "danger" as const };
+  }
+  return { label: "Route pending", tone: "neutral" as const };
 }
 
 type TicketContractSide = "C" | "P";
@@ -536,19 +546,21 @@ function App() {
     (row) => row.callMid != null || row.putMid != null,
   );
   const chainError = chainQuery.error instanceof Error ? chainQuery.error.message : null;
+  const chainErrorHeaderLabel =
+    chainError && activeDisplayedChain && !activeChainMatchesRequest
+      ? `Could not load ${chainSymbol}. Still showing the last loaded chain. ${chainError}`
+      : chainError;
   const displayedChainRows = activeDisplayedChain?.rows ?? [];
   const displayedExpiries = activeChainMatchesRequest ? activeDisplayedChain?.expiries ?? [] : [];
   const activeExpiry = selectedExpiry ?? activeDisplayedChain?.selectedExpiry ?? undefined;
   const openOptionOrders = openOrders.filter((order) => order.secType === "OPT");
-  const paperExecutionEnabled = connectionQuery.data?.executionMode === "paper";
+  const executionEnabled = connectionQuery.data?.executionMode === "enabled";
   const selectedAccount = selectedAccountId ?? accountId ?? undefined;
-  const selectedAccountIsPaper = isPaperTradingAccountId(selectedAccount);
-  const ibkrConnectorLabel = selectedAccountIsPaper
-    ? "IBKR Paper Connector"
-    : selectedAccount
-      ? "IBKR Live Connector"
-      : "IBKR Connector";
-  const ibkrConnectorTitle = selectedAccountIsPaper ? "Paper Account" : selectedAccount ? "Live Account" : "Connector Overview";
+  const routedAccount = connectionQuery.data?.accountId ?? selectedAccount;
+  const routedAccountType = connectionQuery.data?.routedAccountType ?? routeKindFromAccountId(routedAccount);
+  const routedAccountPill = routePresentation(routedAccountType);
+  const ibkrConnectorLabel = "IBKR Connector";
+  const ibkrConnectorTitle = "Broker Account";
   const parsedLimitPrice = ticketOrderType === "LMT" ? Number(ticketLimitPrice) : null;
   const validLimitPrice =
     ticketOrderType === "MKT" ? null : Number.isFinite(parsedLimitPrice) && parsedLimitPrice != null && parsedLimitPrice > 0 ? parsedLimitPrice : null;
@@ -573,15 +585,13 @@ function App() {
   const previewError = previewMutation.error instanceof Error ? previewMutation.error.message : null;
   const submitError = submitMutation.error instanceof Error ? submitMutation.error.message : null;
   const cancelError = cancelMutation.error instanceof Error ? cancelMutation.error.message : null;
-  const canPreviewTicket = paperExecutionEnabled && selectedAccountIsPaper && Boolean(ticketRequest);
+  const canPreviewTicket = executionEnabled && Boolean(ticketRequest);
   const canSubmitTicket = canPreviewTicket && previewIsCurrent;
-  const executionBannerMessage = !paperExecutionEnabled
-    ? "Paper execution is disabled for this dashboard session."
+  const executionBannerMessage = !executionEnabled
+    ? "Trade execution is disabled for this dashboard session."
     : !selectedAccount
-      ? "Connect IBKR to discover the routed account for paper execution."
-      : !selectedAccountIsPaper
-        ? "Paper execution is blocked on live accounts."
-        : null;
+      ? "Connect IBKR to discover the account currently routed through Gateway."
+      : null;
 
   const filteredPositions = optionPositions
     .filter((position) => position.symbol.toLowerCase().includes(deferredTickerFilter.trim().toLowerCase()))
@@ -684,8 +694,8 @@ function App() {
   const investorPdfSourceTone: SourceTone = investorPdfStatusQuery.data?.available ? "live" : investorPdfStatusError ? "off" : "off";
   const investorPdfBadge = investorPdfSyncing ? "Syncing" : investorPdfStatusQuery.data?.available ? "Ready" : "Off";
   const investorPdfMeta = "Annual reports + SEC PDF exhibits";
-  const dataModeLabel = connectionQuery.data?.mode === "ibkr" ? "IBKR live session" : "Mock snapshot";
-  const executionModeLabel = paperExecutionEnabled ? "Paper execution" : "Disabled";
+  const dataModeLabel = connectionQuery.data?.mode === "ibkr" ? "IBKR gateway session" : "Mock snapshot";
+  const executionModeLabel = executionEnabled ? "Gateway-routed execution" : "Disabled";
   const refreshCadenceLabel = "Conn 10s · Risk 15s · Chain 20s";
   const heartbeatLabel = connectionQuery.data?.lastHeartbeatAt ? formatTimestamp(connectionQuery.data.lastHeartbeatAt) : "No heartbeat";
   const accountSettingsConnectors: AccountConnectorCard[] = [
@@ -702,7 +712,7 @@ function App() {
       detail: connectionQuery.isLoading
         ? "Loading broker connector status"
         : connectionQuery.data?.connected
-          ? `${connectionEndpoint} · ${paperExecutionEnabled ? "paper routing enabled" : "read-only session"}`
+          ? `${connectionEndpoint} · ${executionEnabled ? "execution enabled" : "read-only session"}`
           : sourceError ?? `${connectionEndpoint} · waiting for gateway`,
       tone: connectionQuery.isLoading ? "caution" : connectionQuery.data?.connected ? (risk?.isStale ? "caution" : "safe") : "danger",
       countsTowardHealth: true,
@@ -905,7 +915,6 @@ function App() {
               </button>
             </div>
             <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
-              <InlinePill label={selectedAccount ? `Acct ${selectedAccount}` : "Acct pending"} tone={selectedAccountIsPaper ? "accent" : "neutral"} />
               <InlinePill
                 label={connectionQuery.data?.marketDataMode ?? "DATA"}
                 tone={connectionQuery.data?.marketDataMode === "LIVE" ? "safe" : "neutral"}
@@ -918,14 +927,6 @@ function App() {
 
         {executionBannerMessage ? (
           <div className="rounded-2xl border border-caution/25 bg-caution/8 px-4 py-3 text-sm text-caution">{executionBannerMessage}</div>
-        ) : null}
-
-        {chainError ? (
-          <div className="rounded-2xl border border-danger/25 bg-danger/8 px-4 py-3 text-sm text-danger">
-            {activeDisplayedChain && !activeChainMatchesRequest
-              ? `Could not load ${chainSymbol}. Still showing the last loaded chain. ${chainError}`
-              : chainError}
-          </div>
         ) : null}
 
         {displayedExpiries.length ? (
@@ -1199,7 +1200,10 @@ function App() {
                   <div className="text-[11px] uppercase tracking-[0.22em] text-muted">Trade Ticket</div>
                   <div className="mt-1 text-lg font-semibold text-text">{selectedContractLabel ?? "Select a contract"}</div>
                 </div>
-                <InlinePill label="Paper only" tone="danger" />
+                <InlinePill
+                  label={executionEnabled ? routedAccountPill.label : "Read only"}
+                  tone={executionEnabled ? routedAccountPill.tone : "neutral"}
+                />
               </div>
 
               {ticketDraft ? (
@@ -1341,13 +1345,13 @@ function App() {
                       }}
                       type="button"
                     >
-                      {submitMutation.isPending ? "Submitting…" : "Submit paper order"}
+                      {submitMutation.isPending ? "Submitting…" : "Submit order"}
                     </button>
                   </div>
                 </div>
               ) : (
                 <div className="mt-4 rounded-xl border border-line/80 bg-panelSoft px-3 py-4 text-sm text-muted">
-                  Load any call or put from the chain to build a paper order ticket.
+                  Load any call or put from the chain to build an order ticket.
                 </div>
               )}
             </div>
@@ -1404,7 +1408,7 @@ function App() {
                   ))
                 ) : (
                   <div className="rounded-xl border border-line/80 bg-panelSoft px-3 py-4 text-sm text-muted">
-                    No working option orders in the selected paper account.
+                    No working option orders in the selected routed account.
                   </div>
                 )}
               </div>
@@ -1785,7 +1789,7 @@ function App() {
                           </div>
                           <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                             <MetricCard
-                              hint={selectedAccount ? `${selectedAccount}${selectedAccountIsPaper ? " · Paper route" : " · Live route"}` : undefined}
+                              hint={routedAccount ? `${routedAccount} · ${routedAccountPill.label}` : undefined}
                               label="Total net worth"
                               value={riskSummaryQuery.isLoading ? "Loading" : fmtCurrency(risk?.account.netLiquidation)}
                             />
@@ -1843,7 +1847,23 @@ function App() {
                       ) : (
                         <>
                           <AccountConnectorSection
+                            action={
+                              chainErrorHeaderLabel ? (
+                                <div className="max-w-[52rem] rounded-full border border-danger/25 bg-danger/8 px-3 py-1.5 text-xs leading-5 text-danger">
+                                  {chainErrorHeaderLabel}
+                                </div>
+                              ) : null
+                            }
                             collapsed={ibkrConnectorCollapsed}
+                            details={
+                              <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
+                                <InlinePill
+                                  label={routedAccount ? `Acct ${routedAccount}` : "Acct pending"}
+                                  tone={connectionQuery.data?.connected ? "safe" : "neutral"}
+                                />
+                                <InlinePill label={routedAccountPill.label} tone={routedAccountPill.tone} />
+                              </div>
+                            }
                             eyebrow={ibkrConnectorLabel}
                             onToggle={() => setIbkrConnectorCollapsed((value) => !value)}
                             title={ibkrConnectorTitle}
@@ -1886,9 +1906,12 @@ function IbkrWorkspace({
   onReconnect: () => void;
 }) {
   const managedAccounts = uniqueAccounts([...(status?.managedAccounts ?? []), status?.accountId]);
+  const routedAccount = status?.accountId ?? selectedAccount;
+  const routedAccountType = status?.routedAccountType ?? routeKindFromAccountId(routedAccount);
+  const routedAccountPill = routePresentation(routedAccountType);
   const connectionLabel = status?.connected ? "Connected" : "Disconnected";
-  const sessionModeLabel = status?.mode === "ibkr" ? "IBKR live session" : "Mock snapshot";
-  const executionLabel = status?.executionMode === "paper" ? "Paper execution" : "Disabled";
+  const sessionModeLabel = status?.mode === "ibkr" ? "IBKR gateway session" : "Mock snapshot";
+  const executionLabel = status?.executionMode === "enabled" ? "Enabled" : "Disabled";
   const lastConnectedLabel = status?.lastSuccessfulConnectAt ? formatTimestamp(status.lastSuccessfulConnectAt) : "Never";
   const lastHeartbeatLabel = status?.lastHeartbeatAt ? formatTimestamp(status.lastHeartbeatAt) : "No heartbeat";
   const nextReconnectLabel = status?.nextReconnectAttemptAt ? formatTimestamp(status.nextReconnectAttemptAt) : "None scheduled";
@@ -1942,15 +1965,16 @@ function IbkrWorkspace({
               />
               <MetricCard label="Session mode" value={sessionModeLabel} />
               <MetricCard
-                hint={selectedAccount ? `Current home route: ${selectedAccount}` : "No active home route yet"}
+                hint="Trade preview, submit, and cancel follow the current Gateway route."
                 label="Execution"
-                tone={status?.executionMode === "paper" ? "safe" : "neutral"}
+                tone={status?.executionMode === "enabled" ? "safe" : "neutral"}
                 value={executionLabel}
               />
               <MetricCard
-                hint={managedAccounts.length > 0 ? managedAccounts.join(" · ") : "Connect to discover routed accounts"}
-                label="Managed accounts"
-                value={fmtNumber(managedAccounts.length)}
+                hint={routedAccount ? "Gateway reports this as the active account route." : "Connect to discover the active account route"}
+                kicker={<InlinePill label={routedAccountPill.label} tone={routedAccountPill.tone} />}
+                label="Routed account"
+                value={routedAccount ?? "Pending"}
               />
             </div>
 
@@ -1959,6 +1983,8 @@ function IbkrWorkspace({
                 <div className="grid gap-3 sm:grid-cols-2">
                   <ConnectorFact label="Endpoint" value={endpoint} />
                   <ConnectorFact label="Client ID" value={status ? String(status.clientId) : "—"} />
+                  <ConnectorFact label="Routed account" value={routedAccount ?? "Pending"} />
+                  <ConnectorFact label="Trading route" value={routedAccountPill.label} />
                   <ConnectorFact label="Market data" value={status?.marketDataMode ?? "Unknown"} />
                   <ConnectorFact label="Last connect" value={lastConnectedLabel} />
                   <ConnectorFact label="Last heartbeat" value={lastHeartbeatLabel} />
@@ -1970,8 +1996,16 @@ function IbkrWorkspace({
                 {managedAccounts.length > 0 ? (
                   <div className="grid gap-3">
                     {managedAccounts.map((accountId) => {
-                      const isPaperAccount = isPaperTradingAccountId(accountId);
-                      const isCurrent = selectedAccount === accountId;
+                      const isCurrent = routedAccount === accountId;
+                      const accountPill = routePresentation(routeKindFromAccountId(accountId));
+                      const accountPillClasses =
+                        accountPill.tone === "danger"
+                          ? "border-danger/35 bg-danger/10 text-danger"
+                          : accountPill.tone === "accent"
+                            ? "border-accent/35 bg-accent/10 text-accent"
+                            : isCurrent
+                              ? "border-accent/35 bg-accent/10 text-accent"
+                              : "border-line bg-panel text-text";
                       return (
                         <div
                           key={accountId}
@@ -1983,17 +2017,13 @@ function IbkrWorkspace({
                             <div>
                               <div className="text-sm font-medium text-text">{accountId}</div>
                               <div className="mt-1 text-sm text-muted">
-                                {isCurrent ? "Currently routed into the Van Aken home dashboard." : "Available to route into the home dashboard."}
+                                {isCurrent ? "Gateway is currently routed into this account." : "Available account reported by Gateway."}
                               </div>
                             </div>
                             <span
-                              className={`rounded-full border px-3 py-1 text-xs font-medium ${
-                                isPaperAccount
-                                  ? "border-danger/35 bg-danger/8 text-danger"
-                                  : "border-line bg-panel text-text"
-                              }`}
+                              className={`rounded-full border px-3 py-1 text-xs font-medium ${accountPillClasses}`}
                             >
-                              {isPaperAccount ? "Paper" : "Live"}
+                              {isCurrent ? `${accountPill.label} · current` : accountPill.label}
                             </span>
                           </div>
                         </div>

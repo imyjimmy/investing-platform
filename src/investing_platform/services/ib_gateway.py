@@ -10,7 +10,7 @@ from math import erf, exp, isfinite, log, pi, sqrt
 from queue import Empty, Queue
 import threading
 import time
-from typing import Any, Callable, Iterable, TypeVar, cast
+from typing import Any, Callable, Iterable, Literal, TypeVar, cast
 
 from investing_platform.config import DashboardSettings
 from investing_platform.models import (
@@ -69,6 +69,7 @@ class IBGatewayBrokerService(BrokerService):
         self._last_heartbeat_at: datetime | None = None
         self._next_reconnect_attempt_at: datetime | None = None
         self._last_error: str | None = None
+        self._recent_ib_errors: list[tuple[datetime, int, str]] = []
         self._resolved_account_id: str | None = self.settings.ib_account_id
         self._managed_accounts: list[str] = [self.settings.ib_account_id] if self.settings.ib_account_id else []
         self._portfolio_cache: dict[str, CacheEntry[PortfolioSnapshot]] = {}
@@ -93,6 +94,7 @@ class IBGatewayBrokerService(BrokerService):
                 connected=self._connected,
                 status="connected" if self._connected else "disconnected",
                 executionMode=self.settings.execution_mode,
+                routedAccountType=_account_route_kind(self._resolved_account_id),
                 host=self.settings.ib_host,
                 port=self.settings.ib_port,
                 clientId=self.settings.ib_client_id,
@@ -177,7 +179,7 @@ class IBGatewayBrokerService(BrokerService):
     def _preview_option_order_on_thread(self, ib: Any, request: OptionOrderRequest) -> OptionOrderPreview:
         self._ensure_connected(ib)
         account_id = self._resolve_account_id(ib, request.accountId)
-        self._ensure_paper_execution_allowed(account_id)
+        self._ensure_execution_allowed(account_id)
         contract, market_reference_price = self._resolve_order_contract(ib, request)
         stock_qty, option_qty = self._position_maps_for_account(ib, account_id)
         opening_or_closing = _order_open_or_close(contract, request.action, float(request.quantity), stock_qty, option_qty)
@@ -195,7 +197,7 @@ class IBGatewayBrokerService(BrokerService):
     def _submit_option_order_on_thread(self, ib: Any, request: OptionOrderRequest) -> SubmittedOrder:
         self._ensure_connected(ib)
         account_id = self._resolve_account_id(ib, request.accountId)
-        self._ensure_paper_execution_allowed(account_id)
+        self._ensure_execution_allowed(account_id)
         contract, _ = self._resolve_order_contract(ib, request)
         order = self._build_ib_order(request, account_id)
         trade = ib.placeOrder(contract, order)
@@ -218,7 +220,7 @@ class IBGatewayBrokerService(BrokerService):
     def _cancel_order_on_thread(self, ib: Any, account_id: str, order_id: int) -> OrderCancelResponse:
         self._ensure_connected(ib)
         resolved_account_id = self._resolve_account_id(ib, account_id)
-        self._ensure_paper_execution_allowed(resolved_account_id)
+        self._ensure_execution_allowed(resolved_account_id)
         trade = self._find_open_trade(ib, resolved_account_id, order_id)
         if trade is None:
             raise RuntimeError(f"Open order {order_id} was not found for account {resolved_account_id}.")
@@ -284,6 +286,7 @@ class IBGatewayBrokerService(BrokerService):
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         ib = IB()
+        ib.errorEvent += self._handle_ib_error
         try:
             while not self._stop_event.is_set():
                 try:
@@ -321,6 +324,36 @@ class IBGatewayBrokerService(BrokerService):
             finally:
                 asyncio.set_event_loop(None)
                 loop.close()
+
+    def _handle_ib_error(self, req_id: int, error_code: int, error_string: str, contract: Any | None = None) -> None:
+        contract_symbol = _string_or_none(getattr(contract, "symbol", None)) if contract is not None else None
+        detail = error_string.strip()
+        if contract_symbol:
+            detail = f"{detail} [{contract_symbol}]"
+        with self._status_lock:
+            self._recent_ib_errors.append((datetime.now(UTC), int(error_code), detail))
+            self._recent_ib_errors = self._recent_ib_errors[-24:]
+
+    def _latest_market_data_issue(self, *, max_age_seconds: float = 30.0) -> str | None:
+        cutoff = datetime.now(UTC) - timedelta(seconds=max_age_seconds)
+        with self._status_lock:
+            recent_errors = [entry for entry in self._recent_ib_errors if entry[0] >= cutoff]
+        for _at, error_code, detail in reversed(recent_errors):
+            lower_detail = detail.lower()
+            if error_code == 10197 or "competing live session" in lower_detail:
+                return (
+                    "IBKR is blocking market data because another live TWS/Gateway session is active. "
+                    "Log out of other live sessions, then reconnect this dashboard."
+                )
+            if error_code == 162 and "different ip address" in lower_detail:
+                return (
+                    "IBKR is blocking historical market data because the trading session is connected from a different IP address."
+                )
+            if error_code in {354, 10089, 10090, 10091} or "additional subscription" in lower_detail or "not subscribed" in lower_detail:
+                return (
+                    "IBKR says this API session is missing the required market-data subscriptions or entitlements."
+                )
+        return None
 
     def _auto_reconnect_if_needed(self, ib: Any) -> None:
         if ib.isConnected():
@@ -555,6 +588,11 @@ class IBGatewayBrokerService(BrokerService):
         if not _is_valid_number(underlying_price):
             underlying_price = _latest_underlying_price(ib, underlying_contract) or 0.0
         if not _is_valid_number(underlying_price):
+            market_data_issue = self._latest_market_data_issue()
+            if market_data_issue:
+                raise RuntimeError(
+                    f"No market or recent historical price returned for {symbol}. {market_data_issue}"
+                )
             raise RuntimeError(
                 f"No market or recent historical price returned for {symbol}. Check the symbol and market data permissions in IB Gateway."
             )
@@ -607,6 +645,7 @@ class IBGatewayBrokerService(BrokerService):
         if not qualified_contracts:
             raise RuntimeError(f"No option contracts qualified for {symbol} {selected_expiry}.")
         tickers, resolved_market_data_type = self._request_option_tickers(ib, qualified_contracts, resolved_market_data_type)
+        market_data_issue = self._latest_market_data_issue()
         quote_source = "streaming" if any(_ticker_has_option_payload(ticker) for ticker in tickers) else "unavailable"
         quote_as_of: datetime | None = None
         historical_midpoints: dict[int, float] = {}
@@ -705,7 +744,7 @@ class IBGatewayBrokerService(BrokerService):
             highlights=_chain_highlights(rows, selected_expiry),
             quoteSource=quote_source,  # type: ignore[arg-type]
             quoteAsOf=quote_as_of,
-            quoteNotice=_quote_notice(quote_source, quote_as_of),
+            quoteNotice=_quote_notice(quote_source, quote_as_of, market_data_issue),
             generatedAt=generated_at,
             isStale=False,
         )
@@ -820,11 +859,9 @@ class IBGatewayBrokerService(BrokerService):
             generatedAt=datetime.now(UTC),
         )
 
-    def _ensure_paper_execution_allowed(self, account_id: str) -> None:
-        if self.settings.execution_mode != "paper":
+    def _ensure_execution_allowed(self, account_id: str) -> None:
+        if self.settings.execution_mode != "enabled":
             raise RuntimeError("Trade execution is disabled for this dashboard session.")
-        if not _is_paper_account_id(account_id):
-            raise RuntimeError(f"Paper-only execution is enabled, so account {account_id} is blocked from order submission.")
 
     def _clear_portfolio_cache(self, account_id: str) -> None:
         resolved = account_id.strip().upper()
@@ -942,8 +979,14 @@ class IBGatewayBrokerService(BrokerService):
             last_market_data_type = market_data_type
             if _is_valid_number(_ticker_market_price(ticker)):
                 return ticker, market_data_type
+            market_data_issue = self._latest_market_data_issue()
+            if _is_hard_market_data_blocker(market_data_issue):
+                break
         if last_ticker is not None:
             return last_ticker, last_market_data_type
+        market_data_issue = self._latest_market_data_issue()
+        if market_data_issue:
+            raise RuntimeError(f"No market data returned for {contract.symbol}. {market_data_issue}")
         raise RuntimeError(f"No market data returned for {contract.symbol}. Check the symbol and market data permissions in IB Gateway.")
 
     def _req_ticker_snapshot(self, ib: Any, contract: Any, market_data_type: int) -> Any | None:
@@ -975,6 +1018,9 @@ class IBGatewayBrokerService(BrokerService):
                 best_market_data_type = market_data_type
                 best_score = score
             if payload_count >= minimum_useful_payloads:
+                break
+            market_data_issue = self._latest_market_data_issue()
+            if _is_hard_market_data_blocker(market_data_issue):
                 break
         return best_tickers, best_market_data_type
 
@@ -1701,20 +1747,27 @@ def _is_paper_account_id(account_id: str | None) -> bool:
     return account_id.strip().upper().startswith("DU")
 
 
+def _account_route_kind(account_id: str | None) -> Literal["live", "paper", "unknown"]:
+    if not account_id:
+        return "unknown"
+    return "paper" if _is_paper_account_id(account_id) else "live"
+
+
 def _age_seconds(timestamp: datetime) -> float:
     return (datetime.now(UTC) - timestamp).total_seconds()
 
 
-def _quote_notice(quote_source: str, quote_as_of: datetime | None) -> str | None:
+def _quote_notice(quote_source: str, quote_as_of: datetime | None, market_data_issue: str | None = None) -> str | None:
     if quote_source == "historical":
         timestamp = quote_as_of.astimezone().strftime("%Y-%m-%d %I:%M %p %Z") if quote_as_of is not None else "the latest completed session"
+        issue_suffix = f" {market_data_issue}" if market_data_issue else ""
         return (
-            f"Streaming option quotes are not available in this session, so the chain is showing the latest historical option midpoint data from IBKR as of {timestamp}."
+            f"Streaming option quotes are not available in this session, so the chain is showing the latest historical option midpoint data from IBKR as of {timestamp}.{issue_suffix}"
         )
     if quote_source == "unavailable":
-        return (
-            "IB Gateway returned the real option chain structure, but the API user did not receive option quote lines for this session."
-        )
+        if market_data_issue:
+            return market_data_issue
+        return "IB Gateway returned the real option chain structure, but the API user did not receive option quote lines for this session."
     return None
 
 
@@ -1722,3 +1775,10 @@ def _chain_cache_ttl_seconds(response: OptionChainResponse, default_ttl_seconds:
     if response.quoteSource == "historical":
         return max(default_ttl_seconds, 300.0)
     return default_ttl_seconds
+
+
+def _is_hard_market_data_blocker(issue: str | None) -> bool:
+    if not issue:
+        return False
+    lower_issue = issue.lower()
+    return "another live tws/gateway session" in lower_issue or "different ip address" in lower_issue
