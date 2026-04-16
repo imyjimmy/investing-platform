@@ -168,6 +168,14 @@ def market_universe() -> dict:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
+@router.get("/market/crypto-majors")
+def crypto_majors() -> dict:
+    try:
+        return _coinbase().get_major_market().model_dump()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
 @router.get("/market/option-contract")
 def option_contract(
     symbol: str = Query(...),

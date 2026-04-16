@@ -196,9 +196,7 @@ type WorkspaceSurface =
   | "ticker"
   | "options"
   | "crypto"
-  | "universe"
   | "earnings"
-  | "filings"
   | "research"
   | "globalSettings";
 type ConnectionHealthTone = "safe" | "caution" | "danger" | "planned";
@@ -378,6 +376,12 @@ function App() {
     enabled: coinbaseStatusQuery.data?.available ?? false,
     refetchInterval: 30_000,
   });
+  const cryptoMajorsQuery = useQuery({
+    queryKey: ["crypto-majors"],
+    queryFn: api.cryptoMajors,
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+  });
 
   const riskSummaryQuery = useQuery({
     queryKey: ["risk-summary", selectedAccountId],
@@ -402,13 +406,6 @@ function App() {
     queryFn: () => api.chain(chainSymbol, selectedExpiry),
     refetchInterval: false,
     staleTime: 120_000,
-  });
-
-  const universeQuery = useQuery({
-    queryKey: ["market-universe"],
-    queryFn: api.marketUniverse,
-    refetchInterval: false,
-    staleTime: 300_000,
   });
 
   const scenarioQuery = useQuery({
@@ -877,7 +874,8 @@ function App() {
       : accountStatusTone === "caution"
         ? "Partial connector coverage"
         : "No live connectors";
-  const universeError = universeQuery.error instanceof Error ? universeQuery.error.message : null;
+  const dashboardHeaderRouteLabel =
+    selectedDashboardOwnsRoute && routedAccount ? `${routedAccount} · ${routedAccountPill.label}` : "No active broker route for this account";
 
   async function runEdgarDownload(request: EdgarDownloadRequest) {
     setEdgarSyncing(true);
@@ -1680,33 +1678,28 @@ function App() {
               <GearIcon />
             </button>
 
-            <div className="flex flex-col gap-5 pr-12 lg:flex-row lg:items-start lg:justify-between">
+            <div className="flex flex-col gap-4 pr-12">
               <div>
                 <div className="mb-2 text-[11px] uppercase tracking-[0.32em] text-accent">{selectedDashboardAccount.eyebrow}</div>
                 <div className="flex flex-wrap items-center gap-3">
                   <h1 className="text-3xl font-semibold tracking-tight text-text">
                     {accountSettingsOpen ? `${selectedDashboardAccount.name} Settings` : selectedDashboardAccount.name}
                   </h1>
-                  {!accountSettingsOpen ? <AccountStatusBadge label={accountStatusLabel} tone={accountStatusTone} /> : null}
                 </div>
-                <p className="mt-2 max-w-3xl text-sm text-muted">
-                  {accountSettingsOpen
-                    ? `Manage the account-bound connectors and defaults for ${selectedDashboardAccount.name}.`
-                    : selectedDashboardAccount.description}
-                </p>
+                {accountSettingsOpen ? (
+                  <p className="mt-2 max-w-3xl text-sm text-muted">
+                    {`Manage the account-bound connectors and defaults for ${selectedDashboardAccount.name}.`}
+                  </p>
+                ) : (
+                  <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-muted">
+                    <div className="inline-flex items-center gap-2">
+                      <span className={`h-2.5 w-2.5 rounded-full ${connectionToneIndicatorClass(accountStatusTone)}`} />
+                      <span>{accountStatusLabel}</span>
+                    </div>
+                    <div>{dashboardHeaderRouteLabel}</div>
+                  </div>
+                )}
               </div>
-              {!accountSettingsOpen ? (
-                <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
-                  <InlinePill
-                    label={selectedDashboardOwnsRoute && routedAccount ? `Acct ${routedAccount}` : "Route not active"}
-                    tone={selectedDashboardOwnsRoute ? "safe" : "neutral"}
-                  />
-                  <InlinePill
-                    label={selectedDashboardOwnsRoute ? routedAccountPill.label : "Awaiting route"}
-                    tone={selectedDashboardOwnsRoute ? routedAccountPill.tone : "neutral"}
-                  />
-                </div>
-              ) : null}
             </div>
 
             {!accountSettingsOpen ? (
@@ -2023,83 +2016,47 @@ function App() {
   function renderCryptoWorkspace() {
     return (
       <ToolWorkspaceFrame
-        description="Observe crypto markets without jumping directly into one account's holdings. Account-owned crypto balances stay on the dashboard."
+        description="Track the crypto market without jumping directly into one account's holdings. Account-owned balances stay on the dashboard."
         eyebrow="Tool"
         title="Crypto"
       >
-        <div className="grid gap-6">
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            <MetricCard label="Primary data source" value="Coinbase" />
-            <MetricCard label="Status" value={coinbaseConnectorStatus} />
-            <MetricCard label="Scope" value="Market perception" />
-            <MetricCard label="Account overlay" value="Off" />
-          </div>
-
-          <Panel eyebrow="Why this is separate" title="Tool Boundary">
-            <div className="grid gap-3 lg:grid-cols-2">
-              <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-4 text-sm text-muted">
-                Sidebar tools should not open directly into per-account balances or holdings.
-              </div>
-              <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-4 text-sm text-muted">
-                Use the dashboard account pages for account-owned crypto holdings and connector-backed balances.
-              </div>
+        {cryptoMajorsQuery.isLoading ? (
+          <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-4 text-sm text-muted">Loading BTC and ETH prices…</div>
+        ) : cryptoMajorsQuery.error instanceof Error ? (
+          <ErrorState message={cryptoMajorsQuery.error.message} />
+        ) : cryptoMajorsQuery.data ? (
+          <div className="grid gap-6">
+            <div className="grid gap-4 md:grid-cols-2">
+              {cryptoMajorsQuery.data.quotes.map((quote) => (
+                <div key={quote.symbol} className="rounded-[20px] border border-line/80 bg-panelSoft px-6 py-6">
+                  <div className="text-[11px] uppercase tracking-[0.28em] text-accent">{quote.name}</div>
+                  <div className="mt-2 text-sm text-muted">{quote.symbol}/USD</div>
+                  <div className="mt-6 text-4xl font-semibold tracking-tight text-text">{fmtCurrency(quote.priceUsd)}</div>
+                </div>
+              ))}
             </div>
-          </Panel>
-        </div>
-      </ToolWorkspaceFrame>
-    );
-  }
 
-  function renderUniverseWorkspace() {
-    return (
-      <ToolWorkspaceFrame
-        description="Scan a universe of names without tying the view to any one account."
-        eyebrow="Tool"
-        title="Universe"
-      >
-        {universeQuery.isLoading ? (
-          <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-4 text-sm text-muted">Loading market universe…</div>
-        ) : universeError ? (
-          <ErrorState message={universeError} />
-        ) : universeQuery.data ? (
-          <div className="grid gap-4">
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-              <MetricCard label="Snapshot date" value={universeQuery.data.snapshotDate} />
-              <MetricCard label="Names" value={fmtNumber(universeQuery.data.rows.length)} />
-              <MetricCard label="Source" value={universeQuery.data.sourceNotice ?? "Scanner snapshot"} />
-              <MetricCard label="Staleness" value={universeQuery.data.isStale ? "Stale" : "Fresh"} />
+              <MetricCard label="Source" value={cryptoMajorsQuery.data.source} />
+              <MetricCard label="Assets" value={`${cryptoMajorsQuery.data.quotes.length} majors`} />
+              <MetricCard label="Updated" value={formatTimestamp(cryptoMajorsQuery.data.generatedAt)} />
+              <MetricCard label="Account overlay" value="Off" />
             </div>
-            <div className="overflow-x-auto rounded-2xl border border-line/80 bg-panel">
-              <table className="min-w-[960px] text-left text-sm">
-                <thead className="border-b border-line/70 text-[11px] uppercase tracking-[0.16em] text-muted">
-                  <tr>
-                    <th className="px-4 py-3">Symbol</th>
-                    <th className="px-4 py-3">Close</th>
-                    <th className="px-4 py-3">Beta (QQQ 60d)</th>
-                    <th className="px-4 py-3">HV20</th>
-                    <th className="px-4 py-3">ATM IV</th>
-                    <th className="px-4 py-3">IV / HV20</th>
-                    <th className="px-4 py-3">Strategy</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {universeQuery.data.rows.slice(0, 20).map((row) => (
-                    <tr key={row.symbol} className="border-t border-line/70">
-                      <td className="px-4 py-3 font-medium text-text">{row.symbol}</td>
-                      <td className="px-4 py-3">{fmtCurrencySmall(row.lastClose)}</td>
-                      <td className="px-4 py-3">{fmtNumber(row.betaQqq60d)}</td>
-                      <td className="px-4 py-3">{fmtNumber(row.hv20, "%")}</td>
-                      <td className="px-4 py-3">{fmtNumber(row.atmFrontMonthIv, "%")}</td>
-                      <td className="px-4 py-3">{fmtNumber(row.ivToHv20)}</td>
-                      <td className="px-4 py-3">{row.recommendedStrategy ?? "—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+
+            {cryptoMajorsQuery.data.sourceNotice ? (
+              <div
+                className={`rounded-2xl border px-4 py-3 text-sm ${
+                  cryptoMajorsQuery.data.isStale
+                    ? "border-caution/25 bg-caution/8 text-caution"
+                    : "border-line/80 bg-panelSoft text-muted"
+                }`}
+              >
+                {cryptoMajorsQuery.data.sourceNotice}
+              </div>
+            ) : null}
           </div>
         ) : (
-          <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-4 text-sm text-muted">No universe snapshot is available yet.</div>
+          <ErrorState message="Crypto prices are unavailable." />
         )}
       </ToolWorkspaceFrame>
     );
@@ -2119,10 +2076,41 @@ function App() {
     );
   }
 
+  function renderResearchWorkspace() {
+    return (
+      <div className="grid gap-6">
+        <EdgarWorkspace
+          defaultTicker={chainSymbol}
+          onRun={(request) => {
+            void runEdgarDownload(request);
+          }}
+          status={edgarStatusQuery.data}
+          statusLoading={edgarStatusQuery.isLoading}
+          statusError={edgarStatusError}
+          syncError={edgarSyncError}
+          syncResult={edgarSyncResult}
+          syncing={edgarSyncing}
+        />
+        <InvestorPdfsWorkspace
+          defaultTicker={chainSymbol}
+          onRun={(request) => {
+            void runInvestorPdfDownload(request);
+          }}
+          status={investorPdfStatusQuery.data}
+          statusLoading={investorPdfStatusQuery.isLoading}
+          statusError={investorPdfStatusError}
+          syncError={investorPdfSyncError}
+          syncResult={investorPdfSyncResult}
+          syncing={investorPdfSyncing}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className={`app-shell grid-shell min-h-screen text-text ${sidebarOpen ? "is-sidebar-open" : ""}`}>
-      <div className="mx-auto w-full max-w-[1880px]">
-        <div className="shell-topbar">
+      <div className="shell-topbar">
+        <div className="shell-topbar-inner mx-auto w-full max-w-[1880px]">
           <button
             aria-expanded={sidebarOpen}
             aria-label={sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
@@ -2146,6 +2134,9 @@ function App() {
           </button>
           <div className="shell-topbar-spacer" />
         </div>
+      </div>
+
+      <div className="mx-auto w-full max-w-[1880px]">
 
         <div className="shell-frame">
           <div className="shell-sidebar-wrap">
@@ -2153,19 +2144,6 @@ function App() {
               <div className="shell-sidebar-body">
                 <div className="shell-sidebar-scroll">
                   <div className="shell-source-list">
-                    <ShellSourceRow
-                      active={activeWorkspace === "dashboard"}
-                      badge={`${DASHBOARD_ACCOUNTS.length} accounts`}
-                      icon={<HomeIcon />}
-                      meta="Portfolio state, balances, holdings, and routed execution context"
-                      onSelect={() => {
-                        setActiveWorkspace("dashboard");
-                        setAccountSettingsOpen(false);
-                      }}
-                      title="Dashboard"
-                      tone="live"
-                    />
-
                     <ShellSourceRow
                       active={activeWorkspace === "ticker"}
                       badge="Tool"
@@ -2197,16 +2175,6 @@ function App() {
                     />
 
                     <ShellSourceRow
-                      active={activeWorkspace === "universe"}
-                      badge="Tool"
-                      icon={<UniverseIcon />}
-                      meta="Scan ranked names, volatility, and market-wide candidates"
-                      onSelect={() => setActiveWorkspace("universe")}
-                      title="Universe"
-                      tone="live"
-                    />
-
-                    <ShellSourceRow
                       active={activeWorkspace === "earnings"}
                       badge="Tool"
                       icon={<CalendarIcon />}
@@ -2217,20 +2185,10 @@ function App() {
                     />
 
                     <ShellSourceRow
-                      active={activeWorkspace === "filings"}
-                      badge="Tool"
-                      icon={<DocumentIcon />}
-                      meta="Search SEC filings and filing bundles"
-                      onSelect={() => setActiveWorkspace("filings")}
-                      title="Filings"
-                      tone="live"
-                    />
-
-                    <ShellSourceRow
                       active={activeWorkspace === "research"}
                       badge="Tool"
-                      icon={<PdfLibraryIcon />}
-                      meta="Investor reports, annual reports, and PDF research flows"
+                      icon={<DocumentIcon />}
+                      meta="SEC filings, annual reports, and investor research in one workspace"
                       onSelect={() => setActiveWorkspace("research")}
                       title="Research"
                       tone="live"
@@ -2260,36 +2218,8 @@ function App() {
               {activeWorkspace === "ticker" ? renderTickerWorkspace() : null}
               {activeWorkspace === "options" ? renderOptionsWorkspace() : null}
               {activeWorkspace === "crypto" ? renderCryptoWorkspace() : null}
-              {activeWorkspace === "universe" ? renderUniverseWorkspace() : null}
               {activeWorkspace === "earnings" ? renderEarningsWorkspace() : null}
-              {activeWorkspace === "filings" ? (
-                <EdgarWorkspace
-                  defaultTicker={chainSymbol}
-                  onRun={(request) => {
-                    void runEdgarDownload(request);
-                  }}
-                  status={edgarStatusQuery.data}
-                  statusLoading={edgarStatusQuery.isLoading}
-                  statusError={edgarStatusError}
-                  syncError={edgarSyncError}
-                  syncResult={edgarSyncResult}
-                  syncing={edgarSyncing}
-                />
-              ) : null}
-              {activeWorkspace === "research" ? (
-                <InvestorPdfsWorkspace
-                  defaultTicker={chainSymbol}
-                  onRun={(request) => {
-                    void runInvestorPdfDownload(request);
-                  }}
-                  status={investorPdfStatusQuery.data}
-                  statusLoading={investorPdfStatusQuery.isLoading}
-                  statusError={investorPdfStatusError}
-                  syncError={investorPdfSyncError}
-                  syncResult={investorPdfSyncResult}
-                  syncing={investorPdfSyncing}
-                />
-              ) : null}
+              {activeWorkspace === "research" ? renderResearchWorkspace() : null}
               {activeWorkspace === "globalSettings" ? renderGlobalSettingsWorkspace() : null}
             </div>
           </div>
@@ -2328,15 +2258,6 @@ function ToolWorkspaceFrame({
         <section className="px-10 py-8 lg:px-12">{children}</section>
       </div>
     </div>
-  );
-}
-
-function AccountStatusBadge({ label, tone }: { label: string; tone: ConnectionHealthTone }) {
-  return (
-    <span className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-medium uppercase tracking-[0.18em] ${connectionToneBadgeClass(tone)}`}>
-      <span className={`h-2.5 w-2.5 rounded-full ${connectionToneIndicatorClass(tone)}`} />
-      {label}
-    </span>
   );
 }
 
@@ -2393,7 +2314,7 @@ function ShellSourceRow({
   title: string;
   meta: string;
   badge: string;
-  icon: ReactNode;
+  icon?: ReactNode;
   tone: SourceTone;
   active?: boolean;
   children?: ReactNode;
@@ -2419,7 +2340,7 @@ function ShellSourceRow({
       {...interactiveProps}
     >
       <div className="shell-source-top">
-        <span className="shell-row-icon">{icon}</span>
+        {icon ? <span className="shell-row-icon">{icon}</span> : null}
         <div className="shell-source-copy">
           <div className="shell-source-title">{title}</div>
           <div className="shell-source-meta">{meta}</div>
@@ -2488,15 +2409,6 @@ function OptionsIcon() {
       <path d="M6.2 11.7c1.15-2.6 2.67-3.9 4.55-3.9 1.36 0 2.54.63 3.55 1.9" stroke="currentColor" strokeLinecap="round" strokeWidth="1.55" />
       <circle cx="6" cy="12" r="1.1" fill="currentColor" />
       <circle cx="14.2" cy="9.6" r="1.1" fill="currentColor" />
-    </svg>
-  );
-}
-
-function UniverseIcon() {
-  return (
-    <svg aria-hidden="true" fill="none" height="18" viewBox="0 0 20 20" width="18">
-      <circle cx="10" cy="10" r="6.1" stroke="currentColor" strokeWidth="1.5" />
-      <path d="M4.4 10h11.2M10 4.4c1.7 1.65 2.55 3.52 2.55 5.6S11.7 13.95 10 15.6M10 4.4C8.3 6.05 7.45 7.92 7.45 10s.85 3.95 2.55 5.6" opacity="0.55" stroke="currentColor" strokeLinecap="round" strokeWidth="1.35" />
     </svg>
   );
 }
@@ -2691,19 +2603,6 @@ function shortenPath(value: string, maxLength = 42) {
   }
   const edge = Math.max(12, Math.floor((maxLength - 1) / 2));
   return `${value.slice(0, edge)}…${value.slice(-edge)}`;
-}
-
-function connectionToneBadgeClass(tone: ConnectionHealthTone) {
-  if (tone === "safe") {
-    return "border-safe/30 bg-safe/10 text-safe";
-  }
-  if (tone === "caution") {
-    return "border-caution/30 bg-caution/10 text-caution";
-  }
-  if (tone === "danger") {
-    return "border-danger/30 bg-danger/10 text-danger";
-  }
-  return "border-line/80 bg-panelSoft text-muted";
 }
 
 function connectionToneIndicatorClass(tone: ConnectionHealthTone) {

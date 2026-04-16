@@ -69,7 +69,7 @@ body {
   --shell-radius: 16px;
   --shell-row-radius: 12px;
   --shell-icon-radius: 8px;
-  padding: 0 16px 16px;
+  padding: 54px 16px 16px;
 }
 
 .app-shell.is-sidebar-open {
@@ -78,19 +78,24 @@ body {
 }
 
 .shell-topbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 40;
+  padding: 0 16px 10px;
+  pointer-events: none;
+}
+
+.shell-topbar-inner {
   display: flex;
   align-items: center;
   min-height: 44px;
-  margin-left: -16px;
-  margin-right: -16px;
-  margin-bottom: 10px;
-  position: sticky;
-  top: 0;
-  z-index: 30;
   border-radius: 0 0 var(--shell-radius) var(--shell-radius);
   background: rgba(8, 17, 20, 0.42);
   backdrop-filter: blur(10px);
   padding: 0 18px;
+  pointer-events: auto;
 }
 
 .shell-topbar-spacer {
@@ -421,14 +426,14 @@ body {
 @media (max-width: 1024px) {
   .app-shell {
     --sidebar-open-width: min(280px, calc(100vw - 32px));
-    padding: 0 12px 12px;
+    padding: 54px 12px 12px;
   }
 
   .shell-topbar {
-    top: 0;
-    margin-left: -12px;
-    margin-right: -12px;
-    margin-bottom: 10px;
+    padding: 0 12px 10px;
+  }
+
+  .shell-topbar-inner {
     padding: 0 14px;
   }
 

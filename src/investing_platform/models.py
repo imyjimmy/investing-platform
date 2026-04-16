@@ -503,6 +503,20 @@ class CoinbasePortfolioResponse(DashboardModel):
     isStale: bool = False
 
 
+class CryptoMarketQuote(DashboardModel):
+    symbol: str
+    name: str
+    priceUsd: float
+
+
+class CryptoMarketResponse(DashboardModel):
+    source: str
+    quotes: list[CryptoMarketQuote]
+    generatedAt: datetime
+    sourceNotice: str | None = None
+    isStale: bool = False
+
+
 class EdgarSourceStatus(DashboardModel):
     available: bool
     status: Literal["ready", "degraded"]

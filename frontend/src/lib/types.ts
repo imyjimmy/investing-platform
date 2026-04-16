@@ -401,6 +401,20 @@ export interface CoinbasePortfolioResponse {
   isStale: boolean;
 }
 
+export interface CryptoMarketQuote {
+  symbol: string;
+  name: string;
+  priceUsd: number;
+}
+
+export interface CryptoMarketResponse {
+  source: string;
+  quotes: CryptoMarketQuote[];
+  generatedAt: string;
+  sourceNotice: string | null;
+  isStale: boolean;
+}
+
 export interface EdgarSourceStatus {
   available: boolean;
   status: "ready" | "degraded";

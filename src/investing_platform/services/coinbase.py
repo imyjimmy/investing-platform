@@ -16,7 +16,7 @@ from urllib.parse import urljoin, urlparse
 import requests
 
 from investing_platform.config import DashboardSettings
-from investing_platform.models import CoinbaseHolding, CoinbasePortfolioResponse, CoinbaseSourceStatus
+from investing_platform.models import CoinbaseHolding, CoinbasePortfolioResponse, CoinbaseSourceStatus, CryptoMarketQuote, CryptoMarketResponse
 from investing_platform.services.base import CacheEntry
 
 
@@ -87,6 +87,39 @@ class CoinbaseService:
             self._portfolio_cache = CacheEntry(value=portfolio, captured_at=portfolio.generatedAt)
         self._remember_success()
         return portfolio
+
+    def get_major_market(self) -> CryptoMarketResponse:
+        majors = [("BTC", "Bitcoin"), ("ETH", "Ethereum")]
+        quotes: list[CryptoMarketQuote] = []
+        missing_symbols: list[str] = []
+
+        for symbol, name in majors:
+            usd_rate = self._lookup_usd_rate(symbol)
+            if usd_rate is None:
+                missing_symbols.append(symbol)
+                continue
+            quotes.append(
+                CryptoMarketQuote(
+                    symbol=symbol,
+                    name=name,
+                    priceUsd=round(usd_rate, 2),
+                )
+            )
+
+        if not quotes:
+            raise RuntimeError("Coinbase public exchange rates are unavailable for BTC and ETH right now.")
+
+        source_notice = "BTC and ETH are using Coinbase public USD exchange rates."
+        if missing_symbols:
+            source_notice = f"{source_notice} Missing: {', '.join(missing_symbols)}."
+
+        return CryptoMarketResponse(
+            source="Coinbase public exchange rates",
+            quotes=quotes,
+            generatedAt=datetime.now(UTC),
+            sourceNotice=source_notice,
+            isStale=bool(missing_symbols),
+        )
 
     def _fetch_portfolio(self) -> CoinbasePortfolioResponse:
         credentials = self._resolve_credentials()
