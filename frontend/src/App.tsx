@@ -2165,16 +2165,6 @@ function App() {
                     />
 
                     <ShellSourceRow
-                      active={activeWorkspace === "crypto"}
-                      badge="Tool"
-                      icon={<CoinbaseIcon />}
-                      meta="Observe crypto markets without jumping into per-account holdings"
-                      onSelect={() => setActiveWorkspace("crypto")}
-                      title="Crypto"
-                      tone="live"
-                    />
-
-                    <ShellSourceRow
                       active={activeWorkspace === "earnings"}
                       badge="Tool"
                       icon={<CalendarIcon />}
@@ -2191,6 +2181,16 @@ function App() {
                       meta="SEC filings, annual reports, and investor research in one workspace"
                       onSelect={() => setActiveWorkspace("research")}
                       title="Research"
+                      tone="live"
+                    />
+
+                    <ShellSourceRow
+                      active={activeWorkspace === "crypto"}
+                      badge="Tool"
+                      icon={<CoinbaseIcon />}
+                      meta="Observe crypto markets without jumping into per-account holdings"
+                      onSelect={() => setActiveWorkspace("crypto")}
+                      title="Crypto"
                       tone="live"
                     />
                   </div>
