@@ -13,6 +13,7 @@ import {
 import { api } from "./lib/api";
 import type {
   ChainRow,
+  ConnectionStatus,
   EdgarDownloadRequest,
   EdgarDownloadResponse,
   InvestorPdfDownloadRequest,
@@ -176,6 +177,151 @@ function routePresentation(routeKind: "live" | "paper" | "unknown") {
     return { label: "Live trading", tone: "danger" as const };
   }
   return { label: "Route pending", tone: "neutral" as const };
+}
+
+type InlinePillTone = "neutral" | "safe" | "caution" | "danger" | "accent";
+
+function gatewaySessionPresentation(status: ConnectionStatus | undefined): { label: string; tone: InlinePillTone } {
+  if (!status) {
+    return { label: "Gateway checking", tone: "neutral" };
+  }
+  if (!status.connected) {
+    return { label: "Gateway offline", tone: "danger" };
+  }
+  if (status.marketDataMode === "LIVE") {
+    return { label: "Gateway connected", tone: "safe" };
+  }
+  if (status.marketDataMode === "DELAYED" || status.marketDataMode === "DELAYED_FROZEN") {
+    return { label: "Gateway delayed", tone: "caution" };
+  }
+  if (status.marketDataMode === "FROZEN") {
+    return { label: "Gateway frozen", tone: "caution" };
+  }
+  return { label: `Gateway ${status.marketDataMode.toLowerCase()}`, tone: "neutral" };
+}
+
+function executionRoutePresentation(
+  status: ConnectionStatus | undefined,
+): { accountId: string | null; label: string; tone: InlinePillTone; routeKind: "live" | "paper" | "unknown" } {
+  if (!status) {
+    return { accountId: null, label: "Route checking", tone: "neutral", routeKind: "unknown" };
+  }
+  if (!status.connected) {
+    return { accountId: null, label: "Route offline", tone: "danger", routeKind: "unknown" };
+  }
+  if (!status.accountId) {
+    return { accountId: null, label: "Route unavailable", tone: "caution", routeKind: "unknown" };
+  }
+  const routeKind = status.routedAccountType ?? routeKindFromAccountId(status.accountId);
+  const presentation = routePresentation(routeKind);
+  return {
+    accountId: status.accountId,
+    label: presentation.label,
+    tone: presentation.tone,
+    routeKind,
+  };
+}
+
+function optionDataSourcePresentation(
+  chain: OptionChainResponse | null | undefined,
+  status: ConnectionStatus | undefined,
+): { label: string; tone: InlinePillTone } {
+  if (chain?.isStale) {
+    if (chain.quoteSource === "historical") {
+      return { label: "Data source · cached historical chain", tone: "caution" };
+    }
+    if (chain.quoteSource === "streaming") {
+      return { label: "Data source · cached streaming chain", tone: "caution" };
+    }
+    return { label: "Data source · cached chain", tone: "caution" };
+  }
+  if (chain?.quoteSource === "streaming") {
+    return { label: "Data source · streaming IBKR", tone: "safe" };
+  }
+  if (chain?.quoteSource === "historical") {
+    return { label: "Data source · historical fallback", tone: "caution" };
+  }
+  if (chain?.quoteSource === "unavailable") {
+    return { label: "Data source · quotes unavailable", tone: "danger" };
+  }
+  if (!status) {
+    return { label: "Data source · checking", tone: "neutral" };
+  }
+  if (!status.connected) {
+    return { label: "Data source · gateway offline", tone: "danger" };
+  }
+  if (status.marketDataMode === "LIVE") {
+    return { label: "Data source · gateway connected", tone: "safe" };
+  }
+  if (status.marketDataMode === "DELAYED" || status.marketDataMode === "DELAYED_FROZEN") {
+    return { label: "Data source · delayed session", tone: "caution" };
+  }
+  return { label: "Data source · connected session", tone: "neutral" };
+}
+
+function optionQuoteStatePresentation({
+  chain,
+  hasBidAsk,
+  hasMarks,
+  isLoadingDifferentSymbol,
+}: {
+  chain: OptionChainResponse | null | undefined;
+  hasBidAsk: boolean;
+  hasMarks: boolean;
+  isLoadingDifferentSymbol: boolean;
+}): { label: string; tone: InlinePillTone } {
+  if (isLoadingDifferentSymbol) {
+    return { label: "Loading requested symbol", tone: "accent" };
+  }
+  if (!chain) {
+    return { label: "No chain loaded", tone: "neutral" };
+  }
+  if (chain.isStale) {
+    if (hasBidAsk) {
+      return { label: "Cached bid/ask", tone: "caution" };
+    }
+    if (hasMarks) {
+      return { label: "Cached marks", tone: "caution" };
+    }
+    return { label: "Cached quotes", tone: "caution" };
+  }
+  if (chain.quoteSource === "historical") {
+    return { label: hasMarks ? "Historical marks" : "Historical fallback", tone: "caution" };
+  }
+  if (chain.quoteSource === "streaming") {
+    if (hasBidAsk) {
+      return { label: "Streaming bid/ask", tone: "safe" };
+    }
+    if (hasMarks) {
+      return { label: "Streaming marks", tone: "neutral" };
+    }
+  }
+  if (hasMarks) {
+    return { label: "Marks only", tone: "neutral" };
+  }
+  return { label: "Quotes unavailable", tone: "danger" };
+}
+
+function optionQuoteSourcePresentation(chain: OptionChainResponse | null | undefined): { label: string; tone: InlinePillTone } {
+  if (!chain) {
+    return { label: "Source unavailable", tone: "neutral" };
+  }
+  if (chain.isStale) {
+    if (chain.quoteSource === "historical") {
+      return { label: "Cached historical", tone: "caution" };
+    }
+    if (chain.quoteSource === "streaming") {
+      return { label: "Cached streaming", tone: "caution" };
+    }
+    return { label: "Cached chain", tone: "caution" };
+  }
+  if (chain.quoteSource === "streaming") {
+    return { label: "Current session", tone: "safe" };
+  }
+  if (chain.quoteSource === "historical") {
+    return { label: "Historical fallback", tone: "caution" };
+  }
+  return { label: "No option quotes", tone: "danger" };
 }
 
 type TicketContractSide = "C" | "P";
@@ -612,9 +758,32 @@ function App() {
   const openOptionOrders = openOrders.filter((order) => order.secType === "OPT");
   const executionEnabled = connectionQuery.data?.executionMode === "enabled";
   const selectedAccount = selectedAccountId ?? accountId ?? undefined;
-  const routedAccount = connectionQuery.data?.accountId ?? selectedAccount;
-  const routedAccountType = connectionQuery.data?.routedAccountType ?? routeKindFromAccountId(routedAccount);
-  const routedAccountPill = routePresentation(routedAccountType);
+  const gatewaySessionPill = gatewaySessionPresentation(connectionQuery.data);
+  const activeExecutionRoute = executionRoutePresentation(connectionQuery.data);
+  const routedAccount = activeExecutionRoute.accountId;
+  const routedAccountPill = { label: activeExecutionRoute.label, tone: activeExecutionRoute.tone };
+  const optionsDataSourcePill = optionDataSourcePresentation(activeDisplayedChain, connectionQuery.data);
+  const optionsQuoteStatePill = optionQuoteStatePresentation({
+    chain: activeDisplayedChain,
+    hasBidAsk: chainHasBidAsk,
+    hasMarks: chainHasOptionMarks,
+    isLoadingDifferentSymbol,
+  });
+  const optionsQuoteSourcePill = optionQuoteSourcePresentation(activeDisplayedChain);
+  const workingOrdersPill = !routedAccount
+    ? { label: activeExecutionRoute.label, tone: activeExecutionRoute.tone }
+    : openOrdersQuery.isFetching
+      ? { label: "Refreshing", tone: "neutral" as const }
+      : openOrdersQuery.data?.isStale
+        ? { label: "Stale snapshot", tone: "caution" as const }
+        : { label: "Routed", tone: "safe" as const };
+  const optionPositionsPill = !routedAccount
+    ? { label: activeExecutionRoute.label, tone: activeExecutionRoute.tone }
+    : optionPositionsQuery.isFetching
+      ? { label: "Refreshing", tone: "neutral" as const }
+      : optionPositionsQuery.data?.isStale
+        ? { label: "Stale snapshot", tone: "caution" as const }
+        : { label: "Routed", tone: "safe" as const };
   const parsedLimitPrice = ticketOrderType === "LMT" ? Number(ticketLimitPrice) : null;
   const validLimitPrice =
     ticketOrderType === "MKT" ? null : Number.isFinite(parsedLimitPrice) && parsedLimitPrice != null && parsedLimitPrice > 0 ? parsedLimitPrice : null;
@@ -643,7 +812,9 @@ function App() {
   const canSubmitTicket = canPreviewTicket && previewIsCurrent;
   const executionBannerMessage = !executionEnabled
     ? "Trade execution is disabled for this dashboard session."
-    : !selectedAccount
+    : !routedAccount
+      ? "IBKR is not currently routed through a live Gateway session, so the options ticket is read-only until Gateway reconnects."
+      : !selectedAccount
       ? "Connect IBKR to discover the account currently routed through Gateway."
       : null;
 
@@ -1005,8 +1176,8 @@ function App() {
             </div>
             <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
               <InlinePill
-                label={connectionQuery.data?.marketDataMode ?? "DATA"}
-                tone={connectionQuery.data?.marketDataMode === "LIVE" ? "safe" : "neutral"}
+                label={gatewaySessionPill.label}
+                tone={gatewaySessionPill.tone}
               />
               <InlinePill label={requestedSymbolPriceLabel} tone={isLoadingDifferentSymbol ? "accent" : "neutral"} />
             </div>
@@ -1066,20 +1237,8 @@ function App() {
                   {chainContextLabel ? <div className="mt-2 max-w-3xl text-xs leading-5 text-muted">{chainContextLabel}</div> : null}
                 </div>
                 <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
-                  <InlinePill
-                    label={
-                      isLoadingDifferentSymbol
-                        ? "Loading requested symbol"
-                        : chainHasBidAsk
-                          ? "Bid/ask live"
-                          : chainHasOptionMarks
-                            ? "Marks only"
-                            : "Quotes pending"
-                    }
-                    tone={isLoadingDifferentSymbol ? "accent" : "neutral"}
-                  />
-                  <InlinePill label={isLoadingDifferentSymbol ? "previous chain visible" : activeDisplayedChain?.quoteSource ?? "unavailable"} />
-                  {activeDisplayedChain?.isStale ? <InlinePill label="Stale" tone="caution" /> : null}
+                  <InlinePill label={optionsQuoteStatePill.label} tone={optionsQuoteStatePill.tone} />
+                  <InlinePill label={isLoadingDifferentSymbol ? "Previous chain visible" : optionsQuoteSourcePill.label} tone={isLoadingDifferentSymbol ? "accent" : optionsQuoteSourcePill.tone} />
                 </div>
               </div>
               <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -1451,7 +1610,7 @@ function App() {
                   <div className="text-[11px] uppercase tracking-[0.22em] text-muted">Working Orders</div>
                   <div className="mt-1 text-lg font-semibold text-text">{openOptionOrders.length}</div>
                 </div>
-                <InlinePill label={openOrdersQuery.isFetching ? "Refreshing" : "Live"} tone={openOrdersQuery.isFetching ? "neutral" : "safe"} />
+                <InlinePill label={workingOrdersPill.label} tone={workingOrdersPill.tone} />
               </div>
               <div className="mt-4 grid gap-3">
                 {cancelMutation.data ? <CancelSummary cancelled={cancelMutation.data} /> : null}
@@ -1509,7 +1668,7 @@ function App() {
                   <div className="text-[11px] uppercase tracking-[0.22em] text-muted">Open Option Positions</div>
                   <div className="mt-1 text-lg font-semibold text-text">{optionPositions.length}</div>
                 </div>
-                <InlinePill label={optionPositionsQuery.isFetching ? "Refreshing" : "Secondary"} />
+                <InlinePill label={optionPositionsPill.label} tone={optionPositionsPill.tone} />
               </div>
               <div className="mt-4 grid gap-3">
                 {optionPositions.length ? (
@@ -1874,7 +2033,6 @@ function App() {
     return (
       <ToolWorkspaceFrame
         description="Configure app-wide behavior and the product-wide data sources that sit behind the tools."
-        eyebrow="Global settings"
         title="Global Settings"
       >
         <div className="grid gap-6">
@@ -1922,8 +2080,7 @@ function App() {
   function renderTickerWorkspace() {
     return (
       <ToolWorkspaceFrame
-        description="Inspect an underlying without entering an account view. This workspace keeps the market lookup separate from portfolio state."
-        eyebrow="Tool"
+        description="Inspect an underlying without entering an account view. Market lookup stays separate from portfolio state."
         title="Ticker"
       >
         <div className="grid gap-6">
@@ -1993,21 +2150,22 @@ function App() {
   function renderOptionsWorkspace() {
     return (
       <ToolWorkspaceFrame
-        description="Inspect options chains as a tool workspace. Market data, execution route, and overlays stay explicit instead of leaking in from the dashboard."
-        eyebrow="Tool"
+        description="Inspect options chains with market data, execution route, and overlays kept explicit instead of leaking in from the dashboard."
+        headerSlot={
+          <div className="mt-5 flex flex-wrap items-center gap-2 text-xs text-muted">
+            <InlinePill
+              label={optionsDataSourcePill.label}
+              tone={optionsDataSourcePill.tone}
+            />
+            <InlinePill
+              label={routedAccount ? `Execution route · ${routedAccount}` : `Execution route · ${activeExecutionRoute.label.toLowerCase()}`}
+              tone={routedAccount ? "safe" : activeExecutionRoute.tone}
+            />
+            <InlinePill label="Overlay account · off" tone="neutral" />
+          </div>
+        }
         title="Options"
       >
-        <div className="mb-4 flex flex-wrap items-center gap-2 text-xs text-muted">
-          <InlinePill
-            label={connectionQuery.data?.marketDataMode ? `Data source · ${connectionQuery.data.marketDataMode}` : "Data source · pending"}
-            tone={connectionQuery.data?.marketDataMode === "LIVE" ? "safe" : "neutral"}
-          />
-          <InlinePill
-            label={routedAccount ? `Execution route · ${routedAccount}` : "Execution route · pending"}
-            tone={routedAccount ? "safe" : "neutral"}
-          />
-          <InlinePill label="Overlay account · off" tone="neutral" />
-        </div>
         {renderIbkrOptionsSurface()}
       </ToolWorkspaceFrame>
     );
@@ -2017,7 +2175,6 @@ function App() {
     return (
       <ToolWorkspaceFrame
         description="Track the crypto market without jumping directly into one account's holdings. Account-owned balances stay on the dashboard."
-        eyebrow="Tool"
         title="Crypto"
       >
         {cryptoMajorsQuery.isLoading ? (
@@ -2066,7 +2223,6 @@ function App() {
     return (
       <ToolWorkspaceFrame
         description="Track earnings as a market event workspace, separate from account views and connector plumbing."
-        eyebrow="Tool"
         title="Earnings"
       >
         <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-4 text-sm text-muted">
@@ -2146,9 +2302,7 @@ function App() {
                   <div className="shell-source-list">
                     <ShellSourceRow
                       active={activeWorkspace === "ticker"}
-                      badge="Tool"
                       icon={<BrokerIcon />}
-                      meta="Inspect stocks and underlying symbols without account context"
                       onSelect={() => setActiveWorkspace("ticker")}
                       title="Ticker"
                       tone="live"
@@ -2156,9 +2310,7 @@ function App() {
 
                     <ShellSourceRow
                       active={activeWorkspace === "options"}
-                      badge="Tool"
                       icon={<OptionsIcon />}
-                      meta="Inspect chains, Greeks, and order tickets as a neutral workspace"
                       onSelect={() => setActiveWorkspace("options")}
                       title="Options"
                       tone="live"
@@ -2166,9 +2318,7 @@ function App() {
 
                     <ShellSourceRow
                       active={activeWorkspace === "earnings"}
-                      badge="Tool"
                       icon={<CalendarIcon />}
-                      meta="Track earnings events as their own market workspace"
                       onSelect={() => setActiveWorkspace("earnings")}
                       title="Earnings"
                       tone="live"
@@ -2176,9 +2326,7 @@ function App() {
 
                     <ShellSourceRow
                       active={activeWorkspace === "research"}
-                      badge="Tool"
                       icon={<DocumentIcon />}
-                      meta="SEC filings, annual reports, and investor research in one workspace"
                       onSelect={() => setActiveWorkspace("research")}
                       title="Research"
                       tone="live"
@@ -2186,9 +2334,7 @@ function App() {
 
                     <ShellSourceRow
                       active={activeWorkspace === "crypto"}
-                      badge="Tool"
                       icon={<CoinbaseIcon />}
-                      meta="Observe crypto markets without jumping into per-account holdings"
                       onSelect={() => setActiveWorkspace("crypto")}
                       title="Crypto"
                       tone="live"
@@ -2230,14 +2376,14 @@ function App() {
 }
 
 function ToolWorkspaceFrame({
-  eyebrow,
   title,
   description,
+  headerSlot,
   children,
 }: {
-  eyebrow: string;
   title: string;
   description: string;
+  headerSlot?: ReactNode;
   children: ReactNode;
 }) {
   return (
@@ -2246,11 +2392,11 @@ function ToolWorkspaceFrame({
         <header className="border-b border-line/70 px-10 py-7 lg:px-12">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div>
-              <div className="mb-2 text-[11px] uppercase tracking-[0.32em] text-accent">{eyebrow}</div>
               <div className="flex flex-wrap items-center gap-3">
                 <h1 className="text-3xl font-semibold tracking-tight text-text">{title}</h1>
               </div>
               <p className="mt-2 max-w-3xl text-sm text-muted">{description}</p>
+              {headerSlot}
             </div>
           </div>
         </header>
@@ -2303,8 +2449,6 @@ function ConnectorStatusCard({
 
 function ShellSourceRow({
   title,
-  meta,
-  badge,
   icon,
   tone,
   active = false,
@@ -2312,8 +2456,6 @@ function ShellSourceRow({
   onSelect,
 }: {
   title: string;
-  meta: string;
-  badge: string;
   icon?: ReactNode;
   tone: SourceTone;
   active?: boolean;
@@ -2343,9 +2485,7 @@ function ShellSourceRow({
         {icon ? <span className="shell-row-icon">{icon}</span> : null}
         <div className="shell-source-copy">
           <div className="shell-source-title">{title}</div>
-          <div className="shell-source-meta">{meta}</div>
         </div>
-        <span className={`shell-source-badge is-${tone}`}>{badge}</span>
       </div>
       {children ? (
         <div

@@ -5,12 +5,16 @@ from __future__ import annotations
 import asyncio
 from concurrent.futures import Future, TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time as dt_time, timedelta
 from math import erf, exp, isfinite, log, pi, sqrt
+from pathlib import Path
 from queue import Empty, Queue
 import threading
 import time
 from typing import Any, Callable, Iterable, Literal, TypeVar, cast
+from zoneinfo import ZoneInfo
+
+import pandas as pd
 
 from investing_platform.config import DashboardSettings
 from investing_platform.models import (
@@ -75,6 +79,7 @@ class IBGatewayBrokerService(BrokerService):
         self._portfolio_cache: dict[str, CacheEntry[PortfolioSnapshot]] = {}
         self._quote_cache: dict[str, CacheEntry[UnderlyingQuote]] = {}
         self._chain_cache: dict[str, CacheEntry[OptionChainResponse]] = {}
+        self._option_snapshot_root = self.settings.data_dir / "raw" / "options"
         self._tasks: Queue[_PendingTask] = Queue()
         self._stop_event = threading.Event()
         self._thread = threading.Thread(target=self._worker_main, name="ib-gateway-service", daemon=True)
@@ -101,7 +106,7 @@ class IBGatewayBrokerService(BrokerService):
                 accountId=self._resolved_account_id,
                 managedAccounts=self._managed_accounts,
                 marketDataType=self.settings.ib_market_data_type,
-                marketDataMode=_market_data_mode_label(self.settings.ib_market_data_type),
+                marketDataMode=_market_data_mode_label(self.settings.ib_market_data_type) if self._connected else "UNAVAILABLE",
                 usingMockData=False,
                 lastSuccessfulConnectAt=self._last_successful_connect_at,
                 lastHeartbeatAt=self._last_heartbeat_at,
@@ -158,6 +163,11 @@ class IBGatewayBrokerService(BrokerService):
         cached = self._chain_cache.get(cache_key)
         if cached and _age_seconds(cached.captured_at) <= _chain_cache_ttl_seconds(cached.value, self.settings.chain_cache_ttl_seconds):
             return cached.value
+        if _is_weekend_market_session():
+            saved_chain = self._load_saved_option_chain(symbol, expiry)
+            if saved_chain is not None:
+                self._chain_cache[cache_key] = CacheEntry(saved_chain, datetime.now(UTC))
+                return saved_chain
         try:
             chain = cast(
                 OptionChainResponse,
@@ -175,6 +185,133 @@ class IBGatewayBrokerService(BrokerService):
             if cached is not None:
                 return cached.value.model_copy(update={"isStale": True})
             raise BrokerUnavailableError(str(exc)) from exc
+
+    def _load_saved_option_chain(self, symbol: str, expiry: str | None) -> OptionChainResponse | None:
+        if not self._option_snapshot_root.exists():
+            return None
+
+        ranked_snapshots: list[tuple[date, int, Path, str]] = []
+        for path in self._option_snapshot_root.glob("as_of=*/provider=*/options_chain.csv"):
+            provider_name = _extract_snapshot_provider(path)
+            if provider_name is None or provider_name == "mock":
+                continue
+            snapshot_date = _extract_snapshot_date(path)
+            if snapshot_date is None or snapshot_date > _market_session_date():
+                continue
+            ranked_snapshots.append((snapshot_date, _snapshot_provider_priority(provider_name), path, provider_name))
+
+        for snapshot_date, _priority, path, provider_name in sorted(
+            ranked_snapshots,
+            key=lambda item: (item[0], item[1]),
+            reverse=True,
+        ):
+            try:
+                frame = pd.read_csv(path)
+            except Exception:
+                continue
+            if frame.empty or "ticker" not in frame.columns:
+                continue
+            symbol_frame = frame[frame["ticker"].astype(str).str.upper() == symbol].copy()
+            if symbol_frame.empty:
+                continue
+            response = self._build_saved_option_chain_response(symbol_frame, symbol, expiry, snapshot_date, provider_name)
+            if response is not None:
+                return response
+        return None
+
+    def _build_saved_option_chain_response(
+        self,
+        frame: pd.DataFrame,
+        symbol: str,
+        expiry: str | None,
+        snapshot_date: date,
+        provider_name: str,
+    ) -> OptionChainResponse | None:
+        if "expiration" not in frame.columns or "strike" not in frame.columns or "option_type" not in frame.columns:
+            return None
+
+        working = frame.copy()
+        working["expiration"] = working["expiration"].astype(str)
+        working["option_type"] = working["option_type"].astype(str).str.lower()
+        expiries = sorted(working["expiration"].dropna().unique().tolist())
+        if not expiries:
+            return None
+
+        selected_expiry = expiry if expiry in expiries else expiries[0]
+        filtered = working[working["expiration"] == selected_expiry].copy()
+        if filtered.empty:
+            return None
+
+        quote_as_of = _snapshot_close_timestamp(snapshot_date)
+        underlying_price = _snapshot_underlying_price(filtered)
+        rows: list[ChainRow] = []
+        for strike, strike_frame in filtered.groupby("strike", sort=True):
+            call_row = _snapshot_option_row(strike_frame, "call")
+            put_row = _snapshot_option_row(strike_frame, "put")
+            dte = _snapshot_dte(call_row, put_row, selected_expiry, snapshot_date)
+            call_mid = _snapshot_option_mid(call_row)
+            put_mid = _snapshot_option_mid(put_row)
+            rows.append(
+                ChainRow(
+                    strike=round(float(strike), 2),
+                    distanceFromSpotPct=round((float(strike) - underlying_price) / underlying_price * 100.0, 2)
+                    if _is_valid_number(underlying_price) and underlying_price > 0
+                    else 0.0,
+                    callBid=_round_or_none(_snapshot_float(call_row, "bid"), 4),
+                    callAsk=_round_or_none(_snapshot_float(call_row, "ask"), 4),
+                    callMid=_round_or_none(call_mid, 4),
+                    callVolume=_snapshot_int(call_row, "volume"),
+                    callOpenInterest=_snapshot_int(call_row, "open_interest"),
+                    callIV=_round_or_none(_snapshot_pct(call_row, "implied_vol"), 2),
+                    callDelta=_round_signed_or_none(_snapshot_float(call_row, "delta"), 4),
+                    callTheta=None,
+                    callVega=None,
+                    callRho=None,
+                    callAnnualizedYieldPct=_round_or_none(_annualized_yield(call_mid, underlying_price, dte), 2),
+                    putBid=_round_or_none(_snapshot_float(put_row, "bid"), 4),
+                    putAsk=_round_or_none(_snapshot_float(put_row, "ask"), 4),
+                    putMid=_round_or_none(put_mid, 4),
+                    putVolume=_snapshot_int(put_row, "volume"),
+                    putOpenInterest=_snapshot_int(put_row, "open_interest"),
+                    putIV=_round_or_none(_snapshot_pct(put_row, "implied_vol"), 2),
+                    putDelta=_round_signed_or_none(_snapshot_float(put_row, "delta"), 4),
+                    putTheta=None,
+                    putVega=None,
+                    putRho=None,
+                    putAnnualizedYieldPct=_round_or_none(_annualized_yield(put_mid, float(strike), dte), 2),
+                    conservativePutCollateral=round(float(strike) * 100.0, 2),
+                )
+            )
+
+        if not rows:
+            return None
+
+        provider_label = provider_name.upper()
+        return OptionChainResponse(
+            symbol=symbol,
+            selectedExpiry=selected_expiry,
+            expiries=expiries,
+            underlying=UnderlyingQuote(
+                symbol=symbol,
+                price=round(underlying_price, 4),
+                bid=None,
+                ask=None,
+                last=None,
+                close=round(underlying_price, 4),
+                marketDataStatus=f"{provider_label} SNAPSHOT",
+                generatedAt=quote_as_of,
+            ),
+            rows=rows,
+            highlights=_chain_highlights(rows, selected_expiry),
+            quoteSource="historical",
+            quoteAsOf=quote_as_of,
+            quoteNotice=(
+                f"Market is closed, so the chain is showing the latest saved {provider_label} snapshot for {symbol} "
+                f"from {snapshot_date.isoformat()} close."
+            ),
+            generatedAt=datetime.now(UTC),
+            isStale=False,
+        )
 
     def _preview_option_order_on_thread(self, ib: Any, request: OptionOrderRequest) -> OptionOrderPreview:
         self._ensure_connected(ib)
@@ -1755,6 +1892,102 @@ def _account_route_kind(account_id: str | None) -> Literal["live", "paper", "unk
 
 def _age_seconds(timestamp: datetime) -> float:
     return (datetime.now(UTC) - timestamp).total_seconds()
+
+
+def _market_session_date() -> date:
+    return datetime.now(ZoneInfo("America/New_York")).date()
+
+
+def _is_weekend_market_session() -> bool:
+    return _market_session_date().weekday() >= 5
+
+
+def _extract_snapshot_date(path: Path) -> date | None:
+    for part in path.parts:
+        if not part.startswith("as_of="):
+            continue
+        try:
+            return date.fromisoformat(part.split("=", 1)[1])
+        except ValueError:
+            return None
+    return None
+
+
+def _extract_snapshot_provider(path: Path) -> str | None:
+    for part in path.parts:
+        if part.startswith("provider="):
+            return part.split("=", 1)[1].strip().lower() or None
+    return None
+
+
+def _snapshot_provider_priority(provider_name: str) -> int:
+    priorities = {
+        "ibkr": 3,
+        "tradier": 2,
+        "polygon": 2,
+        "yfinance": 1,
+    }
+    return priorities.get(provider_name.lower(), 0)
+
+
+def _snapshot_close_timestamp(snapshot_date: date) -> datetime:
+    return datetime.combine(snapshot_date, dt_time(hour=16), tzinfo=ZoneInfo("America/New_York")).astimezone(UTC)
+
+
+def _snapshot_option_row(frame: pd.DataFrame, option_type: str) -> pd.Series | None:
+    matches = frame[frame["option_type"] == option_type]
+    if matches.empty:
+        return None
+    return matches.iloc[0]
+
+
+def _snapshot_float(row: pd.Series | None, column: str) -> float | None:
+    if row is None or column not in row.index:
+        return None
+    value = _safe_float(row[column])
+    return value if _is_valid_number(value) else None
+
+
+def _snapshot_pct(row: pd.Series | None, column: str) -> float | None:
+    value = _snapshot_float(row, column)
+    if value is None:
+        return None
+    return value * 100.0
+
+
+def _snapshot_int(row: pd.Series | None, column: str) -> int | None:
+    if row is None or column not in row.index:
+        return None
+    try:
+        return int(float(row[column]))
+    except (TypeError, ValueError):
+        return None
+
+
+def _snapshot_option_mid(row: pd.Series | None) -> float | None:
+    explicit_mid = _snapshot_float(row, "mid")
+    if explicit_mid is not None:
+        return explicit_mid
+    mark = _snapshot_float(row, "mark")
+    if mark is not None:
+        return mark
+    return _midpoint(_snapshot_float(row, "bid"), _snapshot_float(row, "ask"))
+
+
+def _snapshot_underlying_price(frame: pd.DataFrame) -> float:
+    if "underlying_price" in frame.columns:
+        series = pd.to_numeric(frame["underlying_price"], errors="coerce").dropna()
+        if not series.empty:
+            return float(series.iloc[0])
+    return 0.0
+
+
+def _snapshot_dte(call_row: pd.Series | None, put_row: pd.Series | None, expiry: str, snapshot_date: date) -> int:
+    for row in (call_row, put_row):
+        value = _snapshot_int(row, "dte")
+        if value is not None:
+            return max(value, 1)
+    return max((date.fromisoformat(expiry) - snapshot_date).days, 1)
 
 
 def _quote_notice(quote_source: str, quote_as_of: datetime | None, market_data_issue: str | None = None) -> str | None:
