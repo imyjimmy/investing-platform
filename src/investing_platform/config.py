@@ -75,6 +75,7 @@ class DashboardSettings:
     execution_mode: Literal["disabled", "enabled"] = "enabled"
     ib_host: str = "127.0.0.1"
     ib_port: int = 4002
+    ib_port_auto_discover: bool = True
     ib_client_id: int = 17
     ib_account_id: str | None = None
     ib_market_data_type: int = 1
@@ -92,6 +93,7 @@ class DashboardSettings:
     chain_historical_fallback_contract_limit: int = 4
     chain_cache_ttl_seconds: float = 120.0
     snapshot_cache_ttl_seconds: float = 10.0
+    data_dir: Path = PROJECT_ROOT / "data"
     safety_buffer: float = 25_000.0
     watchlist_symbols: list[str] = field(
         default_factory=lambda: ["NVDA", "IREN", "AXTI", "PYPL", "GLD", "IAU", "VOO"]
@@ -115,6 +117,7 @@ class DashboardSettings:
 
     @classmethod
     def load(cls) -> "DashboardSettings":
+        explicit_ib_port = _first_env("INVESTING_PLATFORM_IB_PORT", "OPTIONS_DASHBOARD_IB_PORT")
         return cls(
             data_mode=_env_str("INVESTING_PLATFORM_DATA_MODE", "OPTIONS_DASHBOARD_DATA_MODE", default="mock").lower(),  # type: ignore[arg-type]
             execution_mode=_env_execution_mode(
@@ -123,7 +126,8 @@ class DashboardSettings:
                 default="enabled",
             ),
             ib_host=_env_str("INVESTING_PLATFORM_IB_HOST", "OPTIONS_DASHBOARD_IB_HOST", default="127.0.0.1"),
-            ib_port=_env_int("INVESTING_PLATFORM_IB_PORT", "OPTIONS_DASHBOARD_IB_PORT", default=4002),
+            ib_port=int(explicit_ib_port) if explicit_ib_port is not None else 4002,
+            ib_port_auto_discover=explicit_ib_port is None,
             ib_client_id=_env_int(
                 "INVESTING_PLATFORM_IB_CLIENT_ID",
                 "OPTIONS_DASHBOARD_IB_CLIENT_ID",
@@ -195,6 +199,11 @@ class DashboardSettings:
                 "INVESTING_PLATFORM_CHAIN_CACHE_TTL_SECONDS",
                 "OPTIONS_DASHBOARD_CHAIN_CACHE_TTL_SECONDS",
                 default=12.0,
+            ),
+            data_dir=_env_path(
+                "INVESTING_PLATFORM_DATA_DIR",
+                "OPTIONS_DASHBOARD_DATA_DIR",
+                default=str(PROJECT_ROOT / "data"),
             ),
             snapshot_cache_ttl_seconds=_env_float(
                 "INVESTING_PLATFORM_SNAPSHOT_CACHE_TTL_SECONDS",

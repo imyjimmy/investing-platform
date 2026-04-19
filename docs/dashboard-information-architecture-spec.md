@@ -69,20 +69,16 @@ A `Tool` is a market-perception workspace.
 Examples:
 
 - `Ticker`
-- `Options`
-- `Crypto`
-- `Universe`
-- `Earnings`
-- `Filings`
-- `Research`
+- options-specific stock tools such as `Chain`, `Builder`, or `Volatility`
+- crypto-specific tools such as `Market` or `Leverage`
 
 Tools exist to help the user perceive and analyze the market.
 
 That includes:
 
-- asset-class workspaces such as stocks, options, and crypto
-- discovery workspaces such as universe and earnings
-- research and aggregation services such as filings and research
+- asset-class workspaces such as stocks and crypto
+- specialized lenses inside an asset class, such as stock options tooling
+- contextual research and event surfaces that appear inside an asset workspace
 
 Tools may consume market data, but they are not accounts.
 
@@ -134,9 +130,9 @@ There is no standalone connector workspace in the primary nav.
 
 These are not suggestions.
 
-1. The sidebar may contain `Dashboard` and `Tools`, but not `Connectors`.
+1. The shell exposes `Dashboard` through the top chrome and market tools through the sidebar; the sidebar itself may not be a connector directory.
 2. `Dashboard` is account-centric.
-3. `Options`, `Ticker`, `Crypto`, `Universe`, `Earnings`, `Filings`, and `Research` are tool-centric.
+3. Market tools are tool-centric and grouped by asset type.
 4. Account-bound connectors are visible from per-account settings only.
 5. Global data sources are visible from the sidebar gear only.
 6. A tool may show `Data source`, `Execution route`, and `Overlay account`, but it may not silently inherit the selected dashboard account.
@@ -152,18 +148,11 @@ These are not suggestions.
 
 ### Sidebar Contents
 
-The sidebar should contain:
+The primary sidebar should be grouped first by `asset type`.
 
-- `Dashboard`
-- `Ticker`
-- `Options`
-- `Crypto`
-- `Universe`
-- `Earnings`
-- `Filings`
-- `Research`
+The source of truth for the sidebar taxonomy is:
 
-This is an allowlist, not an example list.
+- [sidebar-asset-taxonomy-spec.md](./sidebar-asset-taxonomy-spec.md)
 
 The sidebar is for tools.
 
@@ -203,7 +192,7 @@ The sidebar should not contain:
 
 Allowed in the primary sidebar:
 
-- one `Dashboard` destination
+- asset-grouped tool destinations
 - primary tool destinations
 - the sidebar gear
 
@@ -218,6 +207,7 @@ Not allowed in the primary sidebar:
 - connector cards
 - broker account cards
 - Coinbase tiles
+- a duplicate `Dashboard` row when the top chrome already owns the dashboard-home action
 - EDGAR connection tiles
 - account settings links
 - account-specific route controls
@@ -294,15 +284,10 @@ Each tool is independent from the dashboard tabs.
 
 Initial tool workspaces:
 
-- `Ticker`
-- `Options`
-- `Crypto`
-- `Universe`
-- `Earnings`
-- `Filings`
-- `Research`
-
-`Earnings` is its own tool. It may share data services with `Universe` or `Research`, but it remains a distinct primary workspace in the shell.
+- stock-market tools such as `Market`
+- stock tools such as `Ticker`
+- stock-options tools or an `Options` subdomain
+- crypto tools such as `Market` and `Leverage`
 
 ## View Ownership
 
@@ -413,11 +398,35 @@ Global settings must not contain:
 
 Global settings are the only place where global data-source management is allowed.
 
+### Market Tool
+
+Purpose:
+
+- inspect the stock market as a universe rather than one symbol
+- rank, screen, and sort names before drilling into a ticker or chain
+
+Default state:
+
+- no account required
+
+Optional contexts:
+
+- data source
+- overlay account
+
+Examples:
+
+- beta rankings
+- volatility leaders
+- unusual volume
+- breadth and regime views
+
 ### Ticker Tool
 
 Purpose:
 
 - inspect an underlying without needing an account
+- serve as the single-symbol stock workspace
 
 Default state:
 
@@ -441,6 +450,8 @@ Default state:
 
 - account-agnostic market inspection
 
+This tool may begin as one entry point, but the long-term model allows multiple options-specific tools or sub-tools inside the stock domain.
+
 Optional contexts:
 
 - `Data source`
@@ -458,25 +469,33 @@ Rules:
 
 Purpose:
 
-- inspect crypto holdings and market context
+- inspect crypto markets without requiring account balances as the default view
+
+Likely crypto tool families:
+
+- `Market`
+- `Leverage`
 
 Rules:
 
-- the default sidebar entry is `Crypto`, not `Coinbase`
-- opening `Crypto` from the sidebar must land in a neutral crypto workspace, not a per-account balances page
-- if the screen shows Coinbase balances for one account, that is an account-aware crypto tool state layered on top of the neutral tool
+- the crypto sidebar group is `Crypto`, not `Coinbase`
+- opening a crypto tool from the sidebar must land in a neutral crypto workspace, not a per-account balances page
+- if the screen shows Coinbase balances for one account, that is an account-aware crypto state layered on top of a neutral tool
 - Coinbase as a connector still belongs in per-account settings
 - the existence of a crypto tool does not justify a top-level Coinbase connector workspace
 
-### Filings And Research Tools
+### Stock Research Context
 
 Purpose:
 
-- interact with global research data sources
+- expose filings, earnings, and research inside stock-oriented workspaces
 
 Rules:
 
-- EDGAR and Investor PDFs are exposed as tools and/or global settings configuration, not as account connector destinations
+- EDGAR and Investor PDFs remain global data sources and/or supporting research surfaces
+- `Earnings`, `Filings`, and `Research` do not need to be parallel top-level sidebar destinations
+- they may appear inside `Ticker`
+- they may appear inside a unified stock research surface
 
 ## Context Model For Tools
 
@@ -524,13 +543,13 @@ These three contexts must never be collapsed into one ambiguous pill.
 
 ### Sidebar
 
-- `Dashboard`
-- `Ticker`
-- `Options`
+- top chrome `Home` control for `Dashboard`
+- `Stocks`
+  - `Market`
+  - `Ticker`
+  - options-specific tools or an `Options` subsection
 - `Crypto`
-- `Universe`
-- `Filings`
-- `Research`
+  - crypto-specific tools such as `Market` and `Leverage`
 - gear button for `Global settings`
 
 ### Dashboard
@@ -582,14 +601,14 @@ These three contexts must never be collapsed into one ambiguous pill.
 ### Current Concepts To Reclassify
 
 - `EDGAR`:
-  - as a tool workspace for filings work
+  - as stock research context and/or supporting research surface
   - as a global data source inside global settings
 - `Investor PDFs`:
-  - as a tool workspace for PDF retrieval and research
+  - as stock research context and/or supporting research surface
   - as a global data source inside global settings
 - `Coinbase`:
   - as an account-bound connector in account settings
-  - as a data source usable by the `Crypto` tool
+  - as a data source usable by crypto tools
 - `Interactive Brokers`:
   - as an account-bound connector in account settings
   - as a market data source and execution route used by tools
@@ -674,7 +693,7 @@ Implement this spec in narrow slices.
 ### Slice 1: Sidebar And Shell
 
 - remove connector-first nav
-- install tool-first nav
+- install asset-grouped tool nav
 - move global data sources behind sidebar gear
 
 ### Slice 2: Dashboard Tabs
@@ -707,7 +726,8 @@ This spec does not yet define:
 
 - final visual styling for each tool
 - backtest UX
-- exact Universe or Earnings workflows
+- exact stock-research workflows inside `Ticker`
+- exact crypto leverage metrics
 - final combined-account aggregation rules
 
 Those are separate product specs that must still obey the ownership rules in this document.

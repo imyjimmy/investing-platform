@@ -75,6 +75,7 @@ class IBGatewayBrokerService(BrokerService):
         self._last_error: str | None = None
         self._recent_ib_errors: list[tuple[datetime, int, str]] = []
         self._resolved_account_id: str | None = self.settings.ib_account_id
+        self._resolved_port: int = self.settings.ib_port
         self._managed_accounts: list[str] = [self.settings.ib_account_id] if self.settings.ib_account_id else []
         self._portfolio_cache: dict[str, CacheEntry[PortfolioSnapshot]] = {}
         self._quote_cache: dict[str, CacheEntry[UnderlyingQuote]] = {}
@@ -101,7 +102,7 @@ class IBGatewayBrokerService(BrokerService):
                 executionMode=self.settings.execution_mode,
                 routedAccountType=_account_route_kind(self._resolved_account_id),
                 host=self.settings.ib_host,
-                port=self.settings.ib_port,
+                port=self._resolved_port,
                 clientId=self.settings.ib_client_id,
                 accountId=self._resolved_account_id,
                 managedAccounts=self._managed_accounts,
@@ -509,19 +510,28 @@ class IBGatewayBrokerService(BrokerService):
             ib.disconnect()
             self._mark_disconnected(None)
         if ib.isConnected():
-            self._mark_connected()
+            self._mark_connected(self._resolved_port)
             return
-        ib.connect(
-            self.settings.ib_host,
-            self.settings.ib_port,
-            clientId=self.settings.ib_client_id,
-            readonly=self.settings.execution_mode == "disabled",
-            timeout=self.settings.ib_connect_timeout_seconds,
-            account=self.settings.ib_account_id or "",
-        )
-        ib.reqMarketDataType(self.settings.ib_market_data_type)
-        self._remember_account_id(self._resolve_account_id(ib))
-        self._mark_connected()
+        last_error: Exception | None = None
+        for port in _ib_connection_port_candidates(self.settings.ib_port, self.settings.ib_port_auto_discover):
+            try:
+                ib.connect(
+                    self.settings.ib_host,
+                    port,
+                    clientId=self.settings.ib_client_id,
+                    readonly=self.settings.execution_mode == "disabled",
+                    timeout=self.settings.ib_connect_timeout_seconds,
+                    account=self.settings.ib_account_id or "",
+                )
+            except Exception as exc:
+                last_error = exc
+                continue
+            ib.reqMarketDataType(self.settings.ib_market_data_type)
+            self._remember_account_id(self._resolve_account_id(ib))
+            self._mark_connected(port)
+            return
+        if last_error is not None:
+            raise last_error
 
     def _fetch_portfolio_snapshot(self, ib: Any, requested_account_id: str | None = None) -> PortfolioSnapshot:
         self._ensure_connected(ib)
@@ -783,7 +793,7 @@ class IBGatewayBrokerService(BrokerService):
             raise RuntimeError(f"No option contracts qualified for {symbol} {selected_expiry}.")
         tickers, resolved_market_data_type = self._request_option_tickers(ib, qualified_contracts, resolved_market_data_type)
         market_data_issue = self._latest_market_data_issue()
-        quote_source = "streaming" if any(_ticker_has_option_payload(ticker) for ticker in tickers) else "unavailable"
+        quote_source = "streaming" if any(_ticker_has_live_option_quote(ticker) for ticker in tickers) else "unavailable"
         quote_as_of: datetime | None = None
         historical_midpoints: dict[int, float] = {}
         if quote_source == "unavailable":
@@ -1261,10 +1271,12 @@ class IBGatewayBrokerService(BrokerService):
         with self._status_lock:
             self._managed_accounts = normalized
 
-    def _mark_connected(self) -> None:
+    def _mark_connected(self, port: int | None = None) -> None:
         now = datetime.now(UTC)
         with self._status_lock:
             self._connected = True
+            if port is not None:
+                self._resolved_port = port
             self._last_successful_connect_at = now
             self._last_heartbeat_at = now
             self._last_error = None
@@ -1298,6 +1310,18 @@ def _market_data_mode_label(market_data_type: int) -> str:
         3: "DELAYED",
         4: "DELAYED_FROZEN",
     }.get(market_data_type, "UNKNOWN")
+
+
+def _ib_connection_port_candidates(primary_port: int, auto_discover: bool) -> list[int]:
+    standard_ports = {4001, 4002, 7496, 7497}
+    if not auto_discover and primary_port not in standard_ports:
+        return [primary_port]
+    candidates = [primary_port, 4001, 4002, 7496, 7497]
+    ordered: list[int] = []
+    for candidate in candidates:
+        if candidate not in ordered:
+            ordered.append(candidate)
+    return ordered
 
 
 def _market_data_type_candidates(preferred_type: int) -> list[int]:
@@ -1382,6 +1406,18 @@ def _ticker_has_quote_payload(ticker: Any) -> bool:
 
 def _ticker_has_option_payload(ticker: Any) -> bool:
     return _ticker_option_payload_score(ticker) > 0
+
+
+def _ticker_has_live_option_quote(ticker: Any) -> bool:
+    if ticker is None:
+        return False
+    bid = _safe_float(getattr(ticker, "bid", None))
+    ask = _safe_float(getattr(ticker, "ask", None))
+    last = _safe_float(getattr(ticker, "last", None))
+    market_price = _safe_float(
+        getattr(ticker, "marketPrice", lambda: None)() if callable(getattr(ticker, "marketPrice", None)) else None
+    )
+    return any(_is_valid_number(candidate) for candidate in (bid, ask, last, market_price))
 
 
 def _ticker_option_payload_score(ticker: Any) -> int:
