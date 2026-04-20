@@ -34,7 +34,6 @@ import {
   DEFAULT_DASHBOARD_ACCOUNT_KEY,
   dashboardAccountOwnsRoute,
   getDashboardAccountByKey,
-  getDashboardAccountForRoute,
   getDashboardAccountWithCoinbase,
   type DashboardAccountKey,
 } from "./config/dashboardAccounts";
@@ -595,7 +594,6 @@ function App() {
   const [fidelityCsvDirectoryDraft, setFidelityCsvDirectoryDraft] = useState("");
   const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceSurface>("dashboard");
   const [selectedDashboardAccountKey, setSelectedDashboardAccountKey] = useState<DashboardAccountKey>(DEFAULT_DASHBOARD_ACCOUNT_KEY);
-  const [dashboardAccountSelectionLocked, setDashboardAccountSelectionLocked] = useState(false);
   const [marketMinBeta, setMarketMinBeta] = useState(1.7);
   const [marketMinPrice, setMarketMinPrice] = useState(10);
   const [marketMinDollarVolumeM, setMarketMinDollarVolumeM] = useState(200);
@@ -842,20 +840,6 @@ function App() {
       setSelectedAccountId(availableAccounts[0]);
     }
   }, [connectionQuery.data?.accountId, connectionQuery.data?.managedAccounts, riskSummaryQuery.data?.account.accountId, selectedAccountId]);
-
-  useEffect(() => {
-    if (dashboardAccountSelectionLocked) {
-      return;
-    }
-    const routedAccount = connectionQuery.data?.accountId;
-    if (!routedAccount) {
-      return;
-    }
-    const matchingAccount = getDashboardAccountForRoute(routedAccount)?.key ?? null;
-    if (matchingAccount && matchingAccount !== selectedDashboardAccountKey) {
-      setSelectedDashboardAccountKey(matchingAccount);
-    }
-  }, [connectionQuery.data?.accountId, dashboardAccountSelectionLocked, selectedDashboardAccountKey]);
 
   useEffect(() => {
     if (!accountSettingsOpen) {
@@ -2499,7 +2483,6 @@ function App() {
         headerStatusLabel={accountStatusLabel}
         onSelectAccount={(accountKey) => {
           setSelectedDashboardAccountKey(accountKey);
-          setDashboardAccountSelectionLocked(true);
           setAccountSettingsOpen(false);
           setActiveWorkspace("dashboard");
         }}
