@@ -835,12 +835,38 @@ class IBGatewayBrokerService(BrokerService):
             call_theta = _extract_greek(call_ticker, "theta")
             call_vega = _extract_greek(call_ticker, "vega")
             call_rho = _extract_greek(call_ticker, "rho")
+            call_iv, call_delta, call_gamma, call_theta, call_vega, call_rho = _fill_missing_chain_greeks(
+                iv=call_iv,
+                delta=call_delta,
+                gamma=call_gamma,
+                theta=call_theta,
+                vega=call_vega,
+                rho=call_rho,
+                premium=call_mid,
+                spot=underlying_price,
+                strike=strike,
+                dte=dte,
+                right="C",
+            )
             put_iv = _extract_greek(put_ticker, "impliedVol", percent=True)
             put_delta = _extract_greek(put_ticker, "delta")
             put_gamma = _extract_greek(put_ticker, "gamma")
             put_theta = _extract_greek(put_ticker, "theta")
             put_vega = _extract_greek(put_ticker, "vega")
             put_rho = _extract_greek(put_ticker, "rho")
+            put_iv, put_delta, put_gamma, put_theta, put_vega, put_rho = _fill_missing_chain_greeks(
+                iv=put_iv,
+                delta=put_delta,
+                gamma=put_gamma,
+                theta=put_theta,
+                vega=put_vega,
+                rho=put_rho,
+                premium=put_mid,
+                spot=underlying_price,
+                strike=strike,
+                dte=dte,
+                right="P",
+            )
             rows.append(
                 ChainRow(
                     strike=round(strike, 2),
@@ -1351,7 +1377,7 @@ def _extract_greek(ticker: Any, field_name: str, percent: bool = False) -> float
             continue
         value = getattr(greeks, field_name, None)
         value_float = _safe_float(value)
-        if _is_valid_number(value_float):
+        if _is_finite_number(value_float):
             return value_float * 100.0 if percent else value_float
     return None
 
@@ -1364,7 +1390,7 @@ def _extract_under_price(ticker: Any) -> float:
         if greeks is None:
             continue
         value = _safe_float(getattr(greeks, "undPrice", None))
-        if _is_valid_number(value):
+        if _is_finite_number(value):
             return float(value)
     return 0.0
 
@@ -1399,7 +1425,7 @@ def _ticker_has_quote_payload(ticker: Any) -> bool:
     if _is_valid_number(_ticker_market_price(ticker)):
         return True
     return any(
-        _is_valid_number(_extract_greek(ticker, field_name))
+        _is_finite_number(_extract_greek(ticker, field_name))
         for field_name in ("delta", "gamma", "theta", "vega", "impliedVol")
     )
 
@@ -1426,7 +1452,7 @@ def _ticker_option_payload_score(ticker: Any) -> int:
     ask = _safe_float(getattr(ticker, "ask", None))
     if _is_valid_number(bid) or _is_valid_number(ask):
         score += 3
-    if any(_is_valid_number(_extract_greek(ticker, field_name)) for field_name in ("delta", "theta", "impliedVol")):
+    if any(_is_finite_number(_extract_greek(ticker, field_name)) for field_name in ("delta", "theta", "impliedVol")):
         score += 2
     if _is_valid_number(_ticker_option_mark(ticker)):
         score += 1
@@ -1502,6 +1528,34 @@ def _approximate_option_greeks(
         "vega": vega,
         "rho": rho,
     }
+
+
+def _fill_missing_chain_greeks(
+    *,
+    iv: float | None,
+    delta: float | None,
+    gamma: float | None,
+    theta: float | None,
+    vega: float | None,
+    rho: float | None,
+    premium: float | None,
+    spot: float,
+    strike: float,
+    dte: int,
+    right: str,
+) -> tuple[float | None, float | None, float | None, float | None, float | None, float | None]:
+    current_values = (iv, delta, gamma, theta, vega, rho)
+    if all(_is_finite_number(value) for value in current_values):
+        return current_values
+    approximated = _approximate_option_greeks(premium, spot, strike, dte, right)
+    return (
+        iv if _is_finite_number(iv) else _safe_float(approximated.get("impliedVolPct")),
+        delta if _is_finite_number(delta) else _safe_float(approximated.get("delta")),
+        gamma if _is_finite_number(gamma) else _safe_float(approximated.get("gamma")),
+        theta if _is_finite_number(theta) else _safe_float(approximated.get("theta")),
+        vega if _is_finite_number(vega) else _safe_float(approximated.get("vega")),
+        rho if _is_finite_number(rho) else _safe_float(approximated.get("rho")),
+    )
 
 
 def _implied_volatility_from_price(
@@ -1639,8 +1693,12 @@ def _safe_float(value: Any) -> float | None:
     return result
 
 
+def _is_finite_number(value: float | None) -> bool:
+    return value is not None and isfinite(value) and abs(value) < 1e307
+
+
 def _is_valid_number(value: float | None) -> bool:
-    return value is not None and isfinite(value) and value > 0
+    return _is_finite_number(value) and value > 0
 
 
 def _normalize_expiry(raw_expiry: str) -> str:
