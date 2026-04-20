@@ -111,12 +111,6 @@ class DashboardSettings:
     coinbase_api_key_file: Path | None = None
     coinbase_timeout_seconds: float = 15.0
     coinbase_snapshot_cache_ttl_seconds: float = 30.0
-    plaid_environment: Literal["sandbox", "development", "production"] = "sandbox"
-    plaid_client_id: str | None = None
-    plaid_secret: str | None = None
-    plaid_client_name: str = "Investing Platform"
-    plaid_redirect_uri: str | None = None
-    plaid_timeout_seconds: float = 20.0
     backend_host: str = "127.0.0.1"
     backend_port: int = 8000
     frontend_port: int = 5173
@@ -259,12 +253,6 @@ class DashboardSettings:
             coinbase_api_key_file=_env_optional_path("COINBASE_API_KEY_FILE"),
             coinbase_timeout_seconds=_env_float("COINBASE_TIMEOUT_SECONDS", default=15.0),
             coinbase_snapshot_cache_ttl_seconds=_env_float("COINBASE_SNAPSHOT_CACHE_TTL_SECONDS", default=30.0),
-            plaid_environment=_env_str("PLAID_ENV", default="sandbox").lower(),  # type: ignore[arg-type]
-            plaid_client_id=_env_optional_str("PLAID_CLIENT_ID"),
-            plaid_secret=_env_optional_str("PLAID_SECRET"),
-            plaid_client_name=_env_str("PLAID_CLIENT_NAME", default="Investing Platform"),
-            plaid_redirect_uri=_env_optional_str("PLAID_REDIRECT_URI"),
-            plaid_timeout_seconds=_env_float("PLAID_TIMEOUT_SECONDS", default=20.0),
             backend_host=_env_str(
                 "INVESTING_PLATFORM_BACKEND_HOST",
                 "OPTIONS_DASHBOARD_BACKEND_HOST",
@@ -287,12 +275,8 @@ class DashboardSettings:
         return f"http://127.0.0.1:{self.frontend_port}"
 
     @property
-    def plaid_base_url(self) -> str:
-        return f"https://{self.plaid_environment}.plaid.com"
-
-    @property
-    def plaid_state_path(self) -> Path:
-        return self.data_dir / "plaid" / "connectors.json"
+    def filesystem_connectors_state_path(self) -> Path:
+        return self.data_dir / "filesystem-connectors" / "connectors.json"
 
     @property
     def stocks_root(self) -> Path:

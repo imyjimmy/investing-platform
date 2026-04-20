@@ -7,7 +7,7 @@
     "dashboardSections": {
       "coinbase": true
     },
-    "availableConnectorIds": ["plaidFidelity", "plaidChase"]
+    "availableConnectorIds": ["csvFolder"]
   },
   {
     "key": "personal",

@@ -407,45 +407,35 @@ export interface CoinbasePortfolioResponse {
   isStale: boolean;
 }
 
-export interface PlaidConnectorStatus {
+export interface FilesystemConnectorStatus {
   connectorId: string;
   available: boolean;
   connected: boolean;
-  status: "ready" | "degraded" | "needs_setup" | "not_connected";
+  status: "ready" | "degraded" | "not_connected";
   detail: string;
-  institutionName: string | null;
-  selectedAccountsCount: number;
+  displayName: string | null;
+  directoryPath: string | null;
+  csvFilesCount: number;
+  latestCsvPath: string | null;
   lastSuccessfulSyncAt: string | null;
   lastError: string | null;
 }
 
-export interface PlaidLinkTokenResponse {
-  connectorId: string;
-  linkToken: string;
-  expiration: string | null;
+export interface FilesystemConnectorConfigRequest {
+  displayName: string;
+  directoryPath: string;
 }
 
-export interface PlaidPublicTokenExchangeRequest {
-  publicToken: string;
-  institutionId?: string | null;
-  institutionName?: string | null;
-  accountIds?: string[];
-}
-
-export interface PlaidInvestmentAccount {
+export interface FilesystemInvestmentAccount {
   accountId: string;
   name: string;
-  mask: string | null;
-  subtype: string | null;
   currentBalance: number | null;
-  availableBalance: number | null;
   isoCurrencyCode: string | null;
 }
 
-export interface PlaidHolding {
+export interface FilesystemHolding {
   accountId: string;
   accountName: string;
-  securityId: string | null;
   symbol: string | null;
   name: string;
   quantity: number | null;
@@ -454,16 +444,19 @@ export interface PlaidHolding {
   costBasis: number | null;
   gainLoss: number | null;
   isoCurrencyCode: string | null;
+  sourceFile: string | null;
 }
 
-export interface PlaidConnectorPortfolioResponse {
+export interface FilesystemConnectorPortfolioResponse {
   connectorId: string;
-  institutionName: string | null;
+  displayName: string | null;
+  directoryPath: string;
+  latestCsvPath: string | null;
   totalValue: number;
   investmentAccountsCount: number;
   holdingsCount: number;
-  accounts: PlaidInvestmentAccount[];
-  holdings: PlaidHolding[];
+  accounts: FilesystemInvestmentAccount[];
+  holdings: FilesystemHolding[];
   sourceNotice: string | null;
   generatedAt: string;
   isStale: boolean;

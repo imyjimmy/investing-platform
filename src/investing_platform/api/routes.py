@@ -9,9 +9,9 @@ from fastapi import APIRouter, HTTPException, Query
 from investing_platform import __version__
 from investing_platform.models import (
     EdgarDownloadRequest,
+    FilesystemConnectorConfigRequest,
     InvestorPdfDownloadRequest,
     OptionOrderRequest,
-    PlaidPublicTokenExchangeRequest,
 )
 from investing_platform.services.analytics import (
     build_collateral_summary,
@@ -25,8 +25,8 @@ from investing_platform.services.app_state import (
     get_broker_service,
     get_coinbase_service,
     get_edgar_service,
+    get_filesystem_connector_service,
     get_investor_pdf_service,
-    get_plaid_service,
     get_settings,
     get_universe_screener_service,
 )
@@ -56,8 +56,8 @@ def _coinbase():
     return get_coinbase_service()
 
 
-def _plaid():
-    return get_plaid_service()
+def _filesystem_connectors():
+    return get_filesystem_connector_service()
 
 
 def _universe():
@@ -313,38 +313,26 @@ def coinbase_portfolio() -> dict:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
-@router.get("/sources/plaid/connectors/{connector_id}/status")
-def plaid_connector_status(connector_id: str) -> dict:
+@router.get("/sources/filesystem/connectors/{connector_id}/status")
+def filesystem_connector_status(connector_id: str) -> dict:
     try:
-        return _plaid().connector_status(connector_id).model_dump()
+        return _filesystem_connectors().connector_status(connector_id).model_dump()
     except Exception as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
-@router.post("/sources/plaid/connectors/{connector_id}/link-token")
-def plaid_connector_link_token(connector_id: str) -> dict:
+@router.post("/sources/filesystem/connectors/{connector_id}/configure")
+def filesystem_connector_configure(connector_id: str, request: FilesystemConnectorConfigRequest) -> dict:
     try:
-        return _plaid().create_link_token(connector_id).model_dump()
+        return _filesystem_connectors().configure_connector(connector_id, request).model_dump()
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
-@router.post("/sources/plaid/connectors/{connector_id}/exchange")
-def plaid_connector_exchange(connector_id: str, request: PlaidPublicTokenExchangeRequest) -> dict:
+@router.get("/sources/filesystem/connectors/{connector_id}/portfolio")
+def filesystem_connector_portfolio(connector_id: str) -> dict:
     try:
-        return _plaid().exchange_public_token(connector_id, request).model_dump()
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-
-
-@router.get("/sources/plaid/connectors/{connector_id}/portfolio")
-def plaid_connector_portfolio(connector_id: str) -> dict:
-    try:
-        return _plaid().get_portfolio(connector_id).model_dump()
+        return _filesystem_connectors().get_portfolio(connector_id).model_dump()
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:

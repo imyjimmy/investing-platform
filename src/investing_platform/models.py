@@ -503,45 +503,35 @@ class CoinbasePortfolioResponse(DashboardModel):
     isStale: bool = False
 
 
-class PlaidConnectorStatus(DashboardModel):
+class FilesystemConnectorStatus(DashboardModel):
     connectorId: str
     available: bool
     connected: bool
-    status: Literal["ready", "degraded", "needs_setup", "not_connected"]
+    status: Literal["ready", "degraded", "not_connected"]
     detail: str
-    institutionName: str | None = None
-    selectedAccountsCount: int = 0
+    displayName: str | None = None
+    directoryPath: str | None = None
+    csvFilesCount: int = 0
+    latestCsvPath: str | None = None
     lastSuccessfulSyncAt: datetime | None = None
     lastError: str | None = None
 
 
-class PlaidLinkTokenResponse(DashboardModel):
-    connectorId: str
-    linkToken: str
-    expiration: datetime | None = None
+class FilesystemConnectorConfigRequest(DashboardModel):
+    displayName: str
+    directoryPath: str
 
 
-class PlaidPublicTokenExchangeRequest(DashboardModel):
-    publicToken: str
-    institutionId: str | None = None
-    institutionName: str | None = None
-    accountIds: list[str] = Field(default_factory=list)
-
-
-class PlaidInvestmentAccount(DashboardModel):
+class FilesystemInvestmentAccount(DashboardModel):
     accountId: str
     name: str
-    mask: str | None = None
-    subtype: str | None = None
     currentBalance: float | None = None
-    availableBalance: float | None = None
     isoCurrencyCode: str | None = None
 
 
-class PlaidHolding(DashboardModel):
+class FilesystemHolding(DashboardModel):
     accountId: str
     accountName: str
-    securityId: str | None = None
     symbol: str | None = None
     name: str
     quantity: float | None = None
@@ -550,16 +540,19 @@ class PlaidHolding(DashboardModel):
     costBasis: float | None = None
     gainLoss: float | None = None
     isoCurrencyCode: str | None = None
+    sourceFile: str | None = None
 
 
-class PlaidConnectorPortfolioResponse(DashboardModel):
+class FilesystemConnectorPortfolioResponse(DashboardModel):
     connectorId: str
-    institutionName: str | None = None
+    displayName: str | None = None
+    directoryPath: str
+    latestCsvPath: str | None = None
     totalValue: float
     investmentAccountsCount: int
     holdingsCount: int
-    accounts: list[PlaidInvestmentAccount] = Field(default_factory=list)
-    holdings: list[PlaidHolding] = Field(default_factory=list)
+    accounts: list[FilesystemInvestmentAccount] = Field(default_factory=list)
+    holdings: list[FilesystemHolding] = Field(default_factory=list)
     sourceNotice: str | None = None
     generatedAt: datetime
     isStale: bool = False

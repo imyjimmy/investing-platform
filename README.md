@@ -28,7 +28,7 @@ The original options-scanner pipeline is still present under `src/options_scanne
 - Defaults to the IB Gateway paper port `4002` when running live mode
 - Pulls account summary, portfolio positions, and open orders
 - Pulls Coinbase account balances into a separate Van Aken dashboard section
-- Links Plaid investment connectors from Account Settings for account-owned sources such as Fidelity
+- Links account-owned CSV folder connectors from Account Settings for sources such as Fidelity
 - Normalizes option positions into short-put / covered-call views
 - Estimates collateral usage and free option-selling capacity
 - Fetches option chains for selected symbols, including **NVDA**
@@ -86,17 +86,7 @@ COINBASE_API_KEY_FILE=
 
 If you use a CDP Secret API Key with the default **Ed25519** algorithm, the dashboard expects both `COINBASE_API_KEY_ID` and `COINBASE_API_KEY`.
 
-For the Plaid-backed Fidelity connector in `Van Aken > Account > Settings`, add your Plaid credentials:
-
-```env
-PLAID_ENV=development
-PLAID_CLIENT_ID=your_plaid_client_id
-PLAID_SECRET=your_plaid_secret
-PLAID_CLIENT_NAME=Investing Platform
-PLAID_REDIRECT_URI=
-```
-
-The backend stores linked Plaid item tokens in a local state file under `data/plaid/connectors.json`. Fidelity investment connections usually require Plaid `development` or `production`; `sandbox` is fine for UI wiring but does not represent a live Fidelity institution.
+For the Fidelity CSV connector in `Van Aken > Account > Settings`, open `Add (+)` and save a folder path that contains your end-of-day Fidelity CSV exports. The backend stores connector paths in `data/filesystem-connectors/connectors.json` and reads the latest CSV in that folder as the current snapshot.
 
 If you use paper **TWS** instead of **IB Gateway**, the paper socket port is commonly `7497` instead of `4002`.
 
@@ -165,10 +155,9 @@ The FastAPI service exposes the requested MVP endpoints:
 - `POST /api/reconnect`
 - `GET /api/sources/coinbase/status`
 - `GET /api/sources/coinbase/portfolio`
-- `GET /api/sources/plaid/connectors/{connector_id}/status`
-- `POST /api/sources/plaid/connectors/{connector_id}/link-token`
-- `POST /api/sources/plaid/connectors/{connector_id}/exchange`
-- `GET /api/sources/plaid/connectors/{connector_id}/portfolio`
+- `GET /api/sources/filesystem/connectors/{connector_id}/status`
+- `POST /api/sources/filesystem/connectors/{connector_id}/configure`
+- `GET /api/sources/filesystem/connectors/{connector_id}/portfolio`
 - `GET /api/account/summary`
 - `GET /api/account/positions`
 - `GET /api/account/options-positions`

@@ -46,6 +46,7 @@ pub fn run() {
             .build(),
         )?;
       }
+      app.handle().plugin(tauri_plugin_dialog::init())?;
 
       let window = app
         .get_webview_window("main")

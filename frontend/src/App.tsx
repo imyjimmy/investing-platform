@@ -16,6 +16,8 @@ import type {
   ConnectionStatus,
   EdgarDownloadRequest,
   EdgarDownloadResponse,
+  FilesystemConnectorPortfolioResponse,
+  FilesystemConnectorStatus,
   InvestorPdfDownloadRequest,
   InvestorPdfDownloadResponse,
   OpenOrderExposure,
@@ -24,8 +26,6 @@ import type {
   OptionOrderPreview,
   OptionOrderRequest,
   OptionPosition,
-  PlaidConnectorPortfolioResponse,
-  PlaidConnectorStatus,
   Position,
   SubmittedOrder,
 } from "./lib/types";
@@ -188,16 +188,13 @@ function sumOptionPositionPnl(positions: OptionPosition[]) {
   return positions.reduce((total, position) => total + (position.unrealizedPnL ?? 0) + (position.realizedPnL ?? 0), 0);
 }
 
-function plaidConnectorTone(
-  status: PlaidConnectorStatus | undefined,
-  portfolio: PlaidConnectorPortfolioResponse | undefined,
+function filesystemConnectorTone(
+  status: FilesystemConnectorStatus | undefined,
+  portfolio: FilesystemConnectorPortfolioResponse | undefined,
   portfolioError: string | null,
 ): ConnectionHealthTone {
   if (!status) {
     return "caution";
-  }
-  if (status.status === "needs_setup") {
-    return "danger";
   }
   if (status.status === "degraded") {
     return "caution";
@@ -208,30 +205,21 @@ function plaidConnectorTone(
   return portfolio?.isStale || Boolean(portfolioError) ? "caution" : "safe";
 }
 
-function plaidConnectorStatusLabel(
-  status: PlaidConnectorStatus | undefined,
-  portfolio: PlaidConnectorPortfolioResponse | undefined,
+function filesystemConnectorStatusLabel(
+  status: FilesystemConnectorStatus | undefined,
+  portfolio: FilesystemConnectorPortfolioResponse | undefined,
   portfolioError: string | null,
 ) {
   if (!status) {
     return "Checking";
   }
-  if (status.status === "needs_setup") {
-    return "Needs setup";
-  }
   if (!status.connected) {
-    return "Ready to link";
+    return "Ready";
   }
   if (status.status === "degraded" || portfolio?.isStale || portfolioError) {
     return "Connected · stale snapshot";
   }
   return "Connected";
-}
-
-function plaidSelectedAccountIds(metadata: PlaidLinkMetadata | undefined) {
-  return (metadata?.accounts ?? [])
-    .map((account) => account.id?.trim())
-    .filter((accountId): accountId is string => Boolean(accountId));
 }
 
 function orderRiskLabel(order: OpenOrderExposure) {
@@ -569,7 +557,7 @@ const MARKET_SCREEN_ROWS: MarketRow[] = [
   { symbol: "FCX", name: "Freeport-McMoRan", sector: "Materials", price: 46.1, beta: 1.55, weekChangePct: 2.3, monthChangePct: 5.4, avgDollarVolumeM: 497, marketCapB: 66.0, shortInterestPct: 1.9, optionsable: true, shortable: true },
 ];
 
-const FIDELITY_CONNECTOR_ID: ConnectorCatalogId = "plaidFidelity";
+const CSV_FOLDER_CONNECTOR_ID: ConnectorCatalogId = "csvFolder";
 
 function readVisibleChainGreeks(): ChainGreekKey[] {
   if (typeof window === "undefined") {
@@ -597,8 +585,10 @@ function App() {
   const [connectorPickerOpen, setConnectorPickerOpen] = useState(false);
   const [ibkrConnectorCollapsed, setIbkrConnectorCollapsed] = useState(false);
   const [coinbaseConnectorCollapsed, setCoinbaseConnectorCollapsed] = useState(false);
-  const [plaidFidelityConnectorCollapsed, setPlaidFidelityConnectorCollapsed] = useState(false);
+  const [csvFolderConnectorCollapsed, setCsvFolderConnectorCollapsed] = useState(false);
   const [connectorSetupError, setConnectorSetupError] = useState<string | null>(null);
+  const [csvFolderNameDraft, setCsvFolderNameDraft] = useState("");
+  const [fidelityCsvDirectoryDraft, setFidelityCsvDirectoryDraft] = useState("");
   const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceSurface>("dashboard");
   const [selectedDashboardAccountKey, setSelectedDashboardAccountKey] = useState<DashboardAccountKey>(DEFAULT_DASHBOARD_ACCOUNT_KEY);
   const [dashboardAccountSelectionLocked, setDashboardAccountSelectionLocked] = useState(false);
@@ -664,15 +654,15 @@ function App() {
     enabled: coinbaseStatusQuery.data?.available ?? false,
     refetchInterval: 30_000,
   });
-  const plaidFidelityStatusQuery = useQuery({
-    queryKey: ["plaid-connector-status", FIDELITY_CONNECTOR_ID],
-    queryFn: () => api.plaidConnectorStatus(FIDELITY_CONNECTOR_ID),
+  const csvFolderStatusQuery = useQuery({
+    queryKey: ["filesystem-connector-status", CSV_FOLDER_CONNECTOR_ID],
+    queryFn: () => api.filesystemConnectorStatus(CSV_FOLDER_CONNECTOR_ID),
     refetchInterval: 30_000,
   });
-  const plaidFidelityPortfolioQuery = useQuery({
-    queryKey: ["plaid-connector-portfolio", FIDELITY_CONNECTOR_ID],
-    queryFn: () => api.plaidConnectorPortfolio(FIDELITY_CONNECTOR_ID),
-    enabled: plaidFidelityStatusQuery.data?.connected ?? false,
+  const csvFolderPortfolioQuery = useQuery({
+    queryKey: ["filesystem-connector-portfolio", CSV_FOLDER_CONNECTOR_ID],
+    queryFn: () => api.filesystemConnectorPortfolio(CSV_FOLDER_CONNECTOR_ID),
+    enabled: csvFolderStatusQuery.data?.connected ?? false,
     refetchInterval: 30_000,
   });
   const cryptoMajorsQuery = useQuery({
@@ -728,29 +718,13 @@ function App() {
 
   const connectMutation = useMutation({ mutationFn: api.connect });
   const reconnectMutation = useMutation({ mutationFn: api.reconnect });
-  const plaidLinkTokenMutation = useMutation({
-    mutationFn: (connectorId: ConnectorCatalogId) => api.plaidConnectorLinkToken(connectorId),
-  });
-  const plaidExchangeMutation = useMutation({
-    mutationFn: ({
-      connectorId,
-      publicToken,
-      metadata,
-    }: {
-      connectorId: ConnectorCatalogId;
-      publicToken: string;
-      metadata: PlaidLinkMetadata;
-    }) =>
-      api.plaidConnectorExchange(connectorId, {
-        publicToken,
-        institutionId: metadata.institution?.institution_id ?? null,
-        institutionName: metadata.institution?.name ?? null,
-        accountIds: plaidSelectedAccountIds(metadata),
-      }),
+  const filesystemConnectorConfigureMutation = useMutation({
+    mutationFn: ({ connectorId, displayName, directoryPath }: { connectorId: ConnectorCatalogId; displayName: string; directoryPath: string }) =>
+      api.filesystemConnectorConfigure(connectorId, { displayName, directoryPath }),
     onSuccess: async () => {
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["plaid-connector-status", FIDELITY_CONNECTOR_ID] }),
-        queryClient.invalidateQueries({ queryKey: ["plaid-connector-portfolio", FIDELITY_CONNECTOR_ID] }),
+        queryClient.invalidateQueries({ queryKey: ["filesystem-connector-status", CSV_FOLDER_CONNECTOR_ID] }),
+        queryClient.invalidateQueries({ queryKey: ["filesystem-connector-portfolio", CSV_FOLDER_CONNECTOR_ID] }),
       ]);
     },
   });
@@ -885,6 +859,14 @@ function App() {
       setConnectorSetupError(null);
     }
   }, [accountSettingsOpen]);
+
+  useEffect(() => {
+    if (!connectorPickerOpen) {
+      return;
+    }
+    setCsvFolderNameDraft(csvFolderStatusQuery.data?.displayName ?? "");
+    setFidelityCsvDirectoryDraft(csvFolderStatusQuery.data?.directoryPath ?? "");
+  }, [connectorPickerOpen, csvFolderStatusQuery.data?.directoryPath, csvFolderStatusQuery.data?.displayName]);
 
   useEffect(() => {
     if (!ticketDraft) {
@@ -1033,9 +1015,9 @@ function App() {
   const sourceError = connectError ?? reconnectError ?? connectionQuery.data?.lastError ?? null;
   const coinbaseStatusError = coinbaseStatusQuery.error instanceof Error ? coinbaseStatusQuery.error.message : null;
   const coinbasePortfolioError = coinbasePortfolioQuery.error instanceof Error ? coinbasePortfolioQuery.error.message : null;
-  const plaidFidelityStatusError = plaidFidelityStatusQuery.error instanceof Error ? plaidFidelityStatusQuery.error.message : null;
-  const plaidFidelityPortfolioError =
-    plaidFidelityPortfolioQuery.error instanceof Error ? plaidFidelityPortfolioQuery.error.message : null;
+  const csvFolderStatusError = csvFolderStatusQuery.error instanceof Error ? csvFolderStatusQuery.error.message : null;
+  const csvFolderPortfolioError =
+    csvFolderPortfolioQuery.error instanceof Error ? csvFolderPortfolioQuery.error.message : null;
   const coinbaseConnectorTone: ConnectionHealthTone = coinbaseStatusQuery.isLoading
     ? "caution"
     : coinbaseStatusQuery.data?.available
@@ -1060,25 +1042,24 @@ function App() {
     : coinbaseStatusQuery.data?.available
       ? `Assigned to ${coinbaseAssignedAccount?.name ?? "configured"} dashboard`
       : `Connector settings for ${coinbaseAssignedAccount?.name ?? "configured"} dashboard`;
-  const plaidFidelityConnectorTone = plaidConnectorTone(
-    plaidFidelityStatusQuery.data,
-    plaidFidelityPortfolioQuery.data,
-    plaidFidelityPortfolioError ?? plaidFidelityStatusError,
+  const csvFolderConnectorTone = filesystemConnectorTone(
+    csvFolderStatusQuery.data,
+    csvFolderPortfolioQuery.data,
+    csvFolderPortfolioError ?? csvFolderStatusError,
   );
-  const plaidFidelityConnectorStatus = plaidConnectorStatusLabel(
-    plaidFidelityStatusQuery.data,
-    plaidFidelityPortfolioQuery.data,
-    plaidFidelityPortfolioError ?? plaidFidelityStatusError,
+  const csvFolderConnectorStatus = filesystemConnectorStatusLabel(
+    csvFolderStatusQuery.data,
+    csvFolderPortfolioQuery.data,
+    csvFolderPortfolioError ?? csvFolderStatusError,
   );
-  const plaidFidelityConnectorDetail = plaidFidelityStatusQuery.isLoading
-    ? "Loading Plaid Fidelity connector status"
-    : plaidFidelityStatusError
-      ? plaidFidelityStatusError
-      : plaidFidelityStatusQuery.data?.connected
-        ? plaidFidelityPortfolioQuery.data?.institutionName
-          ? `${plaidFidelityPortfolioQuery.data.institutionName} synced through Plaid`
-          : "Fidelity linked through Plaid"
-        : plaidFidelityStatusQuery.data?.detail ?? "Ready to link Fidelity through Plaid.";
+  const csvFolderConnectorDisplayName = csvFolderStatusQuery.data?.displayName?.trim() || "CSV Folder";
+  const csvFolderConnectorDetail = csvFolderStatusQuery.isLoading
+    ? "Loading CSV folder connector status"
+    : csvFolderStatusError
+      ? csvFolderStatusError
+      : csvFolderStatusQuery.data?.directoryPath
+        ? `${csvFolderStatusQuery.data.directoryPath} · ${fmtWholeNumber(csvFolderStatusQuery.data.csvFilesCount)} files`
+        : csvFolderStatusQuery.data?.detail ?? "Add a CSV folder connector.";
   const edgarStatusError = edgarStatusQuery.error instanceof Error ? edgarStatusQuery.error.message : null;
   const investorPdfStatusError = investorPdfStatusQuery.error instanceof Error ? investorPdfStatusQuery.error.message : null;
   const dataModeLabel = connectionQuery.data?.mode === "ibkr" ? "IBKR gateway session" : "Mock snapshot";
@@ -1148,21 +1129,21 @@ function App() {
     };
   }
 
-  function buildPlaidConnectorCard(connectorId: ConnectorCatalogId): AccountConnectorCard | null {
+  function buildFilesystemConnectorCard(connectorId: ConnectorCatalogId): AccountConnectorCard | null {
     const connector = getConnectorCatalogEntry(connectorId);
     if (!connector) {
       return null;
     }
-    if (connectorId === FIDELITY_CONNECTOR_ID) {
-      if (!plaidFidelityStatusQuery.data?.connected) {
+    if (connectorId === CSV_FOLDER_CONNECTOR_ID) {
+      if (!csvFolderStatusQuery.data?.connected) {
         return null;
       }
       return {
         id: connector.id,
-        title: connector.title,
-        status: plaidFidelityConnectorStatus,
-        detail: plaidFidelityConnectorDetail,
-        tone: plaidFidelityConnectorTone,
+        title: csvFolderConnectorDisplayName,
+        status: csvFolderConnectorStatus,
+        detail: csvFolderConnectorDetail,
+        tone: csvFolderConnectorTone,
         countsTowardHealth: true,
         icon: <BankIcon />,
       };
@@ -1185,7 +1166,7 @@ function App() {
         });
       }
       account.availableConnectorIds.forEach((connectorId) => {
-        const connectorCard = buildPlaidConnectorCard(connectorId);
+        const connectorCard = buildFilesystemConnectorCard(connectorId);
         if (connectorCard) {
           connectorCards.push(connectorCard);
         }
@@ -1202,7 +1183,7 @@ function App() {
   const availableConnectorOptions = selectedDashboardAccount.availableConnectorIds
     .map((connectorId) => getConnectorCatalogEntry(connectorId))
     .filter((connector): connector is NonNullable<ReturnType<typeof getConnectorCatalogEntry>> => Boolean(connector))
-    .filter((connector) => !activeConnectorIds.has(connector.id));
+    .filter((connector) => connector.id === CSV_FOLDER_CONNECTOR_ID || !activeConnectorIds.has(connector.id));
   const availableConnectorCount = availableConnectorOptions.length;
   const dashboardAccountStatuses = Object.fromEntries(
     DASHBOARD_ACCOUNTS.map((account) => {
@@ -2058,7 +2039,7 @@ function App() {
     );
   }
 
-  async function beginConnectorLink(connectorId: ConnectorCatalogId) {
+  async function saveFilesystemConnector(connectorId: ConnectorCatalogId) {
     setConnectorSetupError(null);
     const connector = getConnectorCatalogEntry(connectorId);
     if (!connector) {
@@ -2069,79 +2050,100 @@ function App() {
       setConnectorSetupError(`${connector.title} is not ready yet.`);
       return;
     }
-    if (!window.Plaid) {
-      setConnectorSetupError("Plaid Link did not load in the desktop shell.");
+    const displayName = csvFolderNameDraft.trim();
+    const directoryPath = fidelityCsvDirectoryDraft.trim();
+    if (!displayName) {
+      setConnectorSetupError("Add a connector name before saving this connector.");
+      return;
+    }
+    if (!directoryPath) {
+      setConnectorSetupError("Add a folder path before saving this connector.");
       return;
     }
     try {
-      const tokenResponse = await plaidLinkTokenMutation.mutateAsync(connectorId);
-      const handler = window.Plaid.create({
-        token: tokenResponse.linkToken,
-        onSuccess: (publicToken, metadata) => {
-          void plaidExchangeMutation
-            .mutateAsync({ connectorId, publicToken, metadata })
-            .then(() => {
-              setConnectorPickerOpen(false);
-              setConnectorSetupError(null);
-            })
-            .catch((error: unknown) => {
-              setConnectorSetupError(error instanceof Error ? error.message : "Could not finish linking this connector.");
-            });
-        },
-        onExit: (error) => {
-          if (error instanceof Error) {
-            setConnectorSetupError(error.message);
-          }
-        },
-      });
-      handler.open();
+      await filesystemConnectorConfigureMutation.mutateAsync({ connectorId, displayName, directoryPath });
+      setConnectorPickerOpen(false);
+      setConnectorSetupError(null);
     } catch (error) {
-      setConnectorSetupError(error instanceof Error ? error.message : "Could not start Plaid Link.");
+      setConnectorSetupError(error instanceof Error ? error.message : "Could not save the CSV folder.");
     }
   }
 
-  function renderPlaidFidelityPanelContent() {
-    return plaidFidelityStatusQuery.isLoading ? (
-      <div className="text-sm text-muted">Checking Plaid Fidelity connector...</div>
-    ) : !plaidFidelityStatusQuery.data?.available ? (
+  async function chooseCsvFolder() {
+    setConnectorSetupError(null);
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: "Choose CSV Folder",
+        defaultPath: fidelityCsvDirectoryDraft.trim() || undefined,
+      });
+      if (typeof selected === "string" && selected.trim()) {
+        setFidelityCsvDirectoryDraft(selected);
+      }
+    } catch (error) {
+      setConnectorSetupError(error instanceof Error ? error.message : "Could not open the system folder picker.");
+    }
+  }
+
+  function renderFidelityCsvPanelContent() {
+    return csvFolderStatusQuery.isLoading ? (
+      <div className="text-sm text-muted">Checking CSV folder connector...</div>
+    ) : !csvFolderStatusQuery.data?.available ? (
       <div className="grid gap-4">
         <div className="grid gap-4 md:grid-cols-3">
           <MetricCard label="Connector" value="Not configured" />
-          <MetricCard label="Provider" value="Plaid" />
-          <MetricCard label="Environment" value="Set in .env" />
+          <MetricCard label="Provider" value="Filesystem" />
+          <MetricCard label="Folder" value="Add a path in Settings" />
         </div>
-        <ErrorState message={plaidFidelityStatusError ?? plaidFidelityStatusQuery.data?.detail ?? "Plaid Fidelity is unavailable."} />
+        <ErrorState message={csvFolderStatusError ?? csvFolderStatusQuery.data?.detail ?? "CSV folder is unavailable."} />
       </div>
-    ) : !plaidFidelityStatusQuery.data.connected ? (
+    ) : !csvFolderStatusQuery.data.connected ? (
       <div className="grid gap-4">
         <div className="grid gap-4 md:grid-cols-3">
-          <MetricCard label="Connector" value="Ready to link" />
-          <MetricCard label="Provider" value="Plaid" />
-          <MetricCard label="Institution" value="Fidelity" />
+          <MetricCard label="Connector" value="Ready for CSVs" />
+          <MetricCard label="Provider" value="Filesystem" />
+          <MetricCard label="Folder" value={csvFolderStatusQuery.data.directoryPath ?? "Not set"} />
         </div>
-        <ErrorState message={plaidFidelityStatusQuery.data.detail} />
+        <ErrorState message={csvFolderStatusQuery.data.detail} />
       </div>
-    ) : plaidFidelityPortfolioQuery.isLoading ? (
-      <div className="text-sm text-muted">Loading Fidelity holdings...</div>
-    ) : plaidFidelityPortfolioQuery.error instanceof Error ? (
-      <ErrorState message={plaidFidelityPortfolioQuery.error.message} />
-    ) : plaidFidelityPortfolioQuery.data ? (
+    ) : csvFolderPortfolioQuery.isLoading ? (
+      <div className="text-sm text-muted">Loading CSV holdings...</div>
+    ) : csvFolderPortfolioQuery.error instanceof Error ? (
+      <ErrorState message={csvFolderPortfolioQuery.error.message} />
+    ) : csvFolderPortfolioQuery.data ? (
       <div className="grid gap-4">
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <MetricCard label="Total value" value={fmtCurrency(plaidFidelityPortfolioQuery.data.totalValue)} />
-          <MetricCard label="Accounts" value={fmtNumber(plaidFidelityPortfolioQuery.data.investmentAccountsCount)} />
-          <MetricCard label="Holdings" value={fmtNumber(plaidFidelityPortfolioQuery.data.holdingsCount)} />
-          <MetricCard label="Institution" value={plaidFidelityPortfolioQuery.data.institutionName ?? "Fidelity"} />
+          <MetricCard label="Total value" value={fmtCurrency(csvFolderPortfolioQuery.data.totalValue)} />
+          <MetricCard label="Accounts" value={fmtNumber(csvFolderPortfolioQuery.data.investmentAccountsCount)} />
+          <MetricCard label="Holdings" value={fmtNumber(csvFolderPortfolioQuery.data.holdingsCount)} />
+          <MetricCard
+            label="Snapshot"
+            value={csvFolderPortfolioQuery.data.latestCsvPath?.split("/").pop() ?? "Latest CSV"}
+          />
         </div>
-        {plaidFidelityPortfolioQuery.data.sourceNotice ? (
+        <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-3 text-sm text-muted">
+          <div className="font-medium text-text">Connector</div>
+          <div className="mt-1">{csvFolderPortfolioQuery.data.displayName ?? "CSV Folder"}</div>
+          <div className="font-medium text-text">Folder</div>
+          <div className="mt-1 break-all">{csvFolderPortfolioQuery.data.directoryPath}</div>
+          {csvFolderPortfolioQuery.data.latestCsvPath ? (
+            <>
+              <div className="mt-3 font-medium text-text">Latest CSV</div>
+              <div className="mt-1 break-all">{csvFolderPortfolioQuery.data.latestCsvPath}</div>
+            </>
+          ) : null}
+        </div>
+        {csvFolderPortfolioQuery.data.sourceNotice ? (
           <div
             className={`rounded-2xl border px-4 py-3 text-sm ${
-              plaidFidelityPortfolioQuery.data.isStale
+              csvFolderPortfolioQuery.data.isStale
                 ? "border-caution/25 bg-caution/8 text-caution"
                 : "border-line/80 bg-panelSoft text-muted"
             }`}
           >
-            {plaidFidelityPortfolioQuery.data.sourceNotice}
+            {csvFolderPortfolioQuery.data.sourceNotice}
           </div>
         ) : null}
         <div className="overflow-x-auto">
@@ -2158,11 +2160,11 @@ function App() {
               </tr>
             </thead>
             <tbody>
-              {plaidFidelityPortfolioQuery.data.holdings.map((holding) => (
-                <tr key={`${holding.accountId}-${holding.securityId ?? holding.name}`} className="border-t border-line/70 align-top">
+              {csvFolderPortfolioQuery.data.holdings.map((holding) => (
+                <tr key={`${holding.accountId}-${holding.symbol ?? holding.name}`} className="border-t border-line/70 align-top">
                   <td className="py-3 pr-4">
                     <div className="font-medium text-text">{holding.symbol ?? holding.name}</div>
-                    <div className="mt-1 text-xs text-muted">{holding.symbol ? holding.name : "Plaid holding"}</div>
+                    <div className="mt-1 text-xs text-muted">{holding.symbol ? holding.name : "CSV holding"}</div>
                   </td>
                   <td className="py-3 pr-4">
                     <div className="text-text">{holding.accountName}</div>
@@ -2179,7 +2181,7 @@ function App() {
         </div>
       </div>
     ) : (
-      <ErrorState message="Fidelity holdings are unavailable." />
+      <ErrorState message="CSV holdings are unavailable." />
     );
   }
 
@@ -2216,20 +2218,18 @@ function App() {
   const dashboardSettingsContent = (
     <Panel
       action={
-        <div className="flex items-center gap-3">
-          <div className="text-[11px] uppercase tracking-[0.18em] text-muted">{availableConnectorCount} available</div>
-          <button
-            className="rounded-full border border-accent/30 bg-accent/10 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.16em] text-accent transition hover:border-accent/50 hover:bg-accent/16 disabled:cursor-not-allowed disabled:opacity-50"
-            disabled={availableConnectorCount === 0}
-            onClick={() => {
-              setConnectorPickerOpen((value) => !value);
-              setConnectorSetupError(null);
-            }}
-            type="button"
-          >
-            Add Connector
-          </button>
-        </div>
+        <button
+          className="inline-flex items-center gap-2 rounded-full border border-accent/30 bg-accent/10 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.16em] text-accent transition hover:border-accent/50 hover:bg-accent/16 disabled:cursor-not-allowed disabled:opacity-50"
+          disabled={availableConnectorCount === 0}
+          onClick={() => {
+            setConnectorPickerOpen((value) => !value);
+            setConnectorSetupError(null);
+          }}
+          type="button"
+        >
+          <span>Add</span>
+          <PlusCircleIcon />
+        </button>
       }
       title={`${selectedDashboardAccount.name} Connectors`}
     >
@@ -2271,22 +2271,72 @@ function App() {
                         <div className="mt-1 text-xs uppercase tracking-[0.16em] text-muted">{connector.provider}</div>
                       </div>
                     </div>
-                    <button
-                      className="rounded-full border border-line/80 bg-panel px-3 py-1 text-[11px] font-medium uppercase tracking-[0.16em] text-muted transition hover:border-accent/35 hover:text-text disabled:cursor-not-allowed disabled:opacity-50"
-                      disabled={connector.availability !== "ready" || plaidLinkTokenMutation.isPending || plaidExchangeMutation.isPending}
-                      onClick={() => {
-                        void beginConnectorLink(connector.id);
-                      }}
-                      type="button"
-                    >
-                      {connector.id === FIDELITY_CONNECTOR_ID && (plaidLinkTokenMutation.isPending || plaidExchangeMutation.isPending)
-                        ? "Linking…"
-                        : connector.availability === "ready"
-                          ? "Add"
-                          : "Coming soon"}
-                    </button>
                   </div>
                   <div className="mt-3 text-sm text-muted">{connector.description}</div>
+                  {connector.id === CSV_FOLDER_CONNECTOR_ID && connector.availability === "ready" ? (
+                    <div className="mt-4 grid gap-3">
+                      <label className="grid gap-2">
+                        <span className="text-[11px] uppercase tracking-[0.16em] text-muted">Connector name</span>
+                        <input
+                          className="w-full rounded-xl border border-line/80 bg-panelSoft px-4 py-3 text-sm text-text outline-none transition focus:border-accent/60"
+                          onChange={(event) => setCsvFolderNameDraft(event.target.value)}
+                          placeholder="Fidelity"
+                          spellCheck={false}
+                          type="text"
+                          value={csvFolderNameDraft}
+                        />
+                      </label>
+                      <label className="grid gap-2">
+                        <span className="text-[11px] uppercase tracking-[0.16em] text-muted">CSV folder path</span>
+                        <div className="flex gap-2">
+                          <input
+                            className="w-full rounded-xl border border-line/80 bg-panelSoft px-4 py-3 text-sm text-text outline-none transition focus:border-accent/60"
+                            onChange={(event) => setFidelityCsvDirectoryDraft(event.target.value)}
+                            placeholder="/Users/imyjimmy/Documents/.../fidelity/daily-positions"
+                            spellCheck={false}
+                            type="text"
+                            value={fidelityCsvDirectoryDraft}
+                          />
+                          <button
+                            className="shrink-0 rounded-xl border border-line/80 bg-panelSoft px-3 py-3 text-[11px] font-medium uppercase tracking-[0.16em] text-muted transition hover:border-accent/35 hover:text-text"
+                            onClick={() => {
+                              void chooseCsvFolder();
+                            }}
+                            type="button"
+                          >
+                            Choose Folder
+                          </button>
+                        </div>
+                      </label>
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="text-xs text-muted">
+                          {csvFolderStatusQuery.data?.directoryPath
+                            ? "Updating the saved connector name or folder path."
+                            : "The latest CSV in this folder will drive the connector snapshot."}
+                        </div>
+                        <button
+                          className="rounded-full border border-line/80 bg-panel px-3 py-1 text-[11px] font-medium uppercase tracking-[0.16em] text-muted transition hover:border-accent/35 hover:text-text disabled:cursor-not-allowed disabled:opacity-50"
+                          disabled={filesystemConnectorConfigureMutation.isPending || !csvFolderNameDraft.trim() || !fidelityCsvDirectoryDraft.trim()}
+                          onClick={() => {
+                            void saveFilesystemConnector(connector.id);
+                          }}
+                          type="button"
+                        >
+                          {filesystemConnectorConfigureMutation.isPending ? "Saving…" : csvFolderStatusQuery.data?.directoryPath ? "Update" : "Add"}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mt-4 flex justify-end">
+                      <button
+                        className="rounded-full border border-line/80 bg-panel px-3 py-1 text-[11px] font-medium uppercase tracking-[0.16em] text-muted transition disabled:cursor-not-allowed disabled:opacity-50"
+                        disabled
+                        type="button"
+                      >
+                        Coming soon
+                      </button>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -2399,23 +2449,23 @@ function App() {
         </AccountConnectorSection>
       ) : null}
 
-      {selectedDashboardAccount.availableConnectorIds.includes(FIDELITY_CONNECTOR_ID) && plaidFidelityStatusQuery.data?.connected ? (
+      {selectedDashboardAccount.availableConnectorIds.includes(CSV_FOLDER_CONNECTOR_ID) && csvFolderStatusQuery.data?.connected ? (
         <AccountConnectorSection
-          collapsed={plaidFidelityConnectorCollapsed}
+          collapsed={csvFolderConnectorCollapsed}
           details={
             <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
               <InlinePill
-                label={plaidFidelityConnectorStatus}
-                tone={plaidFidelityConnectorTone === "danger" ? "danger" : plaidFidelityConnectorTone === "safe" ? "safe" : "neutral"}
+                label={csvFolderConnectorStatus}
+                tone={csvFolderConnectorTone === "danger" ? "danger" : csvFolderConnectorTone === "safe" ? "safe" : "neutral"}
               />
-              <InlinePill label={plaidFidelityStatusQuery.data.institutionName ?? "Fidelity"} tone="neutral" />
+              <InlinePill label={csvFolderConnectorDisplayName} tone="neutral" />
             </div>
           }
-          eyebrow={getConnectorCatalogEntry(FIDELITY_CONNECTOR_ID)?.dashboardEyebrow ?? "Plaid source"}
-          onToggle={() => setPlaidFidelityConnectorCollapsed((value) => !value)}
-          title={getConnectorCatalogEntry(FIDELITY_CONNECTOR_ID)?.dashboardTitle ?? "Fidelity"}
+          eyebrow={getConnectorCatalogEntry(CSV_FOLDER_CONNECTOR_ID)?.dashboardEyebrow ?? "Filesystem source"}
+          onToggle={() => setCsvFolderConnectorCollapsed((value) => !value)}
+          title={csvFolderPortfolioQuery.data?.displayName ?? csvFolderStatusQuery.data?.displayName ?? getConnectorCatalogEntry(CSV_FOLDER_CONNECTOR_ID)?.dashboardTitle ?? "CSV Folder"}
         >
-          {renderPlaidFidelityPanelContent()}
+          {renderFidelityCsvPanelContent()}
         </AccountConnectorSection>
       ) : null}
     </>
@@ -3574,6 +3624,16 @@ function handleSort(
   }
   setKey(nextKey);
   setDirection(nextKey === "expiry" || nextKey === "dte" ? "asc" : "desc");
+}
+
+function PlusCircleIcon() {
+  return (
+    <svg aria-hidden="true" fill="none" height="14" viewBox="0 0 20 20" width="14">
+      <circle cx="10" cy="10" r="7" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M10 6.5v7" stroke="currentColor" strokeLinecap="round" strokeWidth="1.5" />
+      <path d="M6.5 10h7" stroke="currentColor" strokeLinecap="round" strokeWidth="1.5" />
+    </svg>
+  );
 }
 
 export default App;
