@@ -2285,7 +2285,7 @@ function App() {
                   {connector.id === CSV_FOLDER_CONNECTOR_ID && connector.availability === "ready" ? (
                     <div className="mt-4 grid gap-3">
                       <label className="grid gap-2">
-                        <span className="text-[11px] uppercase tracking-[0.16em] text-muted">Connector name</span>
+                        <span className="text-[11px] uppercase tracking-[0.16em] text-muted">Source name</span>
                         <input
                           className="w-full rounded-xl border border-line/80 bg-panelSoft px-4 py-3 text-sm text-text outline-none transition focus:border-accent/60"
                           onChange={(event) => setCsvFolderNameDraft(event.target.value)}
