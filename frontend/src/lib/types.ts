@@ -408,6 +408,7 @@ export interface CoinbasePortfolioResponse {
 }
 
 export interface FilesystemConnectorStatus {
+  sourceId: string;
   connectorId: string;
   available: boolean;
   connected: boolean;
@@ -448,6 +449,7 @@ export interface FilesystemHolding {
 }
 
 export interface FilesystemConnectorPortfolioResponse {
+  sourceId: string;
   connectorId: string;
   displayName: string | null;
   directoryPath: string;
@@ -457,6 +459,26 @@ export interface FilesystemConnectorPortfolioResponse {
   holdingsCount: number;
   accounts: FilesystemInvestmentAccount[];
   holdings: FilesystemHolding[];
+  sourceNotice: string | null;
+  generatedAt: string;
+  isStale: boolean;
+}
+
+export interface FilesystemDocumentFile {
+  name: string;
+  path: string;
+  modifiedAt: string;
+  sizeBytes: number;
+}
+
+export interface FilesystemDocumentFolderResponse {
+  sourceId: string;
+  connectorId: string;
+  displayName: string | null;
+  directoryPath: string;
+  latestPdfPath: string | null;
+  pdfFilesCount: number;
+  files: FilesystemDocumentFile[];
   sourceNotice: string | null;
   generatedAt: string;
   isStale: boolean;

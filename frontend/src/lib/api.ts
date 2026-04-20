@@ -7,6 +7,7 @@ import type {
   EdgarDownloadResponse,
   EdgarSourceStatus,
   FilesystemConnectorConfigRequest,
+  FilesystemDocumentFolderResponse,
   FilesystemConnectorPortfolioResponse,
   FilesystemConnectorStatus,
   InvestorPdfDownloadRequest,
@@ -51,6 +52,11 @@ function withAccountId(path: string, accountId?: string) {
   }
   const separator = path.includes("?") ? "&" : "?";
   return `${path}${separator}accountId=${encodeURIComponent(accountId)}`;
+}
+
+function withAccountKey(path: string, accountKey: string) {
+  const separator = path.includes("?") ? "&" : "?";
+  return `${path}${separator}accountKey=${encodeURIComponent(accountKey)}`;
 }
 
 function formatApiErrorDetail(detail: unknown): string | null {
@@ -135,12 +141,31 @@ export const api = {
   reconnect: () => fetchJson<ConnectionStatus>("/api/reconnect"),
   coinbaseStatus: () => fetchJson<CoinbaseSourceStatus>("/api/sources/coinbase/status"),
   coinbasePortfolio: () => fetchJson<CoinbasePortfolioResponse>("/api/sources/coinbase/portfolio"),
-  filesystemConnectorStatus: (connectorId: string) =>
-    fetchJson<FilesystemConnectorStatus>(`/api/sources/filesystem/connectors/${encodeURIComponent(connectorId)}/status`),
-  filesystemConnectorConfigure: (connectorId: string, request: FilesystemConnectorConfigRequest) =>
-    postJson<FilesystemConnectorStatus>(`/api/sources/filesystem/connectors/${encodeURIComponent(connectorId)}/configure`, request),
-  filesystemConnectorPortfolio: (connectorId: string) =>
-    fetchJson<FilesystemConnectorPortfolioResponse>(`/api/sources/filesystem/connectors/${encodeURIComponent(connectorId)}/portfolio`),
+  filesystemConnectorStatuses: (accountKey: string) =>
+    fetchJson<FilesystemConnectorStatus[]>(withAccountKey("/api/sources/filesystem/connectors", accountKey)),
+  filesystemConnectorConfigure: (
+    accountKey: string,
+    connectorId: string,
+    request: FilesystemConnectorConfigRequest,
+    sourceId?: string,
+  ) =>
+    postJson<FilesystemConnectorStatus>(
+      withAccountKey(
+        sourceId
+          ? `/api/sources/filesystem/connectors/${encodeURIComponent(connectorId)}/configure?sourceId=${encodeURIComponent(sourceId)}`
+          : `/api/sources/filesystem/connectors/${encodeURIComponent(connectorId)}/configure`,
+        accountKey,
+      ),
+      request,
+    ),
+  filesystemConnectorPortfolio: (accountKey: string, sourceId: string) =>
+    fetchJson<FilesystemConnectorPortfolioResponse>(
+      withAccountKey(`/api/sources/filesystem/sources/${encodeURIComponent(sourceId)}/portfolio`, accountKey),
+    ),
+  filesystemConnectorDocuments: (accountKey: string, sourceId: string) =>
+    fetchJson<FilesystemDocumentFolderResponse>(
+      withAccountKey(`/api/sources/filesystem/sources/${encodeURIComponent(sourceId)}/documents`, accountKey),
+    ),
   cryptoMajors: () => fetchJson<CryptoMarketResponse>("/api/market/crypto-majors"),
   positions: (accountId?: string) => fetchJson<PositionsResponse>(withAccountId("/api/account/positions", accountId)),
   riskSummary: (accountId?: string) => fetchJson<RiskSummaryResponse>(withAccountId("/api/account/risk-summary", accountId)),

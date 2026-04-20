@@ -1,15 +1,13 @@
 import rawDashboardAccounts from "./dashboardAccounts.json";
-import type { ConnectorCatalogId } from "./connectorCatalog";
+
+export type DashboardAttachedSourceId = "coinbase";
 
 export type DashboardAccountConfig = {
   key: string;
   name: string;
   headerEyebrow: string;
   routeAccountIds: string[];
-  dashboardSections: {
-    coinbase: boolean;
-  };
-  availableConnectorIds: ConnectorCatalogId[];
+  attachedSourceIds: DashboardAttachedSourceId[];
 };
 
 export type DashboardAccountKey = DashboardAccountConfig["key"];
@@ -38,6 +36,13 @@ export function dashboardAccountOwnsRoute(accountKey: DashboardAccountKey, route
   return Boolean(account?.routeAccountIds.includes(normalizedRouteAccount));
 }
 
-export function getDashboardAccountWithCoinbase() {
-  return DASHBOARD_ACCOUNTS.find((account) => account.dashboardSections.coinbase) ?? null;
+export function dashboardAccountHasAttachedSource(
+  account: DashboardAccountConfig | null | undefined,
+  sourceId: DashboardAttachedSourceId,
+) {
+  return Boolean(account?.attachedSourceIds.includes(sourceId));
+}
+
+export function getDashboardAccountWithAttachedSource(sourceId: DashboardAttachedSourceId) {
+  return DASHBOARD_ACCOUNTS.find((account) => account.attachedSourceIds.includes(sourceId)) ?? null;
 }

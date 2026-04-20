@@ -504,6 +504,7 @@ class CoinbasePortfolioResponse(DashboardModel):
 
 
 class FilesystemConnectorStatus(DashboardModel):
+    sourceId: str
     connectorId: str
     available: bool
     connected: bool
@@ -544,6 +545,7 @@ class FilesystemHolding(DashboardModel):
 
 
 class FilesystemConnectorPortfolioResponse(DashboardModel):
+    sourceId: str
     connectorId: str
     displayName: str | None = None
     directoryPath: str
@@ -553,6 +555,26 @@ class FilesystemConnectorPortfolioResponse(DashboardModel):
     holdingsCount: int
     accounts: list[FilesystemInvestmentAccount] = Field(default_factory=list)
     holdings: list[FilesystemHolding] = Field(default_factory=list)
+    sourceNotice: str | None = None
+    generatedAt: datetime
+    isStale: bool = False
+
+
+class FilesystemDocumentFile(DashboardModel):
+    name: str
+    path: str
+    modifiedAt: datetime
+    sizeBytes: int
+
+
+class FilesystemDocumentFolderResponse(DashboardModel):
+    sourceId: str
+    connectorId: str
+    displayName: str | None = None
+    directoryPath: str
+    latestPdfPath: str | None = None
+    pdfFilesCount: int
+    files: list[FilesystemDocumentFile] = Field(default_factory=list)
     sourceNotice: str | None = None
     generatedAt: datetime
     isStale: bool = False

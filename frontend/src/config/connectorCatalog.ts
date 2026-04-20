@@ -1,6 +1,6 @@
 import rawConnectorCatalog from "./connectorCatalog.json";
 
-export type ConnectorCatalogId = "csvFolder";
+export type ConnectorCatalogId = "csvFolder" | "pdfFolder";
 export type ConnectorCatalogProvider = "Filesystem";
 
 export type ConnectorCatalogEntry = {

@@ -313,26 +313,51 @@ def coinbase_portfolio() -> dict:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
-@router.get("/sources/filesystem/connectors/{connector_id}/status")
-def filesystem_connector_status(connector_id: str) -> dict:
+@router.get("/sources/filesystem/connectors")
+def filesystem_connectors(accountKey: str = Query(...)) -> list[dict]:
     try:
-        return _filesystem_connectors().connector_status(connector_id).model_dump()
+        return [status.model_dump() for status in _filesystem_connectors().list_connectors(accountKey)]
     except Exception as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.post("/sources/filesystem/connectors/{connector_id}/configure")
-def filesystem_connector_configure(connector_id: str, request: FilesystemConnectorConfigRequest) -> dict:
+def filesystem_connector_configure(
+    connector_id: str,
+    request: FilesystemConnectorConfigRequest,
+    accountKey: str = Query(...),
+    sourceId: str | None = Query(default=None),
+) -> dict:
     try:
-        return _filesystem_connectors().configure_connector(connector_id, request).model_dump()
+        return _filesystem_connectors().configure_connector(accountKey, connector_id, request, sourceId).model_dump()
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.get("/sources/filesystem/connectors/{connector_id}/portfolio")
-def filesystem_connector_portfolio(connector_id: str) -> dict:
+@router.get("/sources/filesystem/sources/{source_id}/status")
+def filesystem_connector_status(source_id: str, accountKey: str = Query(...)) -> dict:
     try:
-        return _filesystem_connectors().get_portfolio(connector_id).model_dump()
+        return _filesystem_connectors().connector_status(accountKey, source_id).model_dump()
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.get("/sources/filesystem/sources/{source_id}/portfolio")
+def filesystem_connector_portfolio(source_id: str, accountKey: str = Query(...)) -> dict:
+    try:
+        return _filesystem_connectors().get_portfolio(accountKey, source_id).model_dump()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.get("/sources/filesystem/sources/{source_id}/documents")
+def filesystem_connector_documents(source_id: str, accountKey: str = Query(...)) -> dict:
+    try:
+        return _filesystem_connectors().get_document_library(accountKey, source_id).model_dump()
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:

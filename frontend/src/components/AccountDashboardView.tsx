@@ -6,14 +6,8 @@ import {
   type DashboardAccountKey,
 } from "../config/dashboardAccounts";
 
-type DashboardAccountTabStatus = {
-  label: string;
-  toneDotClassName: string;
-};
-
 interface AccountDashboardViewProps {
   selectedAccountKey: DashboardAccountKey;
-  accountStatuses: Record<string, DashboardAccountTabStatus>;
   accountSettingsOpen: boolean;
   onSelectAccount: (accountKey: DashboardAccountKey) => void;
   onToggleSettings: () => void;
@@ -27,7 +21,6 @@ interface AccountDashboardViewProps {
 
 export function AccountDashboardView({
   selectedAccountKey,
-  accountStatuses,
   accountSettingsOpen,
   onSelectAccount,
   onToggleSettings,
@@ -45,10 +38,6 @@ export function AccountDashboardView({
       <div className="chrome-tabs-shell">
         <div className="chrome-tab-strip">
           {DASHBOARD_ACCOUNTS.map((account) => {
-            const status = accountStatuses[account.key] ?? {
-              label: "Unknown",
-              toneDotClassName: "bg-muted/40",
-            };
             return (
               <button
                 key={account.key}
@@ -57,9 +46,7 @@ export function AccountDashboardView({
                 onClick={() => onSelectAccount(account.key)}
                 type="button"
               >
-                <span className={`chrome-tab-dot ${status.toneDotClassName}`} />
                 <span className="chrome-tab-title truncate text-sm font-medium">{account.name}</span>
-                <span className="chrome-tab-badge">{status.label}</span>
               </button>
             );
           })}

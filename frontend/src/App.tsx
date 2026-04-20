@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState, useDeferredValue, startTransition, type ReactNode } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Bar,
   BarChart,
@@ -16,6 +16,7 @@ import type {
   ConnectionStatus,
   EdgarDownloadRequest,
   EdgarDownloadResponse,
+  FilesystemDocumentFolderResponse,
   FilesystemConnectorPortfolioResponse,
   FilesystemConnectorStatus,
   InvestorPdfDownloadRequest,
@@ -32,12 +33,13 @@ import type {
 import {
   DASHBOARD_ACCOUNTS,
   DEFAULT_DASHBOARD_ACCOUNT_KEY,
+  dashboardAccountHasAttachedSource,
   dashboardAccountOwnsRoute,
   getDashboardAccountByKey,
-  getDashboardAccountWithCoinbase,
+  getDashboardAccountWithAttachedSource,
   type DashboardAccountKey,
 } from "./config/dashboardAccounts";
-import { getConnectorCatalogEntry, type ConnectorCatalogId } from "./config/connectorCatalog";
+import { CONNECTOR_CATALOG, getConnectorCatalogEntry, type ConnectorCatalogId } from "./config/connectorCatalog";
 import { AccountDashboardView } from "./components/AccountDashboardView";
 import { AccountConnectorSection } from "./components/AccountConnectorSection";
 import { EdgarWorkspace } from "./components/EdgarWorkspace";
@@ -189,8 +191,8 @@ function sumOptionPositionPnl(positions: OptionPosition[]) {
 
 function filesystemConnectorTone(
   status: FilesystemConnectorStatus | undefined,
-  portfolio: FilesystemConnectorPortfolioResponse | undefined,
-  portfolioError: string | null,
+  detailIsStale: boolean,
+  detailError: string | null,
 ): ConnectionHealthTone {
   if (!status) {
     return "caution";
@@ -201,13 +203,13 @@ function filesystemConnectorTone(
   if (!status.connected) {
     return "planned";
   }
-  return portfolio?.isStale || Boolean(portfolioError) ? "caution" : "safe";
+  return detailIsStale || Boolean(detailError) ? "caution" : "safe";
 }
 
 function filesystemConnectorStatusLabel(
   status: FilesystemConnectorStatus | undefined,
-  portfolio: FilesystemConnectorPortfolioResponse | undefined,
-  portfolioError: string | null,
+  detailIsStale: boolean,
+  detailError: string | null,
 ) {
   if (!status) {
     return "Checking";
@@ -215,10 +217,48 @@ function filesystemConnectorStatusLabel(
   if (!status.connected) {
     return "Ready";
   }
-  if (status.status === "degraded" || portfolio?.isStale || portfolioError) {
+  if (status.status === "degraded" || detailIsStale || detailError) {
     return "Connected · stale snapshot";
   }
   return "Connected";
+}
+
+function isConnectedSourceTone(tone: ConnectionHealthTone) {
+  return tone === "safe" || tone === "caution";
+}
+
+function toInlinePillTone(tone: ConnectionHealthTone): InlinePillTone {
+  if (tone === "safe") {
+    return "safe";
+  }
+  if (tone === "caution") {
+    return "caution";
+  }
+  if (tone === "danger") {
+    return "danger";
+  }
+  return "neutral";
+}
+
+function sumAccountSourceMetric(summaries: AccountSourceSummary[], key: AccountSourceSummaryMetricKey) {
+  const values = summaries
+    .map((summary) => summary[key])
+    .filter((value): value is number => value != null && !Number.isNaN(value));
+  if (!values.length) {
+    return null;
+  }
+  return values.reduce((total, value) => total + value, 0);
+}
+
+function describeAccountSourceMetricCoverage(summaries: AccountSourceSummary[], key: AccountSourceSummaryMetricKey) {
+  if (!summaries.length) {
+    return "No account sources attached.";
+  }
+  const contributingSources = summaries.filter((summary) => summary[key] != null && !Number.isNaN(summary[key]));
+  if (!contributingSources.length) {
+    return `Reported by 0/${summaries.length} sources.`;
+  }
+  return `Reported by ${contributingSources.length}/${summaries.length} sources.`;
 }
 
 function isLocalBackendUnavailable(message: string | null | undefined) {
@@ -479,6 +519,20 @@ type AccountConnectorCard = {
   icon: ReactNode;
 };
 
+type AccountSourceSummaryMetricKey = "totalPnl" | "todayPnl" | "monthlyPnl" | "netWorth";
+
+type AccountSourceSummary = AccountConnectorCard & {
+  totalPnl: number | null;
+  todayPnl: number | null;
+  monthlyPnl: number | null;
+  netWorth: number | null;
+};
+
+type ConnectorDraftState = {
+  displayName: string;
+  directoryPath: string;
+};
+
 type ChainGreekKey = "iv" | "delta" | "gamma" | "theta" | "vega" | "rho";
 
 type ChainGreekOption = {
@@ -561,6 +615,7 @@ const MARKET_SCREEN_ROWS: MarketRow[] = [
 ];
 
 const CSV_FOLDER_CONNECTOR_ID: ConnectorCatalogId = "csvFolder";
+const PDF_FOLDER_CONNECTOR_ID: ConnectorCatalogId = "pdfFolder";
 
 function readVisibleChainGreeks(): ChainGreekKey[] {
   if (typeof window === "undefined") {
@@ -588,10 +643,9 @@ function App() {
   const [connectorPickerOpen, setConnectorPickerOpen] = useState(false);
   const [ibkrConnectorCollapsed, setIbkrConnectorCollapsed] = useState(false);
   const [coinbaseConnectorCollapsed, setCoinbaseConnectorCollapsed] = useState(false);
-  const [csvFolderConnectorCollapsed, setCsvFolderConnectorCollapsed] = useState(false);
+  const [filesystemConnectorCollapsedBySourceId, setFilesystemConnectorCollapsedBySourceId] = useState<Record<string, boolean>>({});
   const [connectorSetupError, setConnectorSetupError] = useState<string | null>(null);
-  const [csvFolderNameDraft, setCsvFolderNameDraft] = useState("");
-  const [fidelityCsvDirectoryDraft, setFidelityCsvDirectoryDraft] = useState("");
+  const [connectorDraftsById, setConnectorDraftsById] = useState<Partial<Record<ConnectorCatalogId, ConnectorDraftState>>>({});
   const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceSurface>("dashboard");
   const [selectedDashboardAccountKey, setSelectedDashboardAccountKey] = useState<DashboardAccountKey>(DEFAULT_DASHBOARD_ACCOUNT_KEY);
   const [marketMinBeta, setMarketMinBeta] = useState(1.7);
@@ -656,16 +710,29 @@ function App() {
     enabled: coinbaseStatusQuery.data?.available ?? false,
     refetchInterval: 30_000,
   });
-  const csvFolderStatusQuery = useQuery({
-    queryKey: ["filesystem-connector-status", CSV_FOLDER_CONNECTOR_ID],
-    queryFn: () => api.filesystemConnectorStatus(CSV_FOLDER_CONNECTOR_ID),
+  const filesystemConnectorStatusesQuery = useQuery({
+    queryKey: ["filesystem-connector-statuses", selectedDashboardAccountKey],
+    queryFn: () => api.filesystemConnectorStatuses(selectedDashboardAccountKey),
     refetchInterval: 30_000,
   });
-  const csvFolderPortfolioQuery = useQuery({
-    queryKey: ["filesystem-connector-portfolio", CSV_FOLDER_CONNECTOR_ID],
-    queryFn: () => api.filesystemConnectorPortfolio(CSV_FOLDER_CONNECTOR_ID),
-    enabled: csvFolderStatusQuery.data?.connected ?? false,
-    refetchInterval: 30_000,
+  const filesystemConnectorStatuses = filesystemConnectorStatusesQuery.data ?? [];
+  const filesystemCsvConnectorStatuses = filesystemConnectorStatuses.filter((status) => status.connectorId === CSV_FOLDER_CONNECTOR_ID);
+  const filesystemPdfConnectorStatuses = filesystemConnectorStatuses.filter((status) => status.connectorId === PDF_FOLDER_CONNECTOR_ID);
+  const filesystemConnectorPortfolioQueries = useQueries({
+    queries: filesystemCsvConnectorStatuses.map((connectorStatus) => ({
+      queryKey: ["filesystem-connector-portfolio", selectedDashboardAccountKey, connectorStatus.sourceId],
+      queryFn: () => api.filesystemConnectorPortfolio(selectedDashboardAccountKey, connectorStatus.sourceId),
+      enabled: connectorStatus.connected,
+      refetchInterval: 30_000,
+    })),
+  });
+  const filesystemConnectorDocumentQueries = useQueries({
+    queries: filesystemPdfConnectorStatuses.map((connectorStatus) => ({
+      queryKey: ["filesystem-connector-documents", selectedDashboardAccountKey, connectorStatus.sourceId],
+      queryFn: () => api.filesystemConnectorDocuments(selectedDashboardAccountKey, connectorStatus.sourceId),
+      enabled: connectorStatus.connected,
+      refetchInterval: 30_000,
+    })),
   });
   const cryptoMajorsQuery = useQuery({
     queryKey: ["crypto-majors"],
@@ -721,12 +788,24 @@ function App() {
   const connectMutation = useMutation({ mutationFn: api.connect });
   const reconnectMutation = useMutation({ mutationFn: api.reconnect });
   const filesystemConnectorConfigureMutation = useMutation({
-    mutationFn: ({ connectorId, displayName, directoryPath }: { connectorId: ConnectorCatalogId; displayName: string; directoryPath: string }) =>
-      api.filesystemConnectorConfigure(connectorId, { displayName, directoryPath }),
-    onSuccess: async () => {
+    mutationFn: ({
+      accountKey,
+      connectorId,
+      displayName,
+      directoryPath,
+      sourceId,
+    }: {
+      accountKey: DashboardAccountKey;
+      connectorId: ConnectorCatalogId;
+      displayName: string;
+      directoryPath: string;
+      sourceId?: string;
+    }) => api.filesystemConnectorConfigure(accountKey, connectorId, { displayName, directoryPath }, sourceId),
+    onSuccess: async (_data, variables) => {
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["filesystem-connector-status", CSV_FOLDER_CONNECTOR_ID] }),
-        queryClient.invalidateQueries({ queryKey: ["filesystem-connector-portfolio", CSV_FOLDER_CONNECTOR_ID] }),
+        queryClient.invalidateQueries({ queryKey: ["filesystem-connector-statuses", variables.accountKey] }),
+        queryClient.invalidateQueries({ queryKey: ["filesystem-connector-portfolio", variables.accountKey] }),
+        queryClient.invalidateQueries({ queryKey: ["filesystem-connector-documents", variables.accountKey] }),
       ]);
     },
   });
@@ -852,9 +931,8 @@ function App() {
     if (!connectorPickerOpen) {
       return;
     }
-    setCsvFolderNameDraft(csvFolderStatusQuery.data?.displayName ?? "");
-    setFidelityCsvDirectoryDraft(csvFolderStatusQuery.data?.directoryPath ?? "");
-  }, [connectorPickerOpen, csvFolderStatusQuery.data?.directoryPath, csvFolderStatusQuery.data?.displayName]);
+    setConnectorDraftsById({});
+  }, [connectorPickerOpen]);
 
   useEffect(() => {
     if (!ticketDraft) {
@@ -1004,9 +1082,49 @@ function App() {
   const sourceError = connectError ?? reconnectError ?? connectionQueryError ?? connectionQuery.data?.lastError ?? null;
   const coinbaseStatusError = coinbaseStatusQuery.error instanceof Error ? coinbaseStatusQuery.error.message : null;
   const coinbasePortfolioError = coinbasePortfolioQuery.error instanceof Error ? coinbasePortfolioQuery.error.message : null;
-  const csvFolderStatusError = csvFolderStatusQuery.error instanceof Error ? csvFolderStatusQuery.error.message : null;
-  const csvFolderPortfolioError =
-    csvFolderPortfolioQuery.error instanceof Error ? csvFolderPortfolioQuery.error.message : null;
+  const filesystemConnectorStatusesError =
+    filesystemConnectorStatusesQuery.error instanceof Error ? filesystemConnectorStatusesQuery.error.message : null;
+  const filesystemConnectorStatusBySourceId = Object.fromEntries(
+    filesystemConnectorStatuses.map((status) => [status.sourceId, status]),
+  ) as Record<string, FilesystemConnectorStatus>;
+  const filesystemConnectorPortfolioBySourceId = Object.fromEntries(
+    filesystemConnectorPortfolioQueries.flatMap((query, index) => {
+      const sourceId = filesystemCsvConnectorStatuses[index]?.sourceId;
+      return sourceId && query.data ? [[sourceId, query.data]] : [];
+    }),
+  ) as Record<string, FilesystemConnectorPortfolioResponse>;
+  const filesystemConnectorPortfolioLoadingBySourceId = Object.fromEntries(
+    filesystemConnectorPortfolioQueries.flatMap((query, index) => {
+      const sourceId = filesystemCsvConnectorStatuses[index]?.sourceId;
+      return sourceId ? [[sourceId, query.isLoading]] : [];
+    }),
+  ) as Record<string, boolean>;
+  const filesystemConnectorPortfolioErrorBySourceId = Object.fromEntries(
+    filesystemConnectorPortfolioQueries.flatMap((query, index) => {
+      const sourceId = filesystemCsvConnectorStatuses[index]?.sourceId;
+      const error = query.error instanceof Error ? query.error.message : null;
+      return sourceId ? [[sourceId, error]] : [];
+    }),
+  ) as Record<string, string | null>;
+  const filesystemDocumentFolderBySourceId = Object.fromEntries(
+    filesystemConnectorDocumentQueries.flatMap((query, index) => {
+      const sourceId = filesystemPdfConnectorStatuses[index]?.sourceId;
+      return sourceId && query.data ? [[sourceId, query.data]] : [];
+    }),
+  ) as Record<string, FilesystemDocumentFolderResponse>;
+  const filesystemDocumentFolderLoadingBySourceId = Object.fromEntries(
+    filesystemConnectorDocumentQueries.flatMap((query, index) => {
+      const sourceId = filesystemPdfConnectorStatuses[index]?.sourceId;
+      return sourceId ? [[sourceId, query.isLoading]] : [];
+    }),
+  ) as Record<string, boolean>;
+  const filesystemDocumentFolderErrorBySourceId = Object.fromEntries(
+    filesystemConnectorDocumentQueries.flatMap((query, index) => {
+      const sourceId = filesystemPdfConnectorStatuses[index]?.sourceId;
+      const error = query.error instanceof Error ? query.error.message : null;
+      return sourceId ? [[sourceId, error]] : [];
+    }),
+  ) as Record<string, string | null>;
   const coinbaseConnectorTone: ConnectionHealthTone = coinbaseStatusQuery.isLoading
     ? "caution"
     : coinbaseStatusQuery.data?.available
@@ -1025,40 +1143,17 @@ function App() {
         : coinbaseStatusQuery.data?.authMode === "missing"
           ? "Needs setup"
           : "Degraded";
-  const coinbaseAssignedAccount = getDashboardAccountWithCoinbase();
+  const coinbaseAssignedAccount = getDashboardAccountWithAttachedSource("coinbase");
   const coinbaseConnectorDetail = coinbaseStatusQuery.isLoading
     ? "Loading Coinbase connector status"
     : coinbaseStatusQuery.data?.available
       ? `Assigned to ${coinbaseAssignedAccount?.name ?? "configured"} dashboard`
       : `Connector settings for ${coinbaseAssignedAccount?.name ?? "configured"} dashboard`;
-  const csvFolderConnectorDisplayName = csvFolderStatusQuery.data?.displayName?.trim() || "CSV Folder";
   const localBackendUnavailable =
     isLocalBackendUnavailable(connectionQueryError) ||
-    isLocalBackendUnavailable(csvFolderStatusError) ||
-    isLocalBackendUnavailable(csvFolderPortfolioError);
-  const csvFolderConnectorTone = localBackendUnavailable
-    ? "danger"
-    : filesystemConnectorTone(
-        csvFolderStatusQuery.data,
-        csvFolderPortfolioQuery.data,
-        csvFolderPortfolioError ?? csvFolderStatusError,
-      );
-  const csvFolderConnectorStatus = localBackendUnavailable
-    ? "Backend unavailable"
-    : filesystemConnectorStatusLabel(
-        csvFolderStatusQuery.data,
-        csvFolderPortfolioQuery.data,
-        csvFolderPortfolioError ?? csvFolderStatusError,
-      );
-  const csvFolderConnectorDetail = csvFolderStatusQuery.isLoading
-    ? "Loading CSV folder connector status"
-    : localBackendUnavailable
-      ? connectionQueryError ?? csvFolderStatusError ?? csvFolderPortfolioError ?? "The local backend is unavailable."
-      : csvFolderStatusError
-      ? csvFolderStatusError
-      : csvFolderStatusQuery.data?.directoryPath
-        ? `${csvFolderStatusQuery.data.directoryPath} · ${fmtWholeNumber(csvFolderStatusQuery.data.csvFilesCount)} files`
-        : csvFolderStatusQuery.data?.detail ?? "Add a CSV folder connector.";
+    isLocalBackendUnavailable(filesystemConnectorStatusesError) ||
+    Object.values(filesystemConnectorPortfolioErrorBySourceId).some((message) => isLocalBackendUnavailable(message)) ||
+    Object.values(filesystemDocumentFolderErrorBySourceId).some((message) => isLocalBackendUnavailable(message));
   const edgarStatusError = edgarStatusQuery.error instanceof Error ? edgarStatusQuery.error.message : null;
   const investorPdfStatusError = investorPdfStatusQuery.error instanceof Error ? investorPdfStatusQuery.error.message : null;
   const dataModeLabel = connectionQuery.data?.mode === "ibkr" ? "IBKR gateway session" : "Mock snapshot";
@@ -1072,11 +1167,6 @@ function App() {
   const dashboardPositions = selectedDashboardOwnsRoute ? positions : [];
   const dashboardOptionPositions = selectedDashboardOwnsRoute ? optionPositions : [];
   const dashboardOpenOrders = selectedDashboardOwnsRoute ? openOrders : [];
-  const dashboardTotalPnl = sumPositionPnl(dashboardPositions) + sumOptionPositionPnl(dashboardOptionPositions);
-  const dashboardSourceNotice =
-    selectedDashboardOwnsRoute || !routedAccount
-      ? null
-      : `${selectedDashboardAccount.name} is selected, but the current Gateway route is ${routedAccount}. Switch the Gateway session to this account to view routed balances, orders, and positions here.`;
   const globalSourceCards: AccountConnectorCard[] = [
     {
       id: "edgar",
@@ -1128,77 +1218,96 @@ function App() {
     };
   }
 
-  function buildFilesystemConnectorCard(connectorId: ConnectorCatalogId): AccountConnectorCard | null {
-    const connector = getConnectorCatalogEntry(connectorId);
-    if (!connector) {
-      return null;
-    }
-    if (connectorId === CSV_FOLDER_CONNECTOR_ID) {
-      if (!csvFolderStatusQuery.data?.connected && !localBackendUnavailable) {
-        return null;
-      }
-      return {
-        id: connector.id,
-        title: csvFolderConnectorDisplayName,
-        status: csvFolderConnectorStatus,
-        detail: csvFolderConnectorDetail,
-        tone: csvFolderConnectorTone,
-        countsTowardHealth: true,
-        icon: <BankIcon />,
-      };
-    }
-    return null;
+  function buildIbkrAccountSourceSummary(accountKey: DashboardAccountKey): AccountSourceSummary {
+    const connector = buildIbkrConnectorCard(accountKey);
+    const ownsRoute = dashboardAccountOwnsRoute(accountKey, routedAccount);
+    return {
+      ...connector,
+      totalPnl: ownsRoute ? sumPositionPnl(positions) + sumOptionPositionPnl(optionPositions) : null,
+      todayPnl: null,
+      monthlyPnl: null,
+      netWorth: ownsRoute ? risk?.account.netLiquidation ?? null : null,
+    };
   }
 
-  const accountConnectorCardsByKey = Object.fromEntries(
-    DASHBOARD_ACCOUNTS.map((account) => {
-      const connectorCards: AccountConnectorCard[] = [buildIbkrConnectorCard(account.key)];
-      if (account.dashboardSections.coinbase) {
-        connectorCards.push({
-          id: `coinbase-${account.key}`,
-          title: "Coinbase account",
-          status: coinbaseConnectorStatus,
-          detail: coinbaseConnectorDetail,
-          tone: coinbaseConnectorTone,
-          countsTowardHealth: true,
-          icon: <CoinbaseIcon />,
-        });
-      }
-      account.availableConnectorIds.forEach((connectorId) => {
-        const connectorCard = buildFilesystemConnectorCard(connectorId);
-        if (connectorCard) {
-          connectorCards.push(connectorCard);
-        }
-      });
-      return [account.key, connectorCards];
-    }),
-  ) as Record<DashboardAccountKey, AccountConnectorCard[]>;
-  const accountSettingsConnectors = accountConnectorCardsByKey[selectedDashboardAccount.key];
-  const definedConnectors = accountSettingsConnectors.filter((connector) => connector.countsTowardHealth);
+  function buildCoinbaseAccountSourceSummary(accountKey: DashboardAccountKey): AccountSourceSummary {
+    return {
+      id: `coinbase-${accountKey}`,
+      title: "Coinbase account",
+      status: coinbaseConnectorStatus,
+      detail: coinbaseConnectorDetail,
+      tone: coinbaseConnectorTone,
+      countsTowardHealth: true,
+      icon: <CoinbaseIcon />,
+      totalPnl: null,
+      todayPnl: null,
+      monthlyPnl: null,
+      netWorth: coinbasePortfolioQuery.data?.totalUsdValue ?? null,
+    };
+  }
+
+  function buildFilesystemConnectorCard(status: FilesystemConnectorStatus): AccountConnectorCard {
+    const connector = getConnectorCatalogEntry(status.connectorId as ConnectorCatalogId);
+    const portfolio = filesystemConnectorPortfolioBySourceId[status.sourceId];
+    const portfolioError = filesystemConnectorPortfolioErrorBySourceId[status.sourceId] ?? null;
+    const documentFolder = filesystemDocumentFolderBySourceId[status.sourceId];
+    const documentFolderError = filesystemDocumentFolderErrorBySourceId[status.sourceId] ?? null;
+    const detailIsStale = status.connectorId === CSV_FOLDER_CONNECTOR_ID ? Boolean(portfolio?.isStale) : Boolean(documentFolder?.isStale);
+    const detailError = status.connectorId === CSV_FOLDER_CONNECTOR_ID ? portfolioError : documentFolderError;
+    const connectorTone = localBackendUnavailable
+      ? "danger"
+      : filesystemConnectorTone(status, detailIsStale, detailError ?? filesystemConnectorStatusesError);
+    const connectorStatus = localBackendUnavailable
+      ? "Backend unavailable"
+      : filesystemConnectorStatusLabel(status, detailIsStale, detailError ?? filesystemConnectorStatusesError);
+    const connectorDetail = localBackendUnavailable
+      ? connectionQueryError ?? filesystemConnectorStatusesError ?? detailError ?? "The local backend is unavailable."
+      : status.directoryPath
+        ? `${status.directoryPath} · ${fmtWholeNumber(
+            status.connectorId === CSV_FOLDER_CONNECTOR_ID
+              ? status.csvFilesCount
+              : documentFolder?.pdfFilesCount ?? 0,
+          )} files`
+        : status.detail;
+    return {
+      id: status.sourceId,
+      title: status.displayName?.trim() || connector?.dashboardTitle || "CSV Folder",
+      status: connectorStatus,
+      detail: connectorDetail,
+      tone: connectorTone,
+      countsTowardHealth: true,
+      icon: <BankIcon />,
+    };
+  }
+
+  function buildFilesystemAccountSourceSummary(status: FilesystemConnectorStatus): AccountSourceSummary {
+    const connector = buildFilesystemConnectorCard(status);
+    const portfolio = filesystemConnectorPortfolioBySourceId[status.sourceId];
+    return {
+      ...connector,
+      totalPnl:
+        status.connectorId === CSV_FOLDER_CONNECTOR_ID
+          ? portfolio?.holdings.reduce((total, holding) => total + (holding.gainLoss ?? 0), 0) ?? null
+          : null,
+      todayPnl: null,
+      monthlyPnl: null,
+      netWorth: status.connectorId === CSV_FOLDER_CONNECTOR_ID ? portfolio?.totalValue ?? null : null,
+    };
+  }
+
+  const accountSourceSummaries: AccountSourceSummary[] = [buildIbkrAccountSourceSummary(selectedDashboardAccount.key)];
+  if (dashboardAccountHasAttachedSource(selectedDashboardAccount, "coinbase")) {
+    accountSourceSummaries.push(buildCoinbaseAccountSourceSummary(selectedDashboardAccount.key));
+  }
+  const filesystemAccountSourceSummaries = filesystemConnectorStatuses.map((status) => buildFilesystemAccountSourceSummary(status));
+  accountSourceSummaries.push(...filesystemAccountSourceSummaries);
+  const accountSettingsConnectors = accountSourceSummaries;
+  const definedConnectors = accountSourceSummaries.filter((connector) => connector.countsTowardHealth);
   const definedConnectorCount = definedConnectors.length;
   const liveConnectorCount = definedConnectors.filter((connector) => connector.tone === "safe").length;
-  const connectedConnectorCount = definedConnectors.filter((connector) => connector.tone === "safe" || connector.tone === "caution").length;
-  const activeConnectorIds = new Set(accountSettingsConnectors.map((connector) => connector.id));
-  const availableConnectorOptions = selectedDashboardAccount.availableConnectorIds
-    .map((connectorId) => getConnectorCatalogEntry(connectorId))
-    .filter((connector): connector is NonNullable<ReturnType<typeof getConnectorCatalogEntry>> => Boolean(connector))
-    .filter((connector) => connector.id === CSV_FOLDER_CONNECTOR_ID || !activeConnectorIds.has(connector.id));
+  const connectedConnectorCount = definedConnectors.filter((connector) => isConnectedSourceTone(connector.tone)).length;
+  const availableConnectorOptions = CONNECTOR_CATALOG.filter((connector) => connector.availability === "ready");
   const availableConnectorCount = availableConnectorOptions.length;
-  const dashboardAccountStatuses = Object.fromEntries(
-    DASHBOARD_ACCOUNTS.map((account) => {
-      const connectors = accountConnectorCardsByKey[account.key];
-      const accountDefinedConnectors = connectors.filter((connector) => connector.countsTowardHealth);
-      const accountLiveConnectors = accountDefinedConnectors.filter((connector) => connector.tone === "safe").length;
-      const accountConnectedConnectors = accountDefinedConnectors.filter(
-        (connector) => connector.tone === "safe" || connector.tone === "caution",
-      ).length;
-      const tone: ConnectionHealthTone =
-        accountConnectedConnectors === 0 ? "danger" : accountLiveConnectors === accountDefinedConnectors.length ? "safe" : "caution";
-      const label =
-        tone === "safe" ? "Ready" : tone === "caution" ? `${accountConnectedConnectors}/${accountDefinedConnectors.length || 0} online` : "Offline";
-      return [account.key, { label, toneDotClassName: connectionToneDotClass(tone) }];
-    }),
-  ) as Record<DashboardAccountKey, { label: string; toneDotClassName: string }>;
   const accountStatusTone: ConnectionHealthTone =
     connectedConnectorCount === 0 ? "danger" : liveConnectorCount === definedConnectorCount ? "safe" : "caution";
   const accountStatusLabel =
@@ -1207,6 +1316,16 @@ function App() {
       : accountStatusTone === "caution"
         ? "Partial connector coverage"
         : "No live connectors";
+  const dashboardTotalPnl = sumAccountSourceMetric(accountSourceSummaries, "totalPnl");
+  const dashboardTodayPnl = sumAccountSourceMetric(accountSourceSummaries, "todayPnl");
+  const dashboardMonthlyPnl = sumAccountSourceMetric(accountSourceSummaries, "monthlyPnl");
+  const dashboardNetWorth = sumAccountSourceMetric(accountSourceSummaries, "netWorth");
+  const dashboardTodayPnlHint = describeAccountSourceMetricCoverage(accountSourceSummaries, "todayPnl");
+  const dashboardMonthlyPnlHint = describeAccountSourceMetricCoverage(accountSourceSummaries, "monthlyPnl");
+  const dashboardNetWorthHint = describeAccountSourceMetricCoverage(accountSourceSummaries, "netWorth");
+  const ibkrAccountSourceSummary = accountSourceSummaries.find((summary) => summary.id === `ibkr-${selectedDashboardAccount.key}`) ?? null;
+  const coinbaseAccountSourceSummary =
+    accountSourceSummaries.find((summary) => summary.id === `coinbase-${selectedDashboardAccount.key}`) ?? null;
   const dashboardHeaderRouteLabel =
     selectedDashboardOwnsRoute && routedAccount ? `${routedAccount} · ${routedAccountPill.label}` : "No active broker route for this account";
   const marketGatewayPill = gatewaySessionPresentation(connectionQuery.data);
@@ -1228,6 +1347,20 @@ function App() {
       }
       return right.beta - left.beta;
     });
+
+  function getConnectorDraft(connectorId: ConnectorCatalogId): ConnectorDraftState {
+    return connectorDraftsById[connectorId] ?? { displayName: "", directoryPath: "" };
+  }
+
+  function updateConnectorDraft(connectorId: ConnectorCatalogId, patch: Partial<ConnectorDraftState>) {
+    setConnectorDraftsById((current) => ({
+      ...current,
+      [connectorId]: {
+        displayName: patch.displayName ?? current[connectorId]?.displayName ?? "",
+        directoryPath: patch.directoryPath ?? current[connectorId]?.directoryPath ?? "",
+      },
+    }));
+  }
   const marketTopRows = marketScreenRows.slice(0, 12);
   const marketChartRows = marketScreenRows.slice(0, 8).map((row) => ({
     symbol: row.symbol,
@@ -2049,8 +2182,9 @@ function App() {
       setConnectorSetupError(`${connector.title} is not ready yet.`);
       return;
     }
-    const displayName = csvFolderNameDraft.trim();
-    const directoryPath = fidelityCsvDirectoryDraft.trim();
+    const draft = getConnectorDraft(connectorId);
+    const displayName = draft.displayName.trim();
+    const directoryPath = draft.directoryPath.trim();
     if (!displayName) {
       setConnectorSetupError("Add a connector name before saving this connector.");
       return;
@@ -2060,7 +2194,12 @@ function App() {
       return;
     }
     try {
-      await filesystemConnectorConfigureMutation.mutateAsync({ connectorId, displayName, directoryPath });
+      await filesystemConnectorConfigureMutation.mutateAsync({
+        accountKey: selectedDashboardAccount.key,
+        connectorId,
+        displayName,
+        directoryPath,
+      });
       setConnectorPickerOpen(false);
       setConnectorSetupError(null);
     } catch (error) {
@@ -2068,54 +2207,120 @@ function App() {
     }
   }
 
-  async function chooseCsvFolder() {
+  async function chooseConnectorFolder(connectorId: ConnectorCatalogId, connectorTitle: string) {
     setConnectorSetupError(null);
     try {
       const { open } = await import("@tauri-apps/plugin-dialog");
+      const draft = getConnectorDraft(connectorId);
       const selected = await open({
         directory: true,
         multiple: false,
-        title: "Choose CSV Folder",
-        defaultPath: fidelityCsvDirectoryDraft.trim() || undefined,
+        title: `Choose ${connectorTitle} Folder`,
+        defaultPath: draft.directoryPath.trim() || undefined,
       });
       if (typeof selected === "string" && selected.trim()) {
-        setFidelityCsvDirectoryDraft(selected);
+        updateConnectorDraft(connectorId, { directoryPath: selected });
       }
     } catch (error) {
       setConnectorSetupError(error instanceof Error ? error.message : "Could not open the system folder picker.");
     }
   }
 
-  function renderFidelityCsvPanelContent() {
+  function renderFilesystemConnectorPanelContent(sourceId: string) {
+    const status = filesystemConnectorStatusBySourceId[sourceId];
+    const portfolio = filesystemConnectorPortfolioBySourceId[sourceId];
+    const portfolioError = filesystemConnectorPortfolioErrorBySourceId[sourceId] ?? null;
+    const portfolioLoading = filesystemConnectorPortfolioLoadingBySourceId[sourceId] ?? false;
+    const documentFolder = filesystemDocumentFolderBySourceId[sourceId];
+    const documentFolderError = filesystemDocumentFolderErrorBySourceId[sourceId] ?? null;
+    const documentFolderLoading = filesystemDocumentFolderLoadingBySourceId[sourceId] ?? false;
+    const connector = status ? getConnectorCatalogEntry(status.connectorId as ConnectorCatalogId) : null;
+
     return localBackendUnavailable ? (
-      <ErrorState message={connectionQueryError ?? csvFolderStatusError ?? csvFolderPortfolioError ?? "The local backend is unavailable."} />
-    ) : csvFolderStatusQuery.isLoading ? (
-      <div className="text-sm text-muted">Checking CSV folder connector...</div>
-    ) : !csvFolderStatusQuery.data?.available ? (
+      <ErrorState
+        message={connectionQueryError ?? filesystemConnectorStatusesError ?? portfolioError ?? documentFolderError ?? "The local backend is unavailable."}
+      />
+    ) : filesystemConnectorStatusesQuery.isLoading ? (
+      <div className="text-sm text-muted">Checking filesystem connectors...</div>
+    ) : !status ? (
+      <ErrorState message="This filesystem connector source could not be found." />
+    ) : !status.available ? (
       <div className="grid gap-4">
         <div className="grid gap-4 md:grid-cols-3">
           <MetricCard label="Connector" value="Not configured" />
-          <MetricCard label="Provider" value="Filesystem" />
+          <MetricCard label="Provider" value={connector?.provider ?? "Filesystem"} />
           <MetricCard label="Folder" value="Add a path in Settings" />
         </div>
-        <ErrorState message={csvFolderStatusError ?? csvFolderStatusQuery.data?.detail ?? "CSV folder is unavailable."} />
+        <ErrorState message={filesystemConnectorStatusesError ?? status.detail ?? "Filesystem connector is unavailable."} />
       </div>
-    ) : !csvFolderStatusQuery.data.connected ? (
+    ) : !status.connected ? (
       <div className="grid gap-4">
         <div className="grid gap-4 md:grid-cols-3">
-          <MetricCard label="Connector" value="Ready for CSVs" />
-          <MetricCard label="Provider" value="Filesystem" />
-          <MetricCard label="Folder" value={csvFolderStatusQuery.data.directoryPath ?? "Not set"} />
+          <MetricCard label="Connector" value={status.displayName ?? connector?.dashboardTitle ?? "CSV Folder"} />
+          <MetricCard label="Provider" value={connector?.provider ?? "Filesystem"} />
+          <MetricCard label="Folder" value={status.directoryPath ?? "Not set"} />
         </div>
-        <ErrorState message={csvFolderStatusQuery.data.detail} />
+        <ErrorState message={status.detail} />
       </div>
-    ) : csvFolderPortfolioQuery.isLoading ? (
+    ) : status.connectorId === PDF_FOLDER_CONNECTOR_ID ? (
+      documentFolderLoading ? (
+        <div className="text-sm text-muted">Loading PDF library...</div>
+      ) : documentFolderError ? (
+        <ErrorState message={documentFolderError} />
+      ) : documentFolder ? (
+        <div className="grid gap-4">
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <MetricCard label="PDFs" value={fmtNumber(documentFolder.pdfFilesCount)} />
+            <MetricCard label="Folder" value={documentFolder.displayName ?? connector?.dashboardTitle ?? "PDF Folder"} />
+            <MetricCard label="Latest PDF" value={documentFolder.latestPdfPath?.split("/").pop() ?? "Latest PDF"} />
+            <MetricCard label="Updated" value={formatTimestamp(documentFolder.generatedAt)} />
+          </div>
+          <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-3 text-sm text-muted">
+            <div className="font-medium text-text">Folder</div>
+            <div className="mt-1 break-all">{documentFolder.directoryPath}</div>
+            {documentFolder.latestPdfPath ? (
+              <>
+                <div className="mt-3 font-medium text-text">Latest PDF</div>
+                <div className="mt-1 break-all">{documentFolder.latestPdfPath}</div>
+              </>
+            ) : null}
+          </div>
+          {documentFolder.sourceNotice ? (
+            <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-3 text-sm text-muted">{documentFolder.sourceNotice}</div>
+          ) : null}
+          <div className="overflow-x-auto">
+            <table className="min-w-[820px] text-left text-sm">
+              <thead className="text-[11px] uppercase tracking-[0.16em] text-muted">
+                <tr>
+                  <th className="pb-3 pr-4">PDF</th>
+                  <th className="pb-3 pr-4">Modified</th>
+                  <th className="pb-3">Size</th>
+                </tr>
+              </thead>
+              <tbody>
+                {documentFolder.files.map((file) => (
+                  <tr key={file.path} className="border-t border-line/70 align-top">
+                    <td className="py-3 pr-4">
+                      <div className="font-medium text-text">{file.name}</div>
+                      <div className="mt-1 break-all text-xs text-muted">{file.path}</div>
+                    </td>
+                    <td className="py-3 pr-4">{formatTimestamp(file.modifiedAt)}</td>
+                    <td className="py-3">{fmtNumber(file.sizeBytes / 1024)} KB</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : (
+        <ErrorState message="PDF files are unavailable." />
+      )
+    ) : portfolioLoading ? (
       <div className="text-sm text-muted">Loading CSV holdings...</div>
-    ) : csvFolderPortfolioQuery.error instanceof Error ? (
-      <ErrorState message={csvFolderPortfolioQuery.error.message} />
-    ) : csvFolderPortfolioQuery.data ? (
+    ) : portfolioError ? (
+      <ErrorState message={portfolioError} />
+    ) : portfolio ? (
       (() => {
-        const portfolio = csvFolderPortfolioQuery.data;
         const uniqueHoldingAccounts = Array.from(new Set(portfolio.holdings.map((holding) => holding.accountName.trim()).filter(Boolean)));
         const showAccountColumn = uniqueHoldingAccounts.length > 1;
 
@@ -2198,22 +2403,22 @@ function App() {
     <>
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         <MetricCard
-          hint={selectedDashboardOwnsRoute && routedAccount ? `${routedAccount} · ${routedAccountPill.label}` : "Current Gateway route is not this account"}
+          hint={describeAccountSourceMetricCoverage(accountSourceSummaries, "totalPnl")}
           label="Total PnL"
-          tone={pnlMetricTone(selectedDashboardOwnsRoute ? dashboardTotalPnl : null)}
-          value={selectedDashboardOwnsRoute ? fmtCurrency(dashboardTotalPnl) : "—"}
+          tone={pnlMetricTone(dashboardTotalPnl)}
+          value={fmtCurrency(dashboardTotalPnl)}
         />
         <MetricCard
-          hint="Daily account PnL is not exposed in the current broker snapshot yet."
+          hint={dashboardTodayPnlHint}
           label="Today's PnL"
-          value="—"
+          value={fmtCurrency(dashboardTodayPnl)}
         />
         <MetricCard
-          hint="Month-to-date account PnL is not exposed in the current broker snapshot yet."
+          hint={dashboardMonthlyPnlHint}
           label="Month PnL"
-          value="—"
+          value={fmtCurrency(dashboardMonthlyPnl)}
         />
-        <MetricCard label="Net Worth" value={dashboardRisk ? fmtCurrency(dashboardRisk.account.netLiquidation) : "—"} />
+        <MetricCard hint={dashboardNetWorthHint} label="Net Worth" value={fmtCurrency(dashboardNetWorth)} />
       </div>
 
       {connectionQuery.data?.lastError || connectError || reconnectError ? (
@@ -2269,6 +2474,9 @@ function App() {
             ) : null}
             <div className="mt-4 grid gap-3 lg:grid-cols-2">
               {availableConnectorOptions.map((connector) => (
+                (() => {
+                  const connectorDraft = getConnectorDraft(connector.id);
+                  return (
                 <div key={connector.id} className="rounded-2xl border border-line/80 bg-panel px-4 py-4">
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex items-center gap-3">
@@ -2282,34 +2490,40 @@ function App() {
                     </div>
                   </div>
                   <div className="mt-3 text-sm text-muted">{connector.description}</div>
-                  {connector.id === CSV_FOLDER_CONNECTOR_ID && connector.availability === "ready" ? (
+                  {connector.availability === "ready" ? (
                     <div className="mt-4 grid gap-3">
                       <label className="grid gap-2">
                         <span className="text-[11px] uppercase tracking-[0.16em] text-muted">Source name</span>
                         <input
                           className="w-full rounded-xl border border-line/80 bg-panelSoft px-4 py-3 text-sm text-text outline-none transition focus:border-accent/60"
-                          onChange={(event) => setCsvFolderNameDraft(event.target.value)}
-                          placeholder="Fidelity"
+                          onChange={(event) => updateConnectorDraft(connector.id, { displayName: event.target.value })}
+                          placeholder={connector.id === CSV_FOLDER_CONNECTOR_ID ? "Fidelity" : "Annual reports"}
                           spellCheck={false}
                           type="text"
-                          value={csvFolderNameDraft}
+                          value={connectorDraft.displayName}
                         />
                       </label>
                       <label className="grid gap-2">
-                        <span className="text-[11px] uppercase tracking-[0.16em] text-muted">CSV folder path</span>
+                        <span className="text-[11px] uppercase tracking-[0.16em] text-muted">
+                          {connector.id === CSV_FOLDER_CONNECTOR_ID ? "CSV folder path" : "PDF folder path"}
+                        </span>
                         <div className="flex gap-2">
                           <input
                             className="w-full rounded-xl border border-line/80 bg-panelSoft px-4 py-3 text-sm text-text outline-none transition focus:border-accent/60"
-                            onChange={(event) => setFidelityCsvDirectoryDraft(event.target.value)}
-                            placeholder="/Users/imyjimmy/Documents/.../fidelity/daily-positions"
+                            onChange={(event) => updateConnectorDraft(connector.id, { directoryPath: event.target.value })}
+                            placeholder={
+                              connector.id === CSV_FOLDER_CONNECTOR_ID
+                                ? "/Users/imyjimmy/Documents/.../fidelity/daily-positions"
+                                : "/Users/imyjimmy/Documents/.../research/pdfs"
+                            }
                             spellCheck={false}
                             type="text"
-                            value={fidelityCsvDirectoryDraft}
+                            value={connectorDraft.directoryPath}
                           />
                           <button
                             className="shrink-0 rounded-xl border border-line/80 bg-panelSoft px-3 py-3 text-[11px] font-medium uppercase tracking-[0.16em] text-muted transition hover:border-accent/35 hover:text-text"
                             onClick={() => {
-                              void chooseCsvFolder();
+                              void chooseConnectorFolder(connector.id, connector.title);
                             }}
                             type="button"
                           >
@@ -2319,19 +2533,19 @@ function App() {
                       </label>
                       <div className="flex items-center justify-between gap-3">
                         <div className="text-xs text-muted">
-                          {csvFolderStatusQuery.data?.directoryPath
-                            ? "Updating the saved connector name or folder path."
-                            : "The latest CSV in this folder will drive the connector snapshot."}
+                          {connector.id === CSV_FOLDER_CONNECTOR_ID
+                            ? "This adds a new account-owned source. The latest CSV in this folder will drive its snapshot."
+                            : "This adds a new account-owned document source. The folder will surface recent PDFs and connectivity."}
                         </div>
                         <button
                           className="rounded-full border border-line/80 bg-panel px-3 py-1 text-[11px] font-medium uppercase tracking-[0.16em] text-muted transition hover:border-accent/35 hover:text-text disabled:cursor-not-allowed disabled:opacity-50"
-                          disabled={filesystemConnectorConfigureMutation.isPending || !csvFolderNameDraft.trim() || !fidelityCsvDirectoryDraft.trim()}
+                          disabled={filesystemConnectorConfigureMutation.isPending || !connectorDraft.displayName.trim() || !connectorDraft.directoryPath.trim()}
                           onClick={() => {
                             void saveFilesystemConnector(connector.id);
                           }}
                           type="button"
                         >
-                          {filesystemConnectorConfigureMutation.isPending ? "Saving…" : csvFolderStatusQuery.data?.directoryPath ? "Update" : "Add"}
+                          {filesystemConnectorConfigureMutation.isPending ? "Saving…" : "Add"}
                         </button>
                       </div>
                     </div>
@@ -2347,6 +2561,8 @@ function App() {
                     </div>
                   )}
                 </div>
+                  );
+                })()
               ))}
             </div>
           </div>
@@ -2357,19 +2573,13 @@ function App() {
 
   const dashboardBodyContent = (
     <>
-      {dashboardSourceNotice ? (
-        <div className="rounded-2xl border border-caution/25 bg-caution/8 px-4 py-3 text-sm text-caution">
-          {dashboardSourceNotice}
-        </div>
-      ) : null}
-
       <AccountConnectorSection
         collapsed={ibkrConnectorCollapsed}
         details={
           <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
             <InlinePill
               label={routedAccount ? `Acct ${routedAccount}` : "Acct pending"}
-              tone={connectionQuery.data?.connected ? "safe" : "neutral"}
+              tone={connectionQuery.data?.connected ? (selectedDashboardOwnsRoute ? "safe" : "caution") : "neutral"}
             />
             <InlinePill label={routedAccountPill.label} tone={routedAccountPill.tone} />
           </div>
@@ -2439,14 +2649,14 @@ function App() {
         </div>
       </AccountConnectorSection>
 
-      {selectedDashboardAccount.dashboardSections.coinbase ? (
+      {dashboardAccountHasAttachedSource(selectedDashboardAccount, "coinbase") ? (
         <AccountConnectorSection
           collapsed={coinbaseConnectorCollapsed}
           details={
             <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
               <InlinePill
                 label={coinbaseConnectorStatus}
-                tone={coinbaseConnectorTone === "danger" ? "danger" : coinbaseConnectorTone === "safe" ? "safe" : "neutral"}
+                tone={toInlinePillTone(coinbaseAccountSourceSummary?.tone ?? coinbaseConnectorTone)}
               />
             </div>
           }
@@ -2458,25 +2668,36 @@ function App() {
         </AccountConnectorSection>
       ) : null}
 
-      {selectedDashboardAccount.availableConnectorIds.includes(CSV_FOLDER_CONNECTOR_ID) && csvFolderStatusQuery.data?.connected ? (
+      {filesystemAccountSourceSummaries.map((filesystemAccountSourceSummary) => {
+        const filesystemStatus = filesystemConnectorStatusBySourceId[filesystemAccountSourceSummary.id];
+        const connectorCatalogEntry = filesystemStatus
+          ? getConnectorCatalogEntry(filesystemStatus.connectorId as ConnectorCatalogId)
+          : getConnectorCatalogEntry(CSV_FOLDER_CONNECTOR_ID);
+        return (
         <AccountConnectorSection
-          collapsed={csvFolderConnectorCollapsed}
+          key={filesystemAccountSourceSummary.id}
+          collapsed={filesystemConnectorCollapsedBySourceId[filesystemAccountSourceSummary.id] ?? false}
           details={
             <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
               <InlinePill
-                label={csvFolderConnectorStatus}
-                tone={csvFolderConnectorTone === "danger" ? "danger" : csvFolderConnectorTone === "safe" ? "safe" : "neutral"}
+                label={filesystemAccountSourceSummary.status}
+                tone={toInlinePillTone(filesystemAccountSourceSummary.tone)}
               />
-              <InlinePill label={csvFolderConnectorDisplayName} tone="neutral" />
             </div>
           }
-          eyebrow={getConnectorCatalogEntry(CSV_FOLDER_CONNECTOR_ID)?.dashboardEyebrow ?? "Filesystem source"}
-          onToggle={() => setCsvFolderConnectorCollapsed((value) => !value)}
-          title={csvFolderPortfolioQuery.data?.displayName ?? csvFolderStatusQuery.data?.displayName ?? getConnectorCatalogEntry(CSV_FOLDER_CONNECTOR_ID)?.dashboardTitle ?? "CSV Folder"}
+          eyebrow={connectorCatalogEntry?.dashboardEyebrow ?? "Filesystem source"}
+          onToggle={() =>
+            setFilesystemConnectorCollapsedBySourceId((value) => ({
+              ...value,
+              [filesystemAccountSourceSummary.id]: !(value[filesystemAccountSourceSummary.id] ?? false),
+            }))
+          }
+          title={filesystemAccountSourceSummary.title}
         >
-          {renderFidelityCsvPanelContent()}
+          {renderFilesystemConnectorPanelContent(filesystemAccountSourceSummary.id)}
         </AccountConnectorSection>
-      ) : null}
+        );
+      })}
     </>
   );
 
@@ -2484,7 +2705,6 @@ function App() {
     return (
       <AccountDashboardView
         accountSettingsOpen={accountSettingsOpen}
-        accountStatuses={dashboardAccountStatuses}
         bodyContent={dashboardBodyContent}
         headerRouteLabel={dashboardHeaderRouteLabel}
         headerStatusIndicatorClassName={connectionToneIndicatorClass(accountStatusTone)}

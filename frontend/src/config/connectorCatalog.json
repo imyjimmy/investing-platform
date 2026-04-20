@@ -9,5 +9,16 @@
     "dashboardTitle": "CSV Folder",
     "dashboardEyebrow": "Filesystem investment source",
     "availability": "ready"
+  },
+  {
+    "id": "pdfFolder",
+    "title": "PDF Folder",
+    "shortTitle": "PDF Folder",
+    "provider": "Filesystem",
+    "description": "Point the dashboard at a folder of PDFs and give the connector a display name.",
+    "settingsDetail": "Reads a local PDF library folder and surfaces recent documents.",
+    "dashboardTitle": "PDF Folder",
+    "dashboardEyebrow": "Filesystem document source",
+    "availability": "ready"
   }
 ]
