@@ -1,6 +1,5 @@
 import rawDashboardAccounts from "./dashboardAccounts.json";
-
-export type PlannedAccountConnectorId = "plaidFidelity" | "plaidChase";
+import type { ConnectorCatalogId } from "./connectorCatalog";
 
 export type DashboardAccountConfig = {
   key: string;
@@ -10,7 +9,7 @@ export type DashboardAccountConfig = {
   dashboardSections: {
     coinbase: boolean;
   };
-  plannedConnectors: PlannedAccountConnectorId[];
+  availableConnectorIds: ConnectorCatalogId[];
 };
 
 export type DashboardAccountKey = DashboardAccountConfig["key"];

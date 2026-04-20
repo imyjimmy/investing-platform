@@ -407,6 +407,68 @@ export interface CoinbasePortfolioResponse {
   isStale: boolean;
 }
 
+export interface PlaidConnectorStatus {
+  connectorId: string;
+  available: boolean;
+  connected: boolean;
+  status: "ready" | "degraded" | "needs_setup" | "not_connected";
+  detail: string;
+  institutionName: string | null;
+  selectedAccountsCount: number;
+  lastSuccessfulSyncAt: string | null;
+  lastError: string | null;
+}
+
+export interface PlaidLinkTokenResponse {
+  connectorId: string;
+  linkToken: string;
+  expiration: string | null;
+}
+
+export interface PlaidPublicTokenExchangeRequest {
+  publicToken: string;
+  institutionId?: string | null;
+  institutionName?: string | null;
+  accountIds?: string[];
+}
+
+export interface PlaidInvestmentAccount {
+  accountId: string;
+  name: string;
+  mask: string | null;
+  subtype: string | null;
+  currentBalance: number | null;
+  availableBalance: number | null;
+  isoCurrencyCode: string | null;
+}
+
+export interface PlaidHolding {
+  accountId: string;
+  accountName: string;
+  securityId: string | null;
+  symbol: string | null;
+  name: string;
+  quantity: number | null;
+  price: number | null;
+  value: number | null;
+  costBasis: number | null;
+  gainLoss: number | null;
+  isoCurrencyCode: string | null;
+}
+
+export interface PlaidConnectorPortfolioResponse {
+  connectorId: string;
+  institutionName: string | null;
+  totalValue: number;
+  investmentAccountsCount: number;
+  holdingsCount: number;
+  accounts: PlaidInvestmentAccount[];
+  holdings: PlaidHolding[];
+  sourceNotice: string | null;
+  generatedAt: string;
+  isStale: boolean;
+}
+
 export interface CryptoMarketQuote {
   symbol: string;
   name: string;

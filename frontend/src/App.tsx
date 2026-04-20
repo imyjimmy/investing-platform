@@ -24,6 +24,8 @@ import type {
   OptionOrderPreview,
   OptionOrderRequest,
   OptionPosition,
+  PlaidConnectorPortfolioResponse,
+  PlaidConnectorStatus,
   Position,
   SubmittedOrder,
 } from "./lib/types";
@@ -35,8 +37,8 @@ import {
   getDashboardAccountForRoute,
   getDashboardAccountWithCoinbase,
   type DashboardAccountKey,
-  type PlannedAccountConnectorId,
 } from "./config/dashboardAccounts";
+import { getConnectorCatalogEntry, type ConnectorCatalogId } from "./config/connectorCatalog";
 import { AccountDashboardView } from "./components/AccountDashboardView";
 import { AccountConnectorSection } from "./components/AccountConnectorSection";
 import { EdgarWorkspace } from "./components/EdgarWorkspace";
@@ -184,6 +186,52 @@ function sumPositionPnl(positions: Position[]) {
 
 function sumOptionPositionPnl(positions: OptionPosition[]) {
   return positions.reduce((total, position) => total + (position.unrealizedPnL ?? 0) + (position.realizedPnL ?? 0), 0);
+}
+
+function plaidConnectorTone(
+  status: PlaidConnectorStatus | undefined,
+  portfolio: PlaidConnectorPortfolioResponse | undefined,
+  portfolioError: string | null,
+): ConnectionHealthTone {
+  if (!status) {
+    return "caution";
+  }
+  if (status.status === "needs_setup") {
+    return "danger";
+  }
+  if (status.status === "degraded") {
+    return "caution";
+  }
+  if (!status.connected) {
+    return "planned";
+  }
+  return portfolio?.isStale || Boolean(portfolioError) ? "caution" : "safe";
+}
+
+function plaidConnectorStatusLabel(
+  status: PlaidConnectorStatus | undefined,
+  portfolio: PlaidConnectorPortfolioResponse | undefined,
+  portfolioError: string | null,
+) {
+  if (!status) {
+    return "Checking";
+  }
+  if (status.status === "needs_setup") {
+    return "Needs setup";
+  }
+  if (!status.connected) {
+    return "Ready to link";
+  }
+  if (status.status === "degraded" || portfolio?.isStale || portfolioError) {
+    return "Connected · stale snapshot";
+  }
+  return "Connected";
+}
+
+function plaidSelectedAccountIds(metadata: PlaidLinkMetadata | undefined) {
+  return (metadata?.accounts ?? [])
+    .map((account) => account.id?.trim())
+    .filter((accountId): accountId is string => Boolean(accountId));
 }
 
 function orderRiskLabel(order: OpenOrderExposure) {
@@ -521,6 +569,8 @@ const MARKET_SCREEN_ROWS: MarketRow[] = [
   { symbol: "FCX", name: "Freeport-McMoRan", sector: "Materials", price: 46.1, beta: 1.55, weekChangePct: 2.3, monthChangePct: 5.4, avgDollarVolumeM: 497, marketCapB: 66.0, shortInterestPct: 1.9, optionsable: true, shortable: true },
 ];
 
+const FIDELITY_CONNECTOR_ID: ConnectorCatalogId = "plaidFidelity";
+
 function readVisibleChainGreeks(): ChainGreekKey[] {
   if (typeof window === "undefined") {
     return [...DEFAULT_VISIBLE_CHAIN_GREEKS];
@@ -544,8 +594,11 @@ function App() {
   const queryClient = useQueryClient();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
+  const [connectorPickerOpen, setConnectorPickerOpen] = useState(false);
   const [ibkrConnectorCollapsed, setIbkrConnectorCollapsed] = useState(false);
   const [coinbaseConnectorCollapsed, setCoinbaseConnectorCollapsed] = useState(false);
+  const [plaidFidelityConnectorCollapsed, setPlaidFidelityConnectorCollapsed] = useState(false);
+  const [connectorSetupError, setConnectorSetupError] = useState<string | null>(null);
   const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceSurface>("dashboard");
   const [selectedDashboardAccountKey, setSelectedDashboardAccountKey] = useState<DashboardAccountKey>(DEFAULT_DASHBOARD_ACCOUNT_KEY);
   const [dashboardAccountSelectionLocked, setDashboardAccountSelectionLocked] = useState(false);
@@ -611,6 +664,17 @@ function App() {
     enabled: coinbaseStatusQuery.data?.available ?? false,
     refetchInterval: 30_000,
   });
+  const plaidFidelityStatusQuery = useQuery({
+    queryKey: ["plaid-connector-status", FIDELITY_CONNECTOR_ID],
+    queryFn: () => api.plaidConnectorStatus(FIDELITY_CONNECTOR_ID),
+    refetchInterval: 30_000,
+  });
+  const plaidFidelityPortfolioQuery = useQuery({
+    queryKey: ["plaid-connector-portfolio", FIDELITY_CONNECTOR_ID],
+    queryFn: () => api.plaidConnectorPortfolio(FIDELITY_CONNECTOR_ID),
+    enabled: plaidFidelityStatusQuery.data?.connected ?? false,
+    refetchInterval: 30_000,
+  });
   const cryptoMajorsQuery = useQuery({
     queryKey: ["crypto-majors"],
     queryFn: api.cryptoMajors,
@@ -664,6 +728,32 @@ function App() {
 
   const connectMutation = useMutation({ mutationFn: api.connect });
   const reconnectMutation = useMutation({ mutationFn: api.reconnect });
+  const plaidLinkTokenMutation = useMutation({
+    mutationFn: (connectorId: ConnectorCatalogId) => api.plaidConnectorLinkToken(connectorId),
+  });
+  const plaidExchangeMutation = useMutation({
+    mutationFn: ({
+      connectorId,
+      publicToken,
+      metadata,
+    }: {
+      connectorId: ConnectorCatalogId;
+      publicToken: string;
+      metadata: PlaidLinkMetadata;
+    }) =>
+      api.plaidConnectorExchange(connectorId, {
+        publicToken,
+        institutionId: metadata.institution?.institution_id ?? null,
+        institutionName: metadata.institution?.name ?? null,
+        accountIds: plaidSelectedAccountIds(metadata),
+      }),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["plaid-connector-status", FIDELITY_CONNECTOR_ID] }),
+        queryClient.invalidateQueries({ queryKey: ["plaid-connector-portfolio", FIDELITY_CONNECTOR_ID] }),
+      ]);
+    },
+  });
   const edgarDownloadMutation = useMutation({
     mutationFn: api.edgarDownload,
     onSuccess: () => {
@@ -788,6 +878,13 @@ function App() {
       setSelectedDashboardAccountKey(matchingAccount);
     }
   }, [connectionQuery.data?.accountId, dashboardAccountSelectionLocked, selectedDashboardAccountKey]);
+
+  useEffect(() => {
+    if (!accountSettingsOpen) {
+      setConnectorPickerOpen(false);
+      setConnectorSetupError(null);
+    }
+  }, [accountSettingsOpen]);
 
   useEffect(() => {
     if (!ticketDraft) {
@@ -936,6 +1033,9 @@ function App() {
   const sourceError = connectError ?? reconnectError ?? connectionQuery.data?.lastError ?? null;
   const coinbaseStatusError = coinbaseStatusQuery.error instanceof Error ? coinbaseStatusQuery.error.message : null;
   const coinbasePortfolioError = coinbasePortfolioQuery.error instanceof Error ? coinbasePortfolioQuery.error.message : null;
+  const plaidFidelityStatusError = plaidFidelityStatusQuery.error instanceof Error ? plaidFidelityStatusQuery.error.message : null;
+  const plaidFidelityPortfolioError =
+    plaidFidelityPortfolioQuery.error instanceof Error ? plaidFidelityPortfolioQuery.error.message : null;
   const coinbaseConnectorTone: ConnectionHealthTone = coinbaseStatusQuery.isLoading
     ? "caution"
     : coinbaseStatusQuery.data?.available
@@ -960,6 +1060,25 @@ function App() {
     : coinbaseStatusQuery.data?.available
       ? `Assigned to ${coinbaseAssignedAccount?.name ?? "configured"} dashboard`
       : `Connector settings for ${coinbaseAssignedAccount?.name ?? "configured"} dashboard`;
+  const plaidFidelityConnectorTone = plaidConnectorTone(
+    plaidFidelityStatusQuery.data,
+    plaidFidelityPortfolioQuery.data,
+    plaidFidelityPortfolioError ?? plaidFidelityStatusError,
+  );
+  const plaidFidelityConnectorStatus = plaidConnectorStatusLabel(
+    plaidFidelityStatusQuery.data,
+    plaidFidelityPortfolioQuery.data,
+    plaidFidelityPortfolioError ?? plaidFidelityStatusError,
+  );
+  const plaidFidelityConnectorDetail = plaidFidelityStatusQuery.isLoading
+    ? "Loading Plaid Fidelity connector status"
+    : plaidFidelityStatusError
+      ? plaidFidelityStatusError
+      : plaidFidelityStatusQuery.data?.connected
+        ? plaidFidelityPortfolioQuery.data?.institutionName
+          ? `${plaidFidelityPortfolioQuery.data.institutionName} synced through Plaid`
+          : "Fidelity linked through Plaid"
+        : plaidFidelityStatusQuery.data?.detail ?? "Ready to link Fidelity through Plaid.";
   const edgarStatusError = edgarStatusQuery.error instanceof Error ? edgarStatusQuery.error.message : null;
   const investorPdfStatusError = investorPdfStatusQuery.error instanceof Error ? investorPdfStatusQuery.error.message : null;
   const dataModeLabel = connectionQuery.data?.mode === "ibkr" ? "IBKR gateway session" : "Mock snapshot";
@@ -1029,27 +1148,26 @@ function App() {
     };
   }
 
-  function buildPlannedConnectorCard(connectorId: PlannedAccountConnectorId): AccountConnectorCard {
-    if (connectorId === "plaidFidelity") {
+  function buildPlaidConnectorCard(connectorId: ConnectorCatalogId): AccountConnectorCard | null {
+    const connector = getConnectorCatalogEntry(connectorId);
+    if (!connector) {
+      return null;
+    }
+    if (connectorId === FIDELITY_CONNECTOR_ID) {
+      if (!plaidFidelityStatusQuery.data?.connected) {
+        return null;
+      }
       return {
-        id: "plaid-fidelity",
-        title: "Plaid · Fidelity",
-        status: "Planned",
-        detail: "Future linked brokerage cash and holdings sync",
-        tone: "planned",
-        countsTowardHealth: false,
+        id: connector.id,
+        title: connector.title,
+        status: plaidFidelityConnectorStatus,
+        detail: plaidFidelityConnectorDetail,
+        tone: plaidFidelityConnectorTone,
+        countsTowardHealth: true,
         icon: <BankIcon />,
       };
     }
-    return {
-      id: "plaid-chase",
-      title: "Plaid · Chase",
-      status: "Planned",
-      detail: "Future banking cash movement and treasury feed",
-      tone: "planned",
-      countsTowardHealth: false,
-      icon: <BankIcon />,
-    };
+    return null;
   }
 
   const accountConnectorCardsByKey = Object.fromEntries(
@@ -1066,8 +1184,11 @@ function App() {
           icon: <CoinbaseIcon />,
         });
       }
-      account.plannedConnectors.forEach((connectorId) => {
-        connectorCards.push(buildPlannedConnectorCard(connectorId));
+      account.availableConnectorIds.forEach((connectorId) => {
+        const connectorCard = buildPlaidConnectorCard(connectorId);
+        if (connectorCard) {
+          connectorCards.push(connectorCard);
+        }
       });
       return [account.key, connectorCards];
     }),
@@ -1077,7 +1198,12 @@ function App() {
   const definedConnectorCount = definedConnectors.length;
   const liveConnectorCount = definedConnectors.filter((connector) => connector.tone === "safe").length;
   const connectedConnectorCount = definedConnectors.filter((connector) => connector.tone === "safe" || connector.tone === "caution").length;
-  const plannedConnectorCount = accountSettingsConnectors.length - definedConnectorCount;
+  const activeConnectorIds = new Set(accountSettingsConnectors.map((connector) => connector.id));
+  const availableConnectorOptions = selectedDashboardAccount.availableConnectorIds
+    .map((connectorId) => getConnectorCatalogEntry(connectorId))
+    .filter((connector): connector is NonNullable<ReturnType<typeof getConnectorCatalogEntry>> => Boolean(connector))
+    .filter((connector) => !activeConnectorIds.has(connector.id));
+  const availableConnectorCount = availableConnectorOptions.length;
   const dashboardAccountStatuses = Object.fromEntries(
     DASHBOARD_ACCOUNTS.map((account) => {
       const connectors = accountConnectorCardsByKey[account.key];
@@ -1932,6 +2058,131 @@ function App() {
     );
   }
 
+  async function beginConnectorLink(connectorId: ConnectorCatalogId) {
+    setConnectorSetupError(null);
+    const connector = getConnectorCatalogEntry(connectorId);
+    if (!connector) {
+      setConnectorSetupError("This connector is not available in the local catalog.");
+      return;
+    }
+    if (connector.availability !== "ready") {
+      setConnectorSetupError(`${connector.title} is not ready yet.`);
+      return;
+    }
+    if (!window.Plaid) {
+      setConnectorSetupError("Plaid Link did not load in the desktop shell.");
+      return;
+    }
+    try {
+      const tokenResponse = await plaidLinkTokenMutation.mutateAsync(connectorId);
+      const handler = window.Plaid.create({
+        token: tokenResponse.linkToken,
+        onSuccess: (publicToken, metadata) => {
+          void plaidExchangeMutation
+            .mutateAsync({ connectorId, publicToken, metadata })
+            .then(() => {
+              setConnectorPickerOpen(false);
+              setConnectorSetupError(null);
+            })
+            .catch((error: unknown) => {
+              setConnectorSetupError(error instanceof Error ? error.message : "Could not finish linking this connector.");
+            });
+        },
+        onExit: (error) => {
+          if (error instanceof Error) {
+            setConnectorSetupError(error.message);
+          }
+        },
+      });
+      handler.open();
+    } catch (error) {
+      setConnectorSetupError(error instanceof Error ? error.message : "Could not start Plaid Link.");
+    }
+  }
+
+  function renderPlaidFidelityPanelContent() {
+    return plaidFidelityStatusQuery.isLoading ? (
+      <div className="text-sm text-muted">Checking Plaid Fidelity connector...</div>
+    ) : !plaidFidelityStatusQuery.data?.available ? (
+      <div className="grid gap-4">
+        <div className="grid gap-4 md:grid-cols-3">
+          <MetricCard label="Connector" value="Not configured" />
+          <MetricCard label="Provider" value="Plaid" />
+          <MetricCard label="Environment" value="Set in .env" />
+        </div>
+        <ErrorState message={plaidFidelityStatusError ?? plaidFidelityStatusQuery.data?.detail ?? "Plaid Fidelity is unavailable."} />
+      </div>
+    ) : !plaidFidelityStatusQuery.data.connected ? (
+      <div className="grid gap-4">
+        <div className="grid gap-4 md:grid-cols-3">
+          <MetricCard label="Connector" value="Ready to link" />
+          <MetricCard label="Provider" value="Plaid" />
+          <MetricCard label="Institution" value="Fidelity" />
+        </div>
+        <ErrorState message={plaidFidelityStatusQuery.data.detail} />
+      </div>
+    ) : plaidFidelityPortfolioQuery.isLoading ? (
+      <div className="text-sm text-muted">Loading Fidelity holdings...</div>
+    ) : plaidFidelityPortfolioQuery.error instanceof Error ? (
+      <ErrorState message={plaidFidelityPortfolioQuery.error.message} />
+    ) : plaidFidelityPortfolioQuery.data ? (
+      <div className="grid gap-4">
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <MetricCard label="Total value" value={fmtCurrency(plaidFidelityPortfolioQuery.data.totalValue)} />
+          <MetricCard label="Accounts" value={fmtNumber(plaidFidelityPortfolioQuery.data.investmentAccountsCount)} />
+          <MetricCard label="Holdings" value={fmtNumber(plaidFidelityPortfolioQuery.data.holdingsCount)} />
+          <MetricCard label="Institution" value={plaidFidelityPortfolioQuery.data.institutionName ?? "Fidelity"} />
+        </div>
+        {plaidFidelityPortfolioQuery.data.sourceNotice ? (
+          <div
+            className={`rounded-2xl border px-4 py-3 text-sm ${
+              plaidFidelityPortfolioQuery.data.isStale
+                ? "border-caution/25 bg-caution/8 text-caution"
+                : "border-line/80 bg-panelSoft text-muted"
+            }`}
+          >
+            {plaidFidelityPortfolioQuery.data.sourceNotice}
+          </div>
+        ) : null}
+        <div className="overflow-x-auto">
+          <table className="min-w-[920px] text-left text-sm">
+            <thead className="text-[11px] uppercase tracking-[0.16em] text-muted">
+              <tr>
+                <th className="pb-3 pr-4">Holding</th>
+                <th className="pb-3 pr-4">Account</th>
+                <th className="pb-3 pr-4">Qty</th>
+                <th className="pb-3 pr-4">Price</th>
+                <th className="pb-3 pr-4">Value</th>
+                <th className="pb-3 pr-4">Cost basis</th>
+                <th className="pb-3">Gain / loss</th>
+              </tr>
+            </thead>
+            <tbody>
+              {plaidFidelityPortfolioQuery.data.holdings.map((holding) => (
+                <tr key={`${holding.accountId}-${holding.securityId ?? holding.name}`} className="border-t border-line/70 align-top">
+                  <td className="py-3 pr-4">
+                    <div className="font-medium text-text">{holding.symbol ?? holding.name}</div>
+                    <div className="mt-1 text-xs text-muted">{holding.symbol ? holding.name : "Plaid holding"}</div>
+                  </td>
+                  <td className="py-3 pr-4">
+                    <div className="text-text">{holding.accountName}</div>
+                  </td>
+                  <td className="py-3 pr-4">{fmtNumber(holding.quantity)}</td>
+                  <td className="py-3 pr-4">{fmtCurrencySmall(holding.price)}</td>
+                  <td className="py-3 pr-4 font-medium text-text">{fmtCurrency(holding.value)}</td>
+                  <td className="py-3 pr-4">{fmtCurrency(holding.costBasis)}</td>
+                  <td className={`py-3 ${pnlTone(holding.gainLoss)}`}>{fmtCurrency(holding.gainLoss)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    ) : (
+      <ErrorState message="Fidelity holdings are unavailable." />
+    );
+  }
+
   const dashboardSummaryContent = (
     <>
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
@@ -1964,20 +2215,83 @@ function App() {
 
   const dashboardSettingsContent = (
     <Panel
-      action={<div className="text-[11px] uppercase tracking-[0.18em] text-muted">{plannedConnectorCount} planned</div>}
+      action={
+        <div className="flex items-center gap-3">
+          <div className="text-[11px] uppercase tracking-[0.18em] text-muted">{availableConnectorCount} available</div>
+          <button
+            className="rounded-full border border-accent/30 bg-accent/10 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.16em] text-accent transition hover:border-accent/50 hover:bg-accent/16 disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={availableConnectorCount === 0}
+            onClick={() => {
+              setConnectorPickerOpen((value) => !value);
+              setConnectorSetupError(null);
+            }}
+            type="button"
+          >
+            Add Connector
+          </button>
+        </div>
+      }
       title={`${selectedDashboardAccount.name} Connectors`}
     >
-      <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
-        {accountSettingsConnectors.map((connector) => (
-          <ConnectorStatusCard
-            key={connector.id}
-            detail={connector.detail}
-            icon={connector.icon}
-            status={connector.status}
-            title={connector.title}
-            tone={connector.tone}
-          />
-        ))}
+      <div className="grid gap-6">
+        <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
+          {accountSettingsConnectors.map((connector) => (
+            <ConnectorStatusCard
+              key={connector.id}
+              detail={connector.detail}
+              icon={connector.icon}
+              status={connector.status}
+              title={connector.title}
+              tone={connector.tone}
+            />
+          ))}
+        </div>
+
+        {connectorPickerOpen ? (
+          <div className="rounded-2xl border border-line/80 bg-panelSoft px-5 py-5">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <div className="text-sm font-semibold text-text">Available Connectors</div>
+                <div className="mt-1 text-sm text-muted">Add another account-owned connector for {selectedDashboardAccount.name}.</div>
+              </div>
+            </div>
+            {connectorSetupError ? (
+              <div className="mt-4 rounded-2xl border border-danger/20 bg-danger/8 px-4 py-3 text-sm text-danger">{connectorSetupError}</div>
+            ) : null}
+            <div className="mt-4 grid gap-3 lg:grid-cols-2">
+              {availableConnectorOptions.map((connector) => (
+                <div key={connector.id} className="rounded-2xl border border-line/80 bg-panel px-4 py-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-panelSoft text-text">
+                        <BankIcon />
+                      </span>
+                      <div>
+                        <div className="text-sm font-medium text-text">{connector.title}</div>
+                        <div className="mt-1 text-xs uppercase tracking-[0.16em] text-muted">{connector.provider}</div>
+                      </div>
+                    </div>
+                    <button
+                      className="rounded-full border border-line/80 bg-panel px-3 py-1 text-[11px] font-medium uppercase tracking-[0.16em] text-muted transition hover:border-accent/35 hover:text-text disabled:cursor-not-allowed disabled:opacity-50"
+                      disabled={connector.availability !== "ready" || plaidLinkTokenMutation.isPending || plaidExchangeMutation.isPending}
+                      onClick={() => {
+                        void beginConnectorLink(connector.id);
+                      }}
+                      type="button"
+                    >
+                      {connector.id === FIDELITY_CONNECTOR_ID && (plaidLinkTokenMutation.isPending || plaidExchangeMutation.isPending)
+                        ? "Linking…"
+                        : connector.availability === "ready"
+                          ? "Add"
+                          : "Coming soon"}
+                    </button>
+                  </div>
+                  <div className="mt-3 text-sm text-muted">{connector.description}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
       </div>
     </Panel>
   );
@@ -2082,6 +2396,26 @@ function App() {
           title="Coinbase"
         >
           {renderCoinbasePanelContent()}
+        </AccountConnectorSection>
+      ) : null}
+
+      {selectedDashboardAccount.availableConnectorIds.includes(FIDELITY_CONNECTOR_ID) && plaidFidelityStatusQuery.data?.connected ? (
+        <AccountConnectorSection
+          collapsed={plaidFidelityConnectorCollapsed}
+          details={
+            <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
+              <InlinePill
+                label={plaidFidelityConnectorStatus}
+                tone={plaidFidelityConnectorTone === "danger" ? "danger" : plaidFidelityConnectorTone === "safe" ? "safe" : "neutral"}
+              />
+              <InlinePill label={plaidFidelityStatusQuery.data.institutionName ?? "Fidelity"} tone="neutral" />
+            </div>
+          }
+          eyebrow={getConnectorCatalogEntry(FIDELITY_CONNECTOR_ID)?.dashboardEyebrow ?? "Plaid source"}
+          onToggle={() => setPlaidFidelityConnectorCollapsed((value) => !value)}
+          title={getConnectorCatalogEntry(FIDELITY_CONNECTOR_ID)?.dashboardTitle ?? "Fidelity"}
+        >
+          {renderPlaidFidelityPanelContent()}
         </AccountConnectorSection>
       ) : null}
     </>

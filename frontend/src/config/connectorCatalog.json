@@ -1,0 +1,24 @@
+[
+  {
+    "id": "plaidFidelity",
+    "title": "Plaid · Fidelity",
+    "shortTitle": "Fidelity",
+    "provider": "Plaid",
+    "description": "Link Fidelity investment accounts and holdings into the Van Aken dashboard.",
+    "settingsDetail": "Brokerage holdings and balances linked through Plaid.",
+    "dashboardTitle": "Fidelity",
+    "dashboardEyebrow": "Plaid investment source",
+    "availability": "ready"
+  },
+  {
+    "id": "plaidChase",
+    "title": "Plaid · Chase",
+    "shortTitle": "Chase",
+    "provider": "Plaid",
+    "description": "Connect Chase banking cash movement and treasury balances.",
+    "settingsDetail": "Banking connector planned for a later pass.",
+    "dashboardTitle": "Chase",
+    "dashboardEyebrow": "Plaid banking source",
+    "availability": "comingSoon"
+  }
+]

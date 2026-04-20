@@ -7,7 +7,7 @@
     "dashboardSections": {
       "coinbase": true
     },
-    "plannedConnectors": ["plaidFidelity", "plaidChase"]
+    "availableConnectorIds": ["plaidFidelity", "plaidChase"]
   },
   {
     "key": "personal",
@@ -17,6 +17,6 @@
     "dashboardSections": {
       "coinbase": false
     },
-    "plannedConnectors": []
+    "availableConnectorIds": []
   }
 ]

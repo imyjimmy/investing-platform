@@ -14,6 +14,10 @@ import type {
     OptionOrderRequest,
     OptionChainResponse,
     OptionPositionsResponse,
+    PlaidConnectorPortfolioResponse,
+    PlaidConnectorStatus,
+    PlaidLinkTokenResponse,
+    PlaidPublicTokenExchangeRequest,
     PositionsResponse,
     OrderCancelResponse,
     RiskSummaryResponse,
@@ -126,6 +130,14 @@ export const api = {
   reconnect: () => fetchJson<ConnectionStatus>("/api/reconnect"),
   coinbaseStatus: () => fetchJson<CoinbaseSourceStatus>("/api/sources/coinbase/status"),
   coinbasePortfolio: () => fetchJson<CoinbasePortfolioResponse>("/api/sources/coinbase/portfolio"),
+  plaidConnectorStatus: (connectorId: string) =>
+    fetchJson<PlaidConnectorStatus>(`/api/sources/plaid/connectors/${encodeURIComponent(connectorId)}/status`),
+  plaidConnectorLinkToken: (connectorId: string) =>
+    postJson<PlaidLinkTokenResponse>(`/api/sources/plaid/connectors/${encodeURIComponent(connectorId)}/link-token`),
+  plaidConnectorExchange: (connectorId: string, request: PlaidPublicTokenExchangeRequest) =>
+    postJson<PlaidConnectorStatus>(`/api/sources/plaid/connectors/${encodeURIComponent(connectorId)}/exchange`, request),
+  plaidConnectorPortfolio: (connectorId: string) =>
+    fetchJson<PlaidConnectorPortfolioResponse>(`/api/sources/plaid/connectors/${encodeURIComponent(connectorId)}/portfolio`),
   cryptoMajors: () => fetchJson<CryptoMarketResponse>("/api/market/crypto-majors"),
   positions: (accountId?: string) => fetchJson<PositionsResponse>(withAccountId("/api/account/positions", accountId)),
   riskSummary: (accountId?: string) => fetchJson<RiskSummaryResponse>(withAccountId("/api/account/risk-summary", accountId)),

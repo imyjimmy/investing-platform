@@ -503,6 +503,68 @@ class CoinbasePortfolioResponse(DashboardModel):
     isStale: bool = False
 
 
+class PlaidConnectorStatus(DashboardModel):
+    connectorId: str
+    available: bool
+    connected: bool
+    status: Literal["ready", "degraded", "needs_setup", "not_connected"]
+    detail: str
+    institutionName: str | None = None
+    selectedAccountsCount: int = 0
+    lastSuccessfulSyncAt: datetime | None = None
+    lastError: str | None = None
+
+
+class PlaidLinkTokenResponse(DashboardModel):
+    connectorId: str
+    linkToken: str
+    expiration: datetime | None = None
+
+
+class PlaidPublicTokenExchangeRequest(DashboardModel):
+    publicToken: str
+    institutionId: str | None = None
+    institutionName: str | None = None
+    accountIds: list[str] = Field(default_factory=list)
+
+
+class PlaidInvestmentAccount(DashboardModel):
+    accountId: str
+    name: str
+    mask: str | None = None
+    subtype: str | None = None
+    currentBalance: float | None = None
+    availableBalance: float | None = None
+    isoCurrencyCode: str | None = None
+
+
+class PlaidHolding(DashboardModel):
+    accountId: str
+    accountName: str
+    securityId: str | None = None
+    symbol: str | None = None
+    name: str
+    quantity: float | None = None
+    price: float | None = None
+    value: float | None = None
+    costBasis: float | None = None
+    gainLoss: float | None = None
+    isoCurrencyCode: str | None = None
+
+
+class PlaidConnectorPortfolioResponse(DashboardModel):
+    connectorId: str
+    institutionName: str | None = None
+    totalValue: float
+    investmentAccountsCount: int
+    holdingsCount: int
+    accounts: list[PlaidInvestmentAccount] = Field(default_factory=list)
+    holdings: list[PlaidHolding] = Field(default_factory=list)
+    sourceNotice: str | None = None
+    generatedAt: datetime
+    isStale: bool = False
+
+
 class CryptoMarketQuote(DashboardModel):
     symbol: str
     name: str
