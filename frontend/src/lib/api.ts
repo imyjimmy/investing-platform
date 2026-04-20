@@ -92,7 +92,13 @@ function formatValidationEntry(entry: unknown): string | null {
 }
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, init);
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, init);
+  } catch (error) {
+    const fallbackBase = API_BASE || "the configured API";
+    throw new Error(`Could not reach local backend at ${fallbackBase}. The desktop app may still be starting its local service.`);
+  }
   if (!response.ok) {
     let message = `${response.status} ${response.statusText}`;
     try {

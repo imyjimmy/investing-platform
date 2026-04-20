@@ -222,6 +222,10 @@ function filesystemConnectorStatusLabel(
   return "Connected";
 }
 
+function isLocalBackendUnavailable(message: string | null | undefined) {
+  return Boolean(message && message.includes("Could not reach local backend at"));
+}
+
 function orderRiskLabel(order: OpenOrderExposure) {
   if (order.strategyTag === "cash-secured-put") {
     return "Put obligation";
@@ -1011,8 +1015,9 @@ function App() {
 
   const connectError = connectMutation.error instanceof Error ? connectMutation.error.message : null;
   const reconnectError = reconnectMutation.error instanceof Error ? reconnectMutation.error.message : null;
+  const connectionQueryError = connectionQuery.error instanceof Error ? connectionQuery.error.message : null;
   const connectionEndpoint = connectionQuery.data ? `${connectionQuery.data.host}:${connectionQuery.data.port}` : "127.0.0.1:4002";
-  const sourceError = connectError ?? reconnectError ?? connectionQuery.data?.lastError ?? null;
+  const sourceError = connectError ?? reconnectError ?? connectionQueryError ?? connectionQuery.data?.lastError ?? null;
   const coinbaseStatusError = coinbaseStatusQuery.error instanceof Error ? coinbaseStatusQuery.error.message : null;
   const coinbasePortfolioError = coinbasePortfolioQuery.error instanceof Error ? coinbasePortfolioQuery.error.message : null;
   const csvFolderStatusError = csvFolderStatusQuery.error instanceof Error ? csvFolderStatusQuery.error.message : null;
@@ -1042,20 +1047,30 @@ function App() {
     : coinbaseStatusQuery.data?.available
       ? `Assigned to ${coinbaseAssignedAccount?.name ?? "configured"} dashboard`
       : `Connector settings for ${coinbaseAssignedAccount?.name ?? "configured"} dashboard`;
-  const csvFolderConnectorTone = filesystemConnectorTone(
-    csvFolderStatusQuery.data,
-    csvFolderPortfolioQuery.data,
-    csvFolderPortfolioError ?? csvFolderStatusError,
-  );
-  const csvFolderConnectorStatus = filesystemConnectorStatusLabel(
-    csvFolderStatusQuery.data,
-    csvFolderPortfolioQuery.data,
-    csvFolderPortfolioError ?? csvFolderStatusError,
-  );
   const csvFolderConnectorDisplayName = csvFolderStatusQuery.data?.displayName?.trim() || "CSV Folder";
+  const localBackendUnavailable =
+    isLocalBackendUnavailable(connectionQueryError) ||
+    isLocalBackendUnavailable(csvFolderStatusError) ||
+    isLocalBackendUnavailable(csvFolderPortfolioError);
+  const csvFolderConnectorTone = localBackendUnavailable
+    ? "danger"
+    : filesystemConnectorTone(
+        csvFolderStatusQuery.data,
+        csvFolderPortfolioQuery.data,
+        csvFolderPortfolioError ?? csvFolderStatusError,
+      );
+  const csvFolderConnectorStatus = localBackendUnavailable
+    ? "Backend unavailable"
+    : filesystemConnectorStatusLabel(
+        csvFolderStatusQuery.data,
+        csvFolderPortfolioQuery.data,
+        csvFolderPortfolioError ?? csvFolderStatusError,
+      );
   const csvFolderConnectorDetail = csvFolderStatusQuery.isLoading
     ? "Loading CSV folder connector status"
-    : csvFolderStatusError
+    : localBackendUnavailable
+      ? connectionQueryError ?? csvFolderStatusError ?? csvFolderPortfolioError ?? "The local backend is unavailable."
+      : csvFolderStatusError
       ? csvFolderStatusError
       : csvFolderStatusQuery.data?.directoryPath
         ? `${csvFolderStatusQuery.data.directoryPath} · ${fmtWholeNumber(csvFolderStatusQuery.data.csvFilesCount)} files`
@@ -1135,7 +1150,7 @@ function App() {
       return null;
     }
     if (connectorId === CSV_FOLDER_CONNECTOR_ID) {
-      if (!csvFolderStatusQuery.data?.connected) {
+      if (!csvFolderStatusQuery.data?.connected && !localBackendUnavailable) {
         return null;
       }
       return {
@@ -2088,7 +2103,9 @@ function App() {
   }
 
   function renderFidelityCsvPanelContent() {
-    return csvFolderStatusQuery.isLoading ? (
+    return localBackendUnavailable ? (
+      <ErrorState message={connectionQueryError ?? csvFolderStatusError ?? csvFolderPortfolioError ?? "The local backend is unavailable."} />
+    ) : csvFolderStatusQuery.isLoading ? (
       <div className="text-sm text-muted">Checking CSV folder connector...</div>
     ) : !csvFolderStatusQuery.data?.available ? (
       <div className="grid gap-4">
