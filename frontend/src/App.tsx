@@ -2114,73 +2114,81 @@ function App() {
     ) : csvFolderPortfolioQuery.error instanceof Error ? (
       <ErrorState message={csvFolderPortfolioQuery.error.message} />
     ) : csvFolderPortfolioQuery.data ? (
-      <div className="grid gap-4">
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <MetricCard label="Total value" value={fmtCurrency(csvFolderPortfolioQuery.data.totalValue)} />
-          <MetricCard label="Accounts" value={fmtNumber(csvFolderPortfolioQuery.data.investmentAccountsCount)} />
-          <MetricCard label="Holdings" value={fmtNumber(csvFolderPortfolioQuery.data.holdingsCount)} />
-          <MetricCard
-            label="Snapshot"
-            value={csvFolderPortfolioQuery.data.latestCsvPath?.split("/").pop() ?? "Latest CSV"}
-          />
-        </div>
-        <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-3 text-sm text-muted">
-          <div className="font-medium text-text">Connector</div>
-          <div className="mt-1">{csvFolderPortfolioQuery.data.displayName ?? "CSV Folder"}</div>
-          <div className="font-medium text-text">Folder</div>
-          <div className="mt-1 break-all">{csvFolderPortfolioQuery.data.directoryPath}</div>
-          {csvFolderPortfolioQuery.data.latestCsvPath ? (
-            <>
-              <div className="mt-3 font-medium text-text">Latest CSV</div>
-              <div className="mt-1 break-all">{csvFolderPortfolioQuery.data.latestCsvPath}</div>
-            </>
-          ) : null}
-        </div>
-        {csvFolderPortfolioQuery.data.sourceNotice ? (
-          <div
-            className={`rounded-2xl border px-4 py-3 text-sm ${
-              csvFolderPortfolioQuery.data.isStale
-                ? "border-caution/25 bg-caution/8 text-caution"
-                : "border-line/80 bg-panelSoft text-muted"
-            }`}
-          >
-            {csvFolderPortfolioQuery.data.sourceNotice}
+      (() => {
+        const portfolio = csvFolderPortfolioQuery.data;
+        const uniqueHoldingAccounts = Array.from(new Set(portfolio.holdings.map((holding) => holding.accountName.trim()).filter(Boolean)));
+        const showAccountColumn = uniqueHoldingAccounts.length > 1;
+
+        return <div className="grid gap-4">
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <MetricCard label="Total value" value={fmtCurrency(portfolio.totalValue)} />
+            <MetricCard label="Accounts" value={fmtNumber(portfolio.investmentAccountsCount)} />
+            <MetricCard label="Holdings" value={fmtNumber(portfolio.holdingsCount)} />
+            <MetricCard
+              label="Snapshot"
+              value={portfolio.latestCsvPath?.split("/").pop() ?? "Latest CSV"}
+            />
           </div>
-        ) : null}
-        <div className="overflow-x-auto">
-          <table className="min-w-[920px] text-left text-sm">
-            <thead className="text-[11px] uppercase tracking-[0.16em] text-muted">
-              <tr>
-                <th className="pb-3 pr-4">Holding</th>
-                <th className="pb-3 pr-4">Account</th>
-                <th className="pb-3 pr-4">Qty</th>
-                <th className="pb-3 pr-4">Price</th>
-                <th className="pb-3 pr-4">Value</th>
-                <th className="pb-3 pr-4">Cost basis</th>
-                <th className="pb-3">Gain / loss</th>
-              </tr>
-            </thead>
-            <tbody>
-              {csvFolderPortfolioQuery.data.holdings.map((holding) => (
-                <tr key={`${holding.accountId}-${holding.symbol ?? holding.name}`} className="border-t border-line/70 align-top">
-                  <td className="py-3 pr-4">
-                    <div className="font-medium text-text">{holding.symbol ?? holding.name}</div>
-                    <div className="mt-1 text-xs text-muted">{holding.symbol ? holding.name : "CSV holding"}</div>
-                  </td>
-                  <td className="py-3 pr-4">
-                    <div className="text-text">{holding.accountName}</div>
-                  </td>
-                  <td className="py-3 pr-4">{fmtNumber(holding.quantity)}</td>
-                  <td className="py-3 pr-4">{fmtCurrencySmall(holding.price)}</td>
-                  <td className="py-3 pr-4 font-medium text-text">{fmtCurrency(holding.value)}</td>
-                  <td className="py-3 pr-4">{fmtCurrency(holding.costBasis)}</td>
-                  <td className={`py-3 ${pnlTone(holding.gainLoss)}`}>{fmtCurrency(holding.gainLoss)}</td>
+          <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-3 text-sm text-muted">
+            <div className="font-medium text-text">Connector</div>
+            <div className="mt-1">{portfolio.displayName ?? "CSV Folder"}</div>
+            <div className="font-medium text-text">Folder</div>
+            <div className="mt-1 break-all">{portfolio.directoryPath}</div>
+            {portfolio.latestCsvPath ? (
+              <>
+                <div className="mt-3 font-medium text-text">Latest CSV</div>
+                <div className="mt-1 break-all">{portfolio.latestCsvPath}</div>
+              </>
+            ) : null}
+          </div>
+          {portfolio.sourceNotice ? (
+            <div
+              className={`rounded-2xl border px-4 py-3 text-sm ${
+                portfolio.isStale
+                  ? "border-caution/25 bg-caution/8 text-caution"
+                  : "border-line/80 bg-panelSoft text-muted"
+              }`}
+            >
+              {portfolio.sourceNotice}
+            </div>
+          ) : null}
+          <div className="overflow-x-auto">
+            <table className={showAccountColumn ? "min-w-[920px] text-left text-sm" : "min-w-[820px] text-left text-sm"}>
+              <thead className="text-[11px] uppercase tracking-[0.16em] text-muted">
+                <tr>
+                  <th className="pb-3 pr-4">Holding</th>
+                  {showAccountColumn ? <th className="pb-3 pr-4">Account</th> : null}
+                  <th className="pb-3 pr-4">Qty</th>
+                  <th className="pb-3 pr-4">Price</th>
+                  <th className="pb-3 pr-4">Value</th>
+                  <th className="pb-3 pr-4">Cost basis</th>
+                  <th className="pb-3">Gain / loss</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
+              </thead>
+              <tbody>
+                {portfolio.holdings.map((holding) => (
+                  <tr key={`${holding.accountId}-${holding.symbol ?? holding.name}`} className="border-t border-line/70 align-top">
+                    <td className="py-3 pr-4">
+                      <div className="font-medium text-text">{holding.symbol ?? holding.name}</div>
+                      <div className="mt-1 text-xs text-muted">{holding.symbol ? holding.name : "CSV holding"}</div>
+                    </td>
+                    {showAccountColumn ? (
+                      <td className="py-3 pr-4">
+                        <div className="text-text">{holding.accountName}</div>
+                      </td>
+                    ) : null}
+                    <td className="py-3 pr-4">{fmtNumber(holding.quantity)}</td>
+                    <td className="py-3 pr-4">{fmtCurrencySmall(holding.price)}</td>
+                    <td className="py-3 pr-4 font-medium text-text">{fmtCurrency(holding.value)}</td>
+                    <td className="py-3 pr-4">{fmtCurrency(holding.costBasis)}</td>
+                    <td className={`py-3 ${pnlTone(holding.gainLoss)}`}>{fmtCurrency(holding.gainLoss)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>;
+      })()
     ) : (
       <ErrorState message="CSV holdings are unavailable." />
     );
