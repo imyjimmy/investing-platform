@@ -14,6 +14,7 @@ import type {
     OptionOrderRequest,
     OptionChainResponse,
     OptionPositionsResponse,
+    PositionsResponse,
     OrderCancelResponse,
     RiskSummaryResponse,
     ScenarioResponse,
@@ -126,6 +127,7 @@ export const api = {
   coinbaseStatus: () => fetchJson<CoinbaseSourceStatus>("/api/sources/coinbase/status"),
   coinbasePortfolio: () => fetchJson<CoinbasePortfolioResponse>("/api/sources/coinbase/portfolio"),
   cryptoMajors: () => fetchJson<CryptoMarketResponse>("/api/market/crypto-majors"),
+  positions: (accountId?: string) => fetchJson<PositionsResponse>(withAccountId("/api/account/positions", accountId)),
   riskSummary: (accountId?: string) => fetchJson<RiskSummaryResponse>(withAccountId("/api/account/risk-summary", accountId)),
   optionPositions: (accountId?: string) =>
     fetchJson<OptionPositionsResponse>(withAccountId("/api/account/options-positions", accountId)),

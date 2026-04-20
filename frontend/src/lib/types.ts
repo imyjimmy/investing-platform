@@ -50,6 +50,12 @@ export interface Position {
   realizedPnL: number | null;
 }
 
+export interface PositionsResponse {
+  positions: Position[];
+  generatedAt: string;
+  isStale: boolean;
+}
+
 export interface OptionPosition {
   symbol: string;
   expiry: string;

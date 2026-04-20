@@ -24,8 +24,20 @@ import type {
   OptionOrderPreview,
   OptionOrderRequest,
   OptionPosition,
+  Position,
   SubmittedOrder,
 } from "./lib/types";
+import {
+  DASHBOARD_ACCOUNTS,
+  DEFAULT_DASHBOARD_ACCOUNT_KEY,
+  dashboardAccountOwnsRoute,
+  getDashboardAccountByKey,
+  getDashboardAccountForRoute,
+  getDashboardAccountWithCoinbase,
+  type DashboardAccountKey,
+  type PlannedAccountConnectorId,
+} from "./config/dashboardAccounts";
+import { AccountDashboardView } from "./components/AccountDashboardView";
 import { AccountConnectorSection } from "./components/AccountConnectorSection";
 import { EdgarWorkspace } from "./components/EdgarWorkspace";
 import { InvestorPdfsWorkspace } from "./components/InvestorPdfsWorkspace";
@@ -157,6 +169,21 @@ function pnlTone(value: number | null | undefined) {
     return "text-danger";
   }
   return "text-text";
+}
+
+function pnlMetricTone(value: number | null | undefined): "neutral" | "safe" | "danger" {
+  if (value == null || Number.isNaN(value) || value === 0) {
+    return "neutral";
+  }
+  return value > 0 ? "safe" : "danger";
+}
+
+function sumPositionPnl(positions: Position[]) {
+  return positions.reduce((total, position) => total + (position.unrealizedPnL ?? 0) + (position.realizedPnL ?? 0), 0);
+}
+
+function sumOptionPositionPnl(positions: OptionPosition[]) {
+  return positions.reduce((total, position) => total + (position.unrealizedPnL ?? 0) + (position.realizedPnL ?? 0), 0);
 }
 
 function orderRiskLabel(order: OpenOrderExposure) {
@@ -402,7 +429,6 @@ type WorkspaceSurface =
   | "research"
   | "globalSettings";
 type ConnectionHealthTone = "safe" | "caution" | "danger" | "planned";
-type DashboardAccountKey = "vanAken" | "personal";
 
 type AccountConnectorCard = {
   id: string;
@@ -495,37 +521,6 @@ const MARKET_SCREEN_ROWS: MarketRow[] = [
   { symbol: "FCX", name: "Freeport-McMoRan", sector: "Materials", price: 46.1, beta: 1.55, weekChangePct: 2.3, monthChangePct: 5.4, avgDollarVolumeM: 497, marketCapB: 66.0, shortInterestPct: 1.9, optionsable: true, shortable: true },
 ];
 
-const DASHBOARD_ACCOUNTS: Array<{
-  key: DashboardAccountKey;
-  name: string;
-  eyebrow: string;
-  description: string;
-  routeAccountIds: string[];
-}> = [
-  {
-    key: "vanAken",
-    name: "Van Aken",
-    eyebrow: "Van Aken Investments LLC",
-    description: "LLC portfolio, balances, routed orders, and account-owned source sections.",
-    routeAccountIds: ["DUP433635"],
-  },
-  {
-    key: "personal",
-    name: "Personal",
-    eyebrow: "Personal investing account",
-    description: "Personal portfolio, balances, routed orders, and execution context.",
-    routeAccountIds: ["U25316101"],
-  },
-];
-
-function dashboardAccountOwnsRoute(accountKey: DashboardAccountKey, routedAccount: string | null | undefined) {
-  if (!routedAccount) {
-    return false;
-  }
-  const account = DASHBOARD_ACCOUNTS.find((candidate) => candidate.key === accountKey);
-  return Boolean(account?.routeAccountIds.includes(routedAccount.trim().toUpperCase()));
-}
-
 function readVisibleChainGreeks(): ChainGreekKey[] {
   if (typeof window === "undefined") {
     return [...DEFAULT_VISIBLE_CHAIN_GREEKS];
@@ -552,7 +547,7 @@ function App() {
   const [ibkrConnectorCollapsed, setIbkrConnectorCollapsed] = useState(false);
   const [coinbaseConnectorCollapsed, setCoinbaseConnectorCollapsed] = useState(false);
   const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceSurface>("dashboard");
-  const [selectedDashboardAccountKey, setSelectedDashboardAccountKey] = useState<DashboardAccountKey>("vanAken");
+  const [selectedDashboardAccountKey, setSelectedDashboardAccountKey] = useState<DashboardAccountKey>(DEFAULT_DASHBOARD_ACCOUNT_KEY);
   const [dashboardAccountSelectionLocked, setDashboardAccountSelectionLocked] = useState(false);
   const [marketMinBeta, setMarketMinBeta] = useState(1.7);
   const [marketMinPrice, setMarketMinPrice] = useState(10);
@@ -626,6 +621,12 @@ function App() {
   const riskSummaryQuery = useQuery({
     queryKey: ["risk-summary", selectedAccountId],
     queryFn: () => api.riskSummary(selectedAccountId),
+    refetchInterval: false,
+  });
+
+  const positionsQuery = useQuery({
+    queryKey: ["positions", selectedAccountId],
+    queryFn: () => api.positions(selectedAccountId),
     refetchInterval: false,
   });
 
@@ -782,8 +783,7 @@ function App() {
     if (!routedAccount) {
       return;
     }
-    const matchingAccount =
-      DASHBOARD_ACCOUNTS.find((account) => account.routeAccountIds.includes(routedAccount.trim().toUpperCase()))?.key ?? null;
+    const matchingAccount = getDashboardAccountForRoute(routedAccount)?.key ?? null;
     if (matchingAccount && matchingAccount !== selectedDashboardAccountKey) {
       setSelectedDashboardAccountKey(matchingAccount);
     }
@@ -829,6 +829,7 @@ function App() {
   }, [sidebarOpen]);
 
   const risk = riskSummaryQuery.data;
+  const positions = positionsQuery.data?.positions ?? [];
   const optionPositions = optionPositionsQuery.data?.positions ?? [];
   const openOrders = openOrdersQuery.data?.orders ?? [];
   const accountId = risk?.account.accountId ?? connectionQuery.data?.accountId ?? null;
@@ -953,11 +954,12 @@ function App() {
         : coinbaseStatusQuery.data?.authMode === "missing"
           ? "Needs setup"
           : "Degraded";
+  const coinbaseAssignedAccount = getDashboardAccountWithCoinbase();
   const coinbaseConnectorDetail = coinbaseStatusQuery.isLoading
     ? "Loading Coinbase connector status"
     : coinbaseStatusQuery.data?.available
-      ? "Assigned to Van Aken dashboard"
-      : "Connector settings for Van Aken dashboard";
+      ? `Assigned to ${coinbaseAssignedAccount?.name ?? "configured"} dashboard`
+      : `Connector settings for ${coinbaseAssignedAccount?.name ?? "configured"} dashboard`;
   const edgarStatusError = edgarStatusQuery.error instanceof Error ? edgarStatusQuery.error.message : null;
   const investorPdfStatusError = investorPdfStatusQuery.error instanceof Error ? investorPdfStatusQuery.error.message : null;
   const dataModeLabel = connectionQuery.data?.mode === "ibkr" ? "IBKR gateway session" : "Mock snapshot";
@@ -965,12 +967,13 @@ function App() {
   const refreshCadenceLabel = "Conn 10s · Risk 15s · Chain 20s";
   const heartbeatLabel = connectionQuery.data?.lastHeartbeatAt ? formatTimestamp(connectionQuery.data.lastHeartbeatAt) : "No heartbeat";
   const connectionEndpointLabel = connectionQuery.data?.connected ? `Connected on ${connectionEndpoint}` : connectionEndpoint;
-  const selectedDashboardAccount =
-    DASHBOARD_ACCOUNTS.find((account) => account.key === selectedDashboardAccountKey) ?? DASHBOARD_ACCOUNTS[0];
+  const selectedDashboardAccount = getDashboardAccountByKey(selectedDashboardAccountKey);
   const selectedDashboardOwnsRoute = dashboardAccountOwnsRoute(selectedDashboardAccount.key, routedAccount);
   const dashboardRisk = selectedDashboardOwnsRoute ? risk : null;
+  const dashboardPositions = selectedDashboardOwnsRoute ? positions : [];
   const dashboardOptionPositions = selectedDashboardOwnsRoute ? optionPositions : [];
   const dashboardOpenOrders = selectedDashboardOwnsRoute ? openOrders : [];
+  const dashboardTotalPnl = sumPositionPnl(dashboardPositions) + sumOptionPositionPnl(dashboardOptionPositions);
   const dashboardSourceNotice =
     selectedDashboardOwnsRoute || !routedAccount
       ? null
@@ -995,45 +998,40 @@ function App() {
       icon: <PdfLibraryIcon />,
     },
   ];
-  const accountConnectorCardsByKey: Record<DashboardAccountKey, AccountConnectorCard[]> = {
-    vanAken: [
-      {
-        id: "ibkr-van-aken",
-        title: "IBKR route",
-        status: connectionQuery.isLoading
-          ? "Checking"
-          : dashboardAccountOwnsRoute("vanAken", routedAccount)
-            ? risk?.isStale
-              ? "Connected · stale snapshot"
-              : "Connected"
-            : connectionQuery.data?.connected
-              ? "Connected to another route"
-              : "Disconnected",
-        detail: connectionQuery.isLoading
-          ? "Loading broker route state"
-          : dashboardAccountOwnsRoute("vanAken", routedAccount)
-            ? `${connectionEndpoint} · ${executionEnabled ? "execution enabled" : "execution disabled"}`
-            : sourceError ?? (routedAccount ? `Current Gateway route is ${routedAccount}` : `${connectionEndpoint} · waiting for gateway`),
-        tone: connectionQuery.isLoading
-          ? "caution"
-          : dashboardAccountOwnsRoute("vanAken", routedAccount)
-            ? (risk?.isStale ? "caution" : "safe")
-            : connectionQuery.data?.connected
-              ? "caution"
-              : "danger",
-        countsTowardHealth: true,
-        icon: <BrokerIcon />,
-      },
-      {
-        id: "coinbase-van-aken",
-        title: "Coinbase account",
-        status: coinbaseConnectorStatus,
-        detail: coinbaseConnectorDetail,
-        tone: coinbaseConnectorTone,
-        countsTowardHealth: true,
-        icon: <CoinbaseIcon />,
-      },
-      {
+  function buildIbkrConnectorCard(accountKey: DashboardAccountKey): AccountConnectorCard {
+    const ownsRoute = dashboardAccountOwnsRoute(accountKey, routedAccount);
+    return {
+      id: `ibkr-${accountKey}`,
+      title: "IBKR route",
+      status: connectionQuery.isLoading
+        ? "Checking"
+        : ownsRoute
+          ? risk?.isStale
+            ? "Connected · stale snapshot"
+            : "Connected"
+          : connectionQuery.data?.connected
+            ? "Connected to another route"
+            : "Disconnected",
+      detail: connectionQuery.isLoading
+        ? "Loading broker route state"
+        : ownsRoute
+          ? `${connectionEndpoint} · ${executionEnabled ? "execution enabled" : "execution disabled"}`
+          : sourceError ?? (routedAccount ? `Current Gateway route is ${routedAccount}` : `${connectionEndpoint} · waiting for gateway`),
+      tone: connectionQuery.isLoading
+        ? "caution"
+        : ownsRoute
+          ? (risk?.isStale ? "caution" : "safe")
+          : connectionQuery.data?.connected
+            ? "caution"
+            : "danger",
+      countsTowardHealth: true,
+      icon: <BrokerIcon />,
+    };
+  }
+
+  function buildPlannedConnectorCard(connectorId: PlannedAccountConnectorId): AccountConnectorCard {
+    if (connectorId === "plaidFidelity") {
+      return {
         id: "plaid-fidelity",
         title: "Plaid · Fidelity",
         status: "Planned",
@@ -1041,47 +1039,39 @@ function App() {
         tone: "planned",
         countsTowardHealth: false,
         icon: <BankIcon />,
-      },
-      {
-        id: "plaid-chase",
-        title: "Plaid · Chase",
-        status: "Planned",
-        detail: "Future banking cash movement and treasury feed",
-        tone: "planned",
-        countsTowardHealth: false,
-        icon: <BankIcon />,
-      },
-    ],
-    personal: [
-      {
-        id: "ibkr-personal",
-        title: "IBKR route",
-        status: connectionQuery.isLoading
-          ? "Checking"
-          : dashboardAccountOwnsRoute("personal", routedAccount)
-            ? risk?.isStale
-              ? "Connected · stale snapshot"
-              : "Connected"
-            : connectionQuery.data?.connected
-              ? "Connected to another route"
-              : "Disconnected",
-        detail: connectionQuery.isLoading
-          ? "Loading broker route state"
-          : dashboardAccountOwnsRoute("personal", routedAccount)
-            ? `${connectionEndpoint} · ${executionEnabled ? "execution enabled" : "execution disabled"}`
-            : sourceError ?? (routedAccount ? `Current Gateway route is ${routedAccount}` : `${connectionEndpoint} · waiting for gateway`),
-        tone: connectionQuery.isLoading
-          ? "caution"
-          : dashboardAccountOwnsRoute("personal", routedAccount)
-            ? (risk?.isStale ? "caution" : "safe")
-            : connectionQuery.data?.connected
-              ? "caution"
-              : "danger",
-        countsTowardHealth: true,
-        icon: <BrokerIcon />,
-      },
-    ],
-  };
+      };
+    }
+    return {
+      id: "plaid-chase",
+      title: "Plaid · Chase",
+      status: "Planned",
+      detail: "Future banking cash movement and treasury feed",
+      tone: "planned",
+      countsTowardHealth: false,
+      icon: <BankIcon />,
+    };
+  }
+
+  const accountConnectorCardsByKey = Object.fromEntries(
+    DASHBOARD_ACCOUNTS.map((account) => {
+      const connectorCards: AccountConnectorCard[] = [buildIbkrConnectorCard(account.key)];
+      if (account.dashboardSections.coinbase) {
+        connectorCards.push({
+          id: `coinbase-${account.key}`,
+          title: "Coinbase account",
+          status: coinbaseConnectorStatus,
+          detail: coinbaseConnectorDetail,
+          tone: coinbaseConnectorTone,
+          countsTowardHealth: true,
+          icon: <CoinbaseIcon />,
+        });
+      }
+      account.plannedConnectors.forEach((connectorId) => {
+        connectorCards.push(buildPlannedConnectorCard(connectorId));
+      });
+      return [account.key, connectorCards];
+    }),
+  ) as Record<DashboardAccountKey, AccountConnectorCard[]>;
   const accountSettingsConnectors = accountConnectorCardsByKey[selectedDashboardAccount.key];
   const definedConnectors = accountSettingsConnectors.filter((connector) => connector.countsTowardHealth);
   const definedConnectorCount = definedConnectors.length;
@@ -1100,9 +1090,9 @@ function App() {
         accountConnectedConnectors === 0 ? "danger" : accountLiveConnectors === accountDefinedConnectors.length ? "safe" : "caution";
       const label =
         tone === "safe" ? "Ready" : tone === "caution" ? `${accountConnectedConnectors}/${accountDefinedConnectors.length || 0} online` : "Offline";
-      return [account.key, { label, tone }];
+      return [account.key, { label, toneDotClassName: connectionToneDotClass(tone) }];
     }),
-  ) as Record<DashboardAccountKey, { label: string; tone: ConnectionHealthTone }>;
+  ) as Record<DashboardAccountKey, { label: string; toneDotClassName: string }>;
   const accountStatusTone: ConnectionHealthTone =
     connectedConnectorCount === 0 ? "danger" : liveConnectorCount === definedConnectorCount ? "safe" : "caution";
   const accountStatusLabel =
@@ -1942,238 +1932,181 @@ function App() {
     );
   }
 
-  function renderDashboardWorkspace() {
-    return (
-      <div className="chrome-header-frame">
-        <div className="chrome-tabs-shell">
-          <div className="chrome-tab-strip">
-            {DASHBOARD_ACCOUNTS.map((account) => {
-              const status = dashboardAccountStatuses[account.key];
-              return (
-                <button
-                  key={account.key}
-                  aria-current={selectedDashboardAccount.key === account.key ? "page" : undefined}
-                  className={`chrome-tab ${selectedDashboardAccount.key === account.key ? "is-active" : ""}`}
-                  onClick={() => {
-                    setSelectedDashboardAccountKey(account.key);
-                    setDashboardAccountSelectionLocked(true);
-                    setAccountSettingsOpen(false);
-                    setActiveWorkspace("dashboard");
-                  }}
-                  type="button"
-                >
-                  <span className={`chrome-tab-dot ${connectionToneDotClass(status.tone)}`} />
-                  <span className="chrome-tab-title truncate text-sm font-medium">{account.name}</span>
-                  <span className="chrome-tab-badge">{status.label}</span>
-                </button>
-              );
-            })}
-          </div>
+  const dashboardSummaryContent = (
+    <>
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <MetricCard
+          hint={selectedDashboardOwnsRoute && routedAccount ? `${routedAccount} · ${routedAccountPill.label}` : "Current Gateway route is not this account"}
+          label="Total PnL"
+          tone={pnlMetricTone(selectedDashboardOwnsRoute ? dashboardTotalPnl : null)}
+          value={selectedDashboardOwnsRoute ? fmtCurrency(dashboardTotalPnl) : "—"}
+        />
+        <MetricCard
+          hint="Daily account PnL is not exposed in the current broker snapshot yet."
+          label="Today's PnL"
+          value="—"
+        />
+        <MetricCard
+          hint="Month-to-date account PnL is not exposed in the current broker snapshot yet."
+          label="Month PnL"
+          value="—"
+        />
+        <MetricCard label="Net Worth" value={dashboardRisk ? fmtCurrency(dashboardRisk.account.netLiquidation) : "—"} />
+      </div>
+
+      {connectionQuery.data?.lastError || connectError || reconnectError ? (
+        <div className="mt-4 rounded-2xl border border-danger/20 bg-danger/8 px-4 py-3 text-sm text-danger">
+          {connectError ?? reconnectError ?? connectionQuery.data?.lastError}
         </div>
+      ) : null}
+    </>
+  );
 
-        <div className="account-workspace panel rounded-[16px]">
-          <header className="chrome-header-body relative px-10 py-5 lg:px-12">
-            <button
-              aria-expanded={accountSettingsOpen}
-              aria-label={accountSettingsOpen ? "Return to account page" : "Open account settings"}
-              className={`absolute right-10 top-3 inline-flex h-8 w-8 items-center justify-center transition ${
-                accountSettingsOpen ? "rounded-md bg-accent/10 text-accent" : "rounded-md text-muted hover:text-text"
-              }`}
-              onClick={() => setAccountSettingsOpen((value) => !value)}
-              type="button"
-            >
-              <GearIcon />
-            </button>
+  const dashboardSettingsContent = (
+    <Panel
+      action={<div className="text-[11px] uppercase tracking-[0.18em] text-muted">{plannedConnectorCount} planned</div>}
+      title={`${selectedDashboardAccount.name} Connectors`}
+    >
+      <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
+        {accountSettingsConnectors.map((connector) => (
+          <ConnectorStatusCard
+            key={connector.id}
+            detail={connector.detail}
+            icon={connector.icon}
+            status={connector.status}
+            title={connector.title}
+            tone={connector.tone}
+          />
+        ))}
+      </div>
+    </Panel>
+  );
 
-            <div className="flex flex-col gap-4 pr-12">
-              <div>
-                <div className="mb-2 text-[11px] uppercase tracking-[0.32em] text-accent">{selectedDashboardAccount.eyebrow}</div>
-                <div className="flex flex-wrap items-center gap-3">
-                  <h1 className="text-3xl font-semibold tracking-tight text-text">
-                    {accountSettingsOpen ? `${selectedDashboardAccount.name} Settings` : selectedDashboardAccount.name}
-                  </h1>
-                </div>
-                {accountSettingsOpen ? (
-                  <p className="mt-2 max-w-3xl text-sm text-muted">
-                    {`Manage the account-bound connectors and defaults for ${selectedDashboardAccount.name}.`}
-                  </p>
-                ) : (
-                  <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-muted">
-                    <div className="inline-flex items-center gap-2">
-                      <span className={`h-2.5 w-2.5 rounded-full ${connectionToneIndicatorClass(accountStatusTone)}`} />
-                      <span>{accountStatusLabel}</span>
-                    </div>
-                    <div>{dashboardHeaderRouteLabel}</div>
-                  </div>
-                )}
-              </div>
-            </div>
+  const dashboardBodyContent = (
+    <>
+      {dashboardSourceNotice ? (
+        <div className="rounded-2xl border border-caution/25 bg-caution/8 px-4 py-3 text-sm text-caution">
+          {dashboardSourceNotice}
+        </div>
+      ) : null}
 
-            {!accountSettingsOpen ? (
-              <>
-                <div className="mt-6">
-                  <div className="text-[11px] uppercase tracking-[0.22em] text-muted">{selectedDashboardAccount.name} overview</div>
-                  <div className="mt-2 text-lg font-semibold text-text">Account Summary</div>
-                  <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                    <MetricCard
-                      hint={selectedDashboardOwnsRoute && routedAccount ? `${routedAccount} · ${routedAccountPill.label}` : "Current Gateway route is not this account"}
-                      label="Total net worth"
-                      value={dashboardRisk ? fmtCurrency(dashboardRisk.account.netLiquidation) : "—"}
-                    />
-                    <MetricCard label="Available funds" value={dashboardRisk ? fmtCurrency(dashboardRisk.account.availableFunds) : "—"} />
-                    <MetricCard label="Excess liquidity" value={dashboardRisk ? fmtCurrency(dashboardRisk.account.excessLiquidity) : "—"} />
-                    <MetricCard
-                      hint={dashboardRisk?.isStale ? "Snapshot is stale" : selectedDashboardOwnsRoute ? undefined : "Route this account through Gateway to populate broker metrics"}
-                      label="Margin usage"
-                      tone={
-                        dashboardRisk?.account.marginUsagePct == null
-                          ? "neutral"
-                          : dashboardRisk.account.marginUsagePct > 60
-                            ? "danger"
-                            : dashboardRisk.account.marginUsagePct > 40
-                              ? "caution"
-                              : "safe"
-                      }
-                      value={dashboardRisk ? fmtNumber(dashboardRisk.account.marginUsagePct, "%") : "—"}
-                    />
-                  </div>
-                </div>
-
-                {connectionQuery.data?.lastError || connectError || reconnectError ? (
-                  <div className="mt-4 rounded-2xl border border-danger/20 bg-danger/8 px-4 py-3 text-sm text-danger">
-                    {connectError ?? reconnectError ?? connectionQuery.data?.lastError}
-                  </div>
-                ) : null}
-              </>
-            ) : null}
-          </header>
-
-          <div className="account-workspace-body flex flex-col gap-6 px-10 pt-6 pb-6 lg:px-12">
-            {accountSettingsOpen ? (
-              <Panel
-                action={<div className="text-[11px] uppercase tracking-[0.18em] text-muted">{plannedConnectorCount} planned</div>}
-                title={`${selectedDashboardAccount.name} Connectors`}
-              >
-                <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
-                  {accountSettingsConnectors.map((connector) => (
-                    <ConnectorStatusCard
-                      key={connector.id}
-                      detail={connector.detail}
-                      icon={connector.icon}
-                      status={connector.status}
-                      title={connector.title}
-                      tone={connector.tone}
-                    />
-                  ))}
-                </div>
-              </Panel>
-            ) : (
-              <>
-                {dashboardSourceNotice ? (
-                  <div className="rounded-2xl border border-caution/25 bg-caution/8 px-4 py-3 text-sm text-caution">
-                    {dashboardSourceNotice}
-                  </div>
-                ) : null}
-
-                <AccountConnectorSection
-                  collapsed={ibkrConnectorCollapsed}
-                  details={
-                    <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
-                      <InlinePill
-                        label={routedAccount ? `Acct ${routedAccount}` : "Acct pending"}
-                        tone={connectionQuery.data?.connected ? "safe" : "neutral"}
-                      />
-                      <InlinePill label={routedAccountPill.label} tone={routedAccountPill.tone} />
-                    </div>
-                  }
-                  eyebrow="IBKR source"
-                  onToggle={() => setIbkrConnectorCollapsed((value) => !value)}
-                  title="Interactive Brokers"
-                >
-                  <div className="grid gap-6 xl:grid-cols-2">
-                    <div className="grid gap-3">
-                      <h3 className="text-lg font-semibold text-text">Working Orders</h3>
-                      {dashboardOpenOrders.length > 0 ? (
-                        <div className="grid gap-3">
-                          {dashboardOpenOrders.slice(0, 6).map((order) => (
-                            <div key={order.orderId} className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-3">
-                              <div className="flex items-start justify-between gap-3">
-                                <div>
-                                  <div className="text-sm font-medium text-text">
-                                    {order.side} {fmtWholeNumber(order.quantity)} {order.symbol}
-                                    {order.expiry && order.strike && order.right ? ` ${order.expiry} ${fmtNumber(order.strike)}${order.right}` : ""}
-                                  </div>
-                                  <div className="mt-1 text-sm text-muted">
-                                    {order.orderType}
-                                    {order.limitPrice != null ? ` ${fmtCurrencySmall(order.limitPrice)}` : ""}
-                                    {" · "}
-                                    {order.status}
-                                  </div>
-                                </div>
-                                <div className="text-sm text-muted">{fmtCurrency(order.estimatedCapitalImpact)}</div>
-                              </div>
-                            </div>
-                          ))}
+      <AccountConnectorSection
+        collapsed={ibkrConnectorCollapsed}
+        details={
+          <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
+            <InlinePill
+              label={routedAccount ? `Acct ${routedAccount}` : "Acct pending"}
+              tone={connectionQuery.data?.connected ? "safe" : "neutral"}
+            />
+            <InlinePill label={routedAccountPill.label} tone={routedAccountPill.tone} />
+          </div>
+        }
+        eyebrow="IBKR source"
+        onToggle={() => setIbkrConnectorCollapsed((value) => !value)}
+        title="Interactive Brokers"
+      >
+        <div className="grid gap-6 xl:grid-cols-2">
+          <div className="grid gap-3">
+            <h3 className="text-lg font-semibold text-text">Working Orders</h3>
+            {dashboardOpenOrders.length > 0 ? (
+              <div className="grid gap-3">
+                {dashboardOpenOrders.slice(0, 6).map((order) => (
+                  <div key={order.orderId} className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-medium text-text">
+                          {order.side} {fmtWholeNumber(order.quantity)} {order.symbol}
+                          {order.expiry && order.strike && order.right ? ` ${order.expiry} ${fmtNumber(order.strike)}${order.right}` : ""}
                         </div>
-                      ) : (
-                        <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-4 text-sm text-muted">
-                          {selectedDashboardOwnsRoute ? "No working orders in the routed IBKR account." : "Route this account through Gateway to view IBKR working orders here."}
+                        <div className="mt-1 text-sm text-muted">
+                          {order.orderType}
+                          {order.limitPrice != null ? ` ${fmtCurrencySmall(order.limitPrice)}` : ""}
+                          {" · "}
+                          {order.status}
                         </div>
-                      )}
-                    </div>
-
-                    <div className="grid gap-3">
-                      <h3 className="text-lg font-semibold text-text">Open Option Positions</h3>
-                      {dashboardOptionPositions.length > 0 ? (
-                        <div className="grid gap-3">
-                          {dashboardOptionPositions.slice(0, 6).map((position) => (
-                            <div key={`${position.symbol}-${position.expiry}-${position.strike}-${position.right}`} className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-3">
-                              <div className="flex items-start justify-between gap-3">
-                                <div>
-                                  <div className="text-sm font-medium text-text">
-                                    {position.symbol} {position.expiry} {fmtNumber(position.strike)}{position.right}
-                                  </div>
-                                  <div className="mt-1 text-sm text-muted">
-                                    {position.shortOrLong} {fmtWholeNumber(Math.abs(position.quantity))} · delta {fmtGreek(position.delta)}
-                                  </div>
-                                </div>
-                                <div className={`text-sm font-medium ${pnlTone(position.unrealizedPnL)}`}>{fmtCurrency(position.unrealizedPnL)}</div>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-4 text-sm text-muted">
-                          {selectedDashboardOwnsRoute ? "No open option positions in the routed IBKR account." : "Route this account through Gateway to view IBKR option positions here."}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </AccountConnectorSection>
-
-                {selectedDashboardAccount.key === "vanAken" ? (
-                  <AccountConnectorSection
-                    collapsed={coinbaseConnectorCollapsed}
-                    details={
-                      <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
-                        <InlinePill
-                          label={coinbaseConnectorStatus}
-                          tone={coinbaseConnectorTone === "danger" ? "danger" : coinbaseConnectorTone === "safe" ? "safe" : "neutral"}
-                        />
                       </div>
-                    }
-                    eyebrow="Coinbase source"
-                    onToggle={() => setCoinbaseConnectorCollapsed((value) => !value)}
-                    title="Coinbase"
-                  >
-                    {renderCoinbasePanelContent()}
-                  </AccountConnectorSection>
-                ) : null}
-              </>
+                      <div className="text-sm text-muted">{fmtCurrency(order.estimatedCapitalImpact)}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-4 text-sm text-muted">
+                {selectedDashboardOwnsRoute ? "No working orders in the routed IBKR account." : "Route this account through Gateway to view IBKR working orders here."}
+              </div>
+            )}
+          </div>
+
+          <div className="grid gap-3">
+            <h3 className="text-lg font-semibold text-text">Open Option Positions</h3>
+            {dashboardOptionPositions.length > 0 ? (
+              <div className="grid gap-3">
+                {dashboardOptionPositions.slice(0, 6).map((position) => (
+                  <div key={`${position.symbol}-${position.expiry}-${position.strike}-${position.right}`} className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-medium text-text">
+                          {position.symbol} {position.expiry} {fmtNumber(position.strike)}{position.right}
+                        </div>
+                        <div className="mt-1 text-sm text-muted">
+                          {position.shortOrLong} {fmtWholeNumber(Math.abs(position.quantity))} · delta {fmtGreek(position.delta)}
+                        </div>
+                      </div>
+                      <div className={`text-sm font-medium ${pnlTone(position.unrealizedPnL)}`}>{fmtCurrency(position.unrealizedPnL)}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-4 text-sm text-muted">
+                {selectedDashboardOwnsRoute ? "No open option positions in the routed IBKR account." : "Route this account through Gateway to view IBKR option positions here."}
+              </div>
             )}
           </div>
         </div>
-      </div>
+      </AccountConnectorSection>
+
+      {selectedDashboardAccount.dashboardSections.coinbase ? (
+        <AccountConnectorSection
+          collapsed={coinbaseConnectorCollapsed}
+          details={
+            <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
+              <InlinePill
+                label={coinbaseConnectorStatus}
+                tone={coinbaseConnectorTone === "danger" ? "danger" : coinbaseConnectorTone === "safe" ? "safe" : "neutral"}
+              />
+            </div>
+          }
+          eyebrow="Coinbase source"
+          onToggle={() => setCoinbaseConnectorCollapsed((value) => !value)}
+          title="Coinbase"
+        >
+          {renderCoinbasePanelContent()}
+        </AccountConnectorSection>
+      ) : null}
+    </>
+  );
+
+  function renderDashboardWorkspace() {
+    return (
+      <AccountDashboardView
+        accountSettingsOpen={accountSettingsOpen}
+        accountStatuses={dashboardAccountStatuses}
+        bodyContent={dashboardBodyContent}
+        headerRouteLabel={dashboardHeaderRouteLabel}
+        headerStatusIndicatorClassName={connectionToneIndicatorClass(accountStatusTone)}
+        headerStatusLabel={accountStatusLabel}
+        onSelectAccount={(accountKey) => {
+          setSelectedDashboardAccountKey(accountKey);
+          setDashboardAccountSelectionLocked(true);
+          setAccountSettingsOpen(false);
+          setActiveWorkspace("dashboard");
+        }}
+        onToggleSettings={() => setAccountSettingsOpen((value) => !value)}
+        selectedAccountKey={selectedDashboardAccount.key}
+        settingsContent={dashboardSettingsContent}
+        summaryContent={dashboardSummaryContent}
+      />
     );
   }
 
