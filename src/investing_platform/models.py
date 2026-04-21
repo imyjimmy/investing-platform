@@ -546,6 +546,7 @@ class FilesystemConnectorStatus(DashboardModel):
     detail: str
     displayName: str | None = None
     directoryPath: str | None = None
+    detectFooter: bool = False
     csvFilesCount: int = 0
     latestCsvPath: str | None = None
     lastSuccessfulSyncAt: datetime | None = None
@@ -555,6 +556,7 @@ class FilesystemConnectorStatus(DashboardModel):
 class FilesystemConnectorConfigRequest(DashboardModel):
     displayName: str
     directoryPath: str
+    detectFooter: bool = True
 
 
 class FilesystemInvestmentAccount(DashboardModel):

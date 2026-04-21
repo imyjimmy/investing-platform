@@ -44,6 +44,7 @@ import { CONNECTOR_CATALOG, getConnectorCatalogEntry, type ConnectorCatalogId } 
 import { AccountDashboardView } from "./components/AccountDashboardView";
 import { AccountConnectorSection } from "./components/AccountConnectorSection";
 import { CoinbaseAccountSource } from "./components/account-sources/CoinbaseAccountSource";
+import { FilesystemAccountSourceContent } from "./components/account-sources/FilesystemAccountSourceContent";
 import { FilesystemAccountSourceList } from "./components/account-sources/FilesystemAccountSourceList";
 import { EdgarWorkspace } from "./components/EdgarWorkspace";
 import { InvestorPdfsWorkspace } from "./components/InvestorPdfsWorkspace";
@@ -588,6 +589,7 @@ type AccountSourceSummary = AccountConnectorCard & {
 type ConnectorDraftState = {
   displayName: string;
   directoryPath: string;
+  detectFooter: boolean;
 };
 
 type ChainGreekKey = "iv" | "delta" | "gamma" | "theta" | "vega" | "rho";
@@ -891,14 +893,16 @@ function App() {
       connectorId,
       displayName,
       directoryPath,
+      detectFooter,
       sourceId,
     }: {
       accountKey: DashboardAccountKey;
       connectorId: ConnectorCatalogId;
       displayName: string;
       directoryPath: string;
+      detectFooter: boolean;
       sourceId?: string;
-    }) => api.filesystemConnectorConfigure(accountKey, connectorId, { displayName, directoryPath }, sourceId),
+    }) => api.filesystemConnectorConfigure(accountKey, connectorId, { displayName, directoryPath, detectFooter }, sourceId),
     onSuccess: async (_data, variables) => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["filesystem-connector-statuses", variables.accountKey] }),
@@ -1473,7 +1477,7 @@ function App() {
     });
 
   function getConnectorDraft(connectorId: ConnectorCatalogId): ConnectorDraftState {
-    return connectorDraftsById[connectorId] ?? { displayName: "", directoryPath: "" };
+    return connectorDraftsById[connectorId] ?? { displayName: "", directoryPath: "", detectFooter: true };
   }
 
   function updateConnectorDraft(connectorId: ConnectorCatalogId, patch: Partial<ConnectorDraftState>) {
@@ -1482,6 +1486,7 @@ function App() {
       [connectorId]: {
         displayName: patch.displayName ?? current[connectorId]?.displayName ?? "",
         directoryPath: patch.directoryPath ?? current[connectorId]?.directoryPath ?? "",
+        detectFooter: patch.detectFooter ?? current[connectorId]?.detectFooter ?? true,
       },
     }));
   }
@@ -2534,6 +2539,7 @@ function App() {
         connectorId,
         displayName,
         directoryPath,
+        detectFooter: connectorId === CSV_FOLDER_CONNECTOR_ID ? draft.detectFooter : false,
       });
       setConnectorPickerOpen(false);
       setConnectorSetupError(null);
@@ -2569,168 +2575,21 @@ function App() {
     const documentFolder = filesystemDocumentFolderBySourceId[sourceId];
     const documentFolderError = filesystemDocumentFolderErrorBySourceId[sourceId] ?? null;
     const documentFolderLoading = filesystemDocumentFolderLoadingBySourceId[sourceId] ?? false;
-    const connector = status ? getConnectorCatalogEntry(status.connectorId as ConnectorCatalogId) : null;
 
-    return localBackendUnavailable ? (
-      <ErrorState
-        message={connectionQueryError ?? filesystemConnectorStatusesError ?? portfolioError ?? documentFolderError ?? "The local backend is unavailable."}
+    return (
+      <FilesystemAccountSourceContent
+        documentFolder={documentFolder}
+        documentFolderError={documentFolderError}
+        documentFolderLoading={documentFolderLoading}
+        localBackendError={connectionQueryError}
+        localBackendUnavailable={localBackendUnavailable}
+        portfolio={portfolio}
+        portfolioError={portfolioError}
+        portfolioLoading={portfolioLoading}
+        status={status}
+        statusesError={filesystemConnectorStatusesError}
+        statusesLoading={filesystemConnectorStatusesQuery.isLoading}
       />
-    ) : filesystemConnectorStatusesQuery.isLoading ? (
-      <div className="text-sm text-muted">Checking filesystem connectors...</div>
-    ) : !status ? (
-      <ErrorState message="This filesystem connector source could not be found." />
-    ) : !status.available ? (
-      <div className="grid gap-4">
-        <div className="grid gap-4 md:grid-cols-3">
-          <MetricCard label="Connector" value="Not configured" />
-          <MetricCard label="Provider" value={connector?.provider ?? "Filesystem"} />
-          <MetricCard label="Folder" value="Add a path in Settings" />
-        </div>
-        <ErrorState message={filesystemConnectorStatusesError ?? status.detail ?? "Filesystem connector is unavailable."} />
-      </div>
-    ) : !status.connected ? (
-      <div className="grid gap-4">
-        <div className="grid gap-4 md:grid-cols-3">
-          <MetricCard label="Connector" value={status.displayName ?? connector?.dashboardTitle ?? "CSV Folder"} />
-          <MetricCard label="Provider" value={connector?.provider ?? "Filesystem"} />
-          <MetricCard label="Folder" value={status.directoryPath ?? "Not set"} />
-        </div>
-        <ErrorState message={status.detail} />
-      </div>
-    ) : status.connectorId === PDF_FOLDER_CONNECTOR_ID ? (
-      documentFolderLoading ? (
-        <div className="text-sm text-muted">Loading PDF library...</div>
-      ) : documentFolderError ? (
-        <ErrorState message={documentFolderError} />
-      ) : documentFolder ? (
-        <div className="grid gap-4">
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            <MetricCard label="PDFs" value={fmtNumber(documentFolder.pdfFilesCount)} />
-            <MetricCard label="Folder" value={documentFolder.displayName ?? connector?.dashboardTitle ?? "PDF Folder"} />
-            <MetricCard label="Latest PDF" value={documentFolder.latestPdfPath?.split("/").pop() ?? "Latest PDF"} />
-            <MetricCard label="Updated" value={formatTimestamp(documentFolder.generatedAt)} />
-          </div>
-          <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-3 text-sm text-muted">
-            <div className="font-medium text-text">Folder</div>
-            <div className="mt-1 break-all">{documentFolder.directoryPath}</div>
-            {documentFolder.latestPdfPath ? (
-              <>
-                <div className="mt-3 font-medium text-text">Latest PDF</div>
-                <div className="mt-1 break-all">{documentFolder.latestPdfPath}</div>
-              </>
-            ) : null}
-          </div>
-          {documentFolder.sourceNotice ? (
-            <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-3 text-sm text-muted">{documentFolder.sourceNotice}</div>
-          ) : null}
-          <div className="overflow-x-auto">
-            <table className="min-w-[820px] text-left text-sm">
-              <thead className="text-[11px] uppercase tracking-[0.16em] text-muted">
-                <tr>
-                  <th className="pb-3 pr-4">PDF</th>
-                  <th className="pb-3 pr-4">Modified</th>
-                  <th className="pb-3">Size</th>
-                </tr>
-              </thead>
-              <tbody>
-                {documentFolder.files.map((file) => (
-                  <tr key={file.path} className="border-t border-line/70 align-top">
-                    <td className="py-3 pr-4">
-                      <div className="font-medium text-text">{file.name}</div>
-                      <div className="mt-1 break-all text-xs text-muted">{file.path}</div>
-                    </td>
-                    <td className="py-3 pr-4">{formatTimestamp(file.modifiedAt)}</td>
-                    <td className="py-3">{fmtNumber(file.sizeBytes / 1024)} KB</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      ) : (
-        <ErrorState message="PDF files are unavailable." />
-      )
-    ) : portfolioLoading ? (
-      <div className="text-sm text-muted">Loading CSV holdings...</div>
-    ) : portfolioError ? (
-      <ErrorState message={portfolioError} />
-    ) : portfolio ? (
-      (() => {
-        const uniqueHoldingAccounts = Array.from(new Set(portfolio.holdings.map((holding) => holding.accountName.trim()).filter(Boolean)));
-        const showAccountColumn = uniqueHoldingAccounts.length > 1;
-
-        return <div className="grid gap-4">
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            <MetricCard label="Total value" value={fmtCurrency(portfolio.totalValue)} />
-            <MetricCard label="Accounts" value={fmtNumber(portfolio.investmentAccountsCount)} />
-            <MetricCard label="Holdings" value={fmtNumber(portfolio.holdingsCount)} />
-            <MetricCard
-              label="Snapshot"
-              value={portfolio.latestCsvPath?.split("/").pop() ?? "Latest CSV"}
-            />
-          </div>
-          <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-3 text-sm text-muted">
-            <div className="font-medium text-text">Connector</div>
-            <div className="mt-1">{portfolio.displayName ?? "CSV Folder"}</div>
-            <div className="font-medium text-text">Folder</div>
-            <div className="mt-1 break-all">{portfolio.directoryPath}</div>
-            {portfolio.latestCsvPath ? (
-              <>
-                <div className="mt-3 font-medium text-text">Latest CSV</div>
-                <div className="mt-1 break-all">{portfolio.latestCsvPath}</div>
-              </>
-            ) : null}
-          </div>
-          {portfolio.sourceNotice ? (
-            <div
-              className={`rounded-2xl border px-4 py-3 text-sm ${
-                portfolio.isStale
-                  ? "border-caution/25 bg-caution/8 text-caution"
-                  : "border-line/80 bg-panelSoft text-muted"
-              }`}
-            >
-              {portfolio.sourceNotice}
-            </div>
-          ) : null}
-          <div className="overflow-x-auto">
-            <table className={showAccountColumn ? "min-w-[920px] text-left text-sm" : "min-w-[820px] text-left text-sm"}>
-              <thead className="text-[11px] uppercase tracking-[0.16em] text-muted">
-                <tr>
-                  <th className="pb-3 pr-4">Holding</th>
-                  {showAccountColumn ? <th className="pb-3 pr-4">Account</th> : null}
-                  <th className="pb-3 pr-4">Qty</th>
-                  <th className="pb-3 pr-4">Price</th>
-                  <th className="pb-3 pr-4">Value</th>
-                  <th className="pb-3 pr-4">Cost basis</th>
-                  <th className="pb-3">Gain / loss</th>
-                </tr>
-              </thead>
-              <tbody>
-                {portfolio.holdings.map((holding) => (
-                  <tr key={`${holding.accountId}-${holding.symbol ?? holding.name}`} className="border-t border-line/70 align-top">
-                    <td className="py-3 pr-4">
-                      <div className="font-medium text-text">{holding.symbol ?? holding.name}</div>
-                      <div className="mt-1 text-xs text-muted">{holding.symbol ? holding.name : "CSV holding"}</div>
-                    </td>
-                    {showAccountColumn ? (
-                      <td className="py-3 pr-4">
-                        <div className="text-text">{holding.accountName}</div>
-                      </td>
-                    ) : null}
-                    <td className="py-3 pr-4">{fmtNumber(holding.quantity)}</td>
-                    <td className="py-3 pr-4">{fmtCurrencySmall(holding.price)}</td>
-                    <td className="py-3 pr-4 font-medium text-text">{fmtCurrency(holding.value)}</td>
-                    <td className="py-3 pr-4">{fmtCurrency(holding.costBasis)}</td>
-                    <td className={`py-3 ${pnlTone(holding.gainLoss)}`}>{fmtCurrency(holding.gainLoss)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>;
-      })()
-    ) : (
-      <ErrorState message="CSV holdings are unavailable." />
     );
   }
 
@@ -2866,6 +2725,17 @@ function App() {
                           </button>
                         </div>
                       </label>
+                      {connector.id === CSV_FOLDER_CONNECTOR_ID ? (
+                        <label className="flex items-center gap-3 rounded-xl border border-line/80 bg-panelSoft px-4 py-3 text-sm text-text">
+                          <input
+                            checked={connectorDraft.detectFooter}
+                            className="h-4 w-4 accent-accent"
+                            onChange={(event) => updateConnectorDraft(connector.id, { detectFooter: event.target.checked })}
+                            type="checkbox"
+                          />
+                          <span>Detect and ignore footer</span>
+                        </label>
+                      ) : null}
                       <div className="flex items-center justify-between gap-3">
                         <div className="text-xs text-muted">
                           {connector.id === CSV_FOLDER_CONNECTOR_ID

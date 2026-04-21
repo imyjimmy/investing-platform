@@ -450,6 +450,7 @@ export interface FilesystemConnectorStatus {
   detail: string;
   displayName: string | null;
   directoryPath: string | null;
+  detectFooter: boolean;
   csvFilesCount: number;
   latestCsvPath: string | null;
   lastSuccessfulSyncAt: string | null;
@@ -459,6 +460,7 @@ export interface FilesystemConnectorStatus {
 export interface FilesystemConnectorConfigRequest {
   displayName: string;
   directoryPath: string;
+  detectFooter: boolean;
 }
 
 export interface FilesystemInvestmentAccount {

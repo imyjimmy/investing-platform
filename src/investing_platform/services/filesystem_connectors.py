@@ -46,6 +46,7 @@ class StoredFilesystemConnector:
     connector_id: str
     display_name: str
     directory_path: str
+    detect_footer: bool
     created_at: datetime
     updated_at: datetime
 
@@ -95,6 +96,7 @@ class FilesystemConnectorService:
                 detail=f"Saved folder is unavailable: {directory}",
                 displayName=record.display_name,
                 directoryPath=str(directory),
+                detectFooter=record.detect_footer,
                 csvFilesCount=0,
                 latestCsvPath=None,
                 lastSuccessfulSyncAt=last_successful_sync_at,
@@ -111,6 +113,7 @@ class FilesystemConnectorService:
                 detail="Folder is connected, but no CSV files were found yet.",
                 displayName=record.display_name,
                 directoryPath=str(directory),
+                detectFooter=record.detect_footer,
                 csvFilesCount=0,
                 latestCsvPath=None,
                 lastSuccessfulSyncAt=last_successful_sync_at,
@@ -127,6 +130,7 @@ class FilesystemConnectorService:
                 detail="Folder is connected, but no PDF files were found yet.",
                 displayName=record.display_name,
                 directoryPath=str(directory),
+                detectFooter=record.detect_footer,
                 csvFilesCount=0,
                 latestCsvPath=None,
                 lastSuccessfulSyncAt=last_successful_sync_at,
@@ -147,6 +151,7 @@ class FilesystemConnectorService:
             ),
             displayName=record.display_name,
             directoryPath=str(directory),
+            detectFooter=record.detect_footer,
             csvFilesCount=len(csv_files) if record.connector_id == CSV_FOLDER_CONNECTOR_ID else len(pdf_files),
             latestCsvPath=latest_csv_path if record.connector_id == CSV_FOLDER_CONNECTOR_ID else latest_pdf_path,
             lastSuccessfulSyncAt=last_successful_sync_at,
@@ -179,6 +184,7 @@ class FilesystemConnectorService:
             connector_id=connector_id,
             display_name=display_name,
             directory_path=str(directory),
+            detect_footer=request.detectFooter if connector_id == CSV_FOLDER_CONNECTOR_ID else False,
             created_at=existing.created_at if existing else now,
             updated_at=now,
         )
@@ -207,7 +213,7 @@ class FilesystemConnectorService:
 
         latest_csv = csv_files[0]
         try:
-            rows, source_notice = _read_snapshot_rows(latest_csv)
+            rows, source_notice = _read_snapshot_rows(latest_csv, detect_footer=record.detect_footer)
         except Exception as exc:
             self._remember_error(cache_key, str(exc))
             raise
@@ -220,7 +226,7 @@ class FilesystemConnectorService:
             account_id = normalized.get("account_id") or normalized.get("account_name") or "imported-account"
             account_name = normalized.get("account_name") or normalized.get("account_id") or "Imported account"
             symbol = normalized.get("symbol")
-            name = normalized.get("name") or symbol or "Holding"
+            raw_name = normalized.get("name") or symbol
 
             quantity = _parse_number(normalized.get("quantity"))
             price = _parse_number(normalized.get("price"))
@@ -230,12 +236,10 @@ class FilesystemConnectorService:
             if gain_loss is None and value is not None and cost_basis is not None:
                 gain_loss = round(value - cost_basis, 2)
 
-            if not any(
-                item is not None and item != ""
-                for item in (symbol, name, normalized.get("value"), normalized.get("quantity"), normalized.get("cost_basis"))
-            ):
+            if not any(item is not None and item != "" for item in (symbol, raw_name, normalized.get("value"), normalized.get("quantity"), normalized.get("cost_basis"))):
                 continue
 
+            name = raw_name or "Holding"
             if name.strip().lower() in {"account total", "totals", "total"}:
                 continue
 
@@ -373,6 +377,7 @@ class FilesystemConnectorService:
                     connector_id=connector_id,
                     display_name=str(raw.get("display_name") or connector_id).strip() or connector_id,
                     directory_path=directory_path,
+                    detect_footer=_parse_bool(raw.get("detect_footer"), default=connector_id == CSV_FOLDER_CONNECTOR_ID),
                     created_at=_parse_datetime(raw.get("created_at")) or datetime.now(UTC),
                     updated_at=_parse_datetime(raw.get("updated_at")) or datetime.now(UTC),
                 )
@@ -395,6 +400,7 @@ class FilesystemConnectorService:
             "connector_id": record.connector_id,
             "display_name": record.display_name,
             "directory_path": record.directory_path,
+            "detect_footer": record.detect_footer,
             "created_at": record.created_at.isoformat(),
             "updated_at": record.updated_at.isoformat(),
         }
@@ -429,7 +435,7 @@ class FilesystemConnectorService:
             suffix += 1
 
 
-def _read_snapshot_rows(path: Path) -> tuple[list[dict[str, str]], str | None]:
+def _read_snapshot_rows(path: Path, *, detect_footer: bool = True) -> tuple[list[dict[str, str]], str | None]:
     content = path.read_text(encoding="utf-8-sig")
     lines = content.splitlines()
     if not lines:
@@ -450,10 +456,41 @@ def _read_snapshot_rows(path: Path) -> tuple[list[dict[str, str]], str | None]:
 
     reader = csv.DictReader(io.StringIO("\n".join(selected_lines)))
     rows = [{str(key or "").strip(): str(value or "").strip() for key, value in row.items()} for row in reader]
-    notice = None
+    footer_rows_count = 0
+    if detect_footer:
+        rows, footer_rows_count = _strip_footer_rows(rows)
+
+    notices: list[str] = []
     if header_index > 0:
-        notice = f"Skipped {header_index} non-tabular lines before the CSV header."
-    return rows, notice
+        notices.append(f"Skipped {header_index} non-tabular lines before the CSV header.")
+    if footer_rows_count:
+        notices.append(f"Detected and ignored {footer_rows_count} footer rows.")
+    return rows, " ".join(notices) if notices else None
+
+
+def _strip_footer_rows(rows: list[dict[str, str]]) -> tuple[list[dict[str, str]], int]:
+    seen_data_row = False
+    for index, row in enumerate(rows):
+        if _is_snapshot_data_row(row):
+            seen_data_row = True
+            continue
+        if seen_data_row and not any(_is_snapshot_data_row(candidate) for candidate in rows[index + 1 :]):
+            return rows[:index], len(rows) - index
+    return rows, 0
+
+
+def _is_snapshot_data_row(row: dict[str, str]) -> bool:
+    normalized = _normalize_row(row)
+    return any(
+        item is not None and item != ""
+        for item in (
+            normalized.get("symbol"),
+            normalized.get("name"),
+            normalized.get("value"),
+            normalized.get("quantity"),
+            normalized.get("cost_basis"),
+        )
+    )
 
 
 def _header_score(cells: list[str]) -> int:
@@ -514,6 +551,18 @@ def _parse_datetime(value: object) -> datetime | None:
         return datetime.fromisoformat(value)
     except ValueError:
         return None
+
+
+def _parse_bool(value: object, *, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    return default
 
 
 def _normalize_account_key(account_key: str) -> str:
