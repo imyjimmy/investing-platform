@@ -29,6 +29,7 @@ import type {
   OptionPosition,
   Position,
   SubmittedOrder,
+  TickerOverviewResponse,
 } from "./lib/types";
 import {
   DASHBOARD_ACCOUNTS,
@@ -42,6 +43,8 @@ import {
 import { CONNECTOR_CATALOG, getConnectorCatalogEntry, type ConnectorCatalogId } from "./config/connectorCatalog";
 import { AccountDashboardView } from "./components/AccountDashboardView";
 import { AccountConnectorSection } from "./components/AccountConnectorSection";
+import { CoinbaseAccountSource } from "./components/account-sources/CoinbaseAccountSource";
+import { FilesystemAccountSourceList } from "./components/account-sources/FilesystemAccountSourceList";
 import { EdgarWorkspace } from "./components/EdgarWorkspace";
 import { InvestorPdfsWorkspace } from "./components/InvestorPdfsWorkspace";
 import { MetricCard } from "./components/MetricCard";
@@ -56,6 +59,18 @@ const currency = new Intl.NumberFormat("en-US", {
 const currencySmall = new Intl.NumberFormat("en-US", {
   style: "currency",
   currency: "USD",
+  maximumFractionDigits: 2,
+});
+
+const compactCurrency = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  notation: "compact",
+  maximumFractionDigits: 2,
+});
+
+const compactNumber = new Intl.NumberFormat("en-US", {
+  notation: "compact",
   maximumFractionDigits: 2,
 });
 
@@ -94,6 +109,44 @@ function fmtNumber(value: number | null | undefined, suffix = "") {
   return `${number.format(value)}${suffix}`;
 }
 
+function fmtCompactCurrency(value: number | null | undefined) {
+  if (value == null || Number.isNaN(value)) {
+    return "—";
+  }
+  return compactCurrency.format(value);
+}
+
+function fmtCompactNumber(value: number | null | undefined) {
+  if (value == null || Number.isNaN(value)) {
+    return "—";
+  }
+  return compactNumber.format(value);
+}
+
+function fmtSignedPct(value: number | null | undefined) {
+  if (value == null || Number.isNaN(value)) {
+    return null;
+  }
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${number.format(value)}%`;
+}
+
+function fmtParenSignedPct(value: number | null | undefined) {
+  const formatted = fmtSignedPct(value);
+  return formatted ? `(${formatted})` : null;
+}
+
+function fmtDateShort(value: string | null | undefined) {
+  if (!value) {
+    return "—";
+  }
+  const parsed = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(parsed.valueOf())) {
+    return value;
+  }
+  return parsed.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
+}
+
 function fmtGreek(value: number | null | undefined, suffix = "") {
   if (value == null || Number.isNaN(value)) {
     return "—";
@@ -106,6 +159,10 @@ function fmtWholeNumber(value: number | null | undefined) {
     return "—";
   }
   return wholeNumber.format(value);
+}
+
+function fmtCoverageCount(available: number, total: number) {
+  return `${wholeNumber.format(available)}/${wholeNumber.format(total)}`;
 }
 
 function fmtBillions(value: number | null | undefined) {
@@ -544,6 +601,8 @@ type ChainGreekOption = {
 };
 
 const CHAIN_GREEK_STORAGE_KEY = "options-chain-visible-greeks";
+const CHAIN_MARK_STORAGE_KEY = "options-chain-show-mark";
+const OPTIONS_TRADE_RAIL_STORAGE_KEY = "options-trade-rail-open";
 const DEFAULT_VISIBLE_CHAIN_GREEKS: ChainGreekKey[] = ["iv", "delta", "gamma", "theta", "vega"];
 const CHAIN_GREEK_OPTIONS: ChainGreekOption[] = [
   {
@@ -636,6 +695,36 @@ function readVisibleChainGreeks(): ChainGreekKey[] {
   }
 }
 
+function readShowChainMark(): boolean {
+  if (typeof window === "undefined") {
+    return true;
+  }
+  try {
+    const raw = window.localStorage.getItem(CHAIN_MARK_STORAGE_KEY);
+    if (raw == null) {
+      return true;
+    }
+    return raw === "true";
+  } catch {
+    return true;
+  }
+}
+
+function readOptionsTradeRailOpen(): boolean {
+  if (typeof window === "undefined") {
+    return true;
+  }
+  try {
+    const raw = window.localStorage.getItem(OPTIONS_TRADE_RAIL_STORAGE_KEY);
+    if (raw == null) {
+      return true;
+    }
+    return raw === "true";
+  } catch {
+    return true;
+  }
+}
+
 function App() {
   const queryClient = useQueryClient();
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -659,6 +748,8 @@ function App() {
   const [marketShortableOnly, setMarketShortableOnly] = useState(false);
   const [chainSymbol, setChainSymbol] = useState("NVDA");
   const [chainSymbolInput, setChainSymbolInput] = useState("NVDA");
+  const [showChainMark, setShowChainMark] = useState<boolean>(() => readShowChainMark());
+  const [optionsTradeRailOpen, setOptionsTradeRailOpen] = useState<boolean>(() => readOptionsTradeRailOpen());
   const [visibleChainGreeks, setVisibleChainGreeks] = useState<ChainGreekKey[]>(() => readVisibleChainGreeks());
   const [selectedAccountId, setSelectedAccountId] = useState<string | undefined>(undefined);
   const [selectedExpiry, setSelectedExpiry] = useState<string | undefined>(undefined);
@@ -768,6 +859,13 @@ function App() {
   const chainQuery = useQuery({
     queryKey: ["chain", chainSymbol, selectedExpiry],
     queryFn: () => api.chain(chainSymbol, selectedExpiry),
+    refetchInterval: false,
+    staleTime: 120_000,
+  });
+  const tickerOverviewQuery = useQuery({
+    queryKey: ["ticker-overview", chainSymbol],
+    queryFn: () => api.tickerOverview(chainSymbol),
+    enabled: Boolean(chainSymbol.trim()),
     refetchInterval: false,
     staleTime: 120_000,
   });
@@ -907,6 +1005,20 @@ function App() {
   }, [visibleChainGreeks]);
 
   useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem(CHAIN_MARK_STORAGE_KEY, String(showChainMark));
+  }, [showChainMark]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem(OPTIONS_TRADE_RAIL_STORAGE_KEY, String(optionsTradeRailOpen));
+  }, [optionsTradeRailOpen]);
+
+  useEffect(() => {
     const availableAccounts = uniqueAccounts([
       ...(connectionQuery.data?.managedAccounts ?? []),
       connectionQuery.data?.accountId,
@@ -979,6 +1091,8 @@ function App() {
   const openOrders = openOrdersQuery.data?.orders ?? [];
   const accountId = risk?.account.accountId ?? connectionQuery.data?.accountId ?? null;
   const activeDisplayedChain = visibleChain;
+  const tickerOverview = tickerOverviewQuery.data;
+  const tickerOverviewError = tickerOverviewQuery.error instanceof Error ? tickerOverviewQuery.error.message : null;
   const activeChainMatchesRequest = activeDisplayedChain?.symbol === chainSymbol;
   const isLoadingDifferentSymbol = chainQuery.isFetching && Boolean(activeDisplayedChain) && !activeChainMatchesRequest;
   const chainHasBidAsk = ((activeChainMatchesRequest ? chainQuery.data?.rows : activeDisplayedChain?.rows) ?? []).some(
@@ -1326,6 +1440,16 @@ function App() {
   const ibkrAccountSourceSummary = accountSourceSummaries.find((summary) => summary.id === `ibkr-${selectedDashboardAccount.key}`) ?? null;
   const coinbaseAccountSourceSummary =
     accountSourceSummaries.find((summary) => summary.id === `coinbase-${selectedDashboardAccount.key}`) ?? null;
+  const filesystemAccountSourceItems = filesystemAccountSourceSummaries.map((filesystemAccountSourceSummary) => {
+    const filesystemStatus = filesystemConnectorStatusBySourceId[filesystemAccountSourceSummary.id];
+    return {
+      id: filesystemAccountSourceSummary.id,
+      title: filesystemAccountSourceSummary.title,
+      status: filesystemAccountSourceSummary.status,
+      tone: toInlinePillTone(filesystemAccountSourceSummary.tone),
+      connectorId: (filesystemStatus?.connectorId as ConnectorCatalogId | undefined) ?? CSV_FOLDER_CONNECTOR_ID,
+    };
+  });
   const dashboardHeaderRouteLabel =
     selectedDashboardOwnsRoute && routedAccount ? `${routedAccount} · ${routedAccountPill.label}` : "No active broker route for this account";
   const marketGatewayPill = gatewaySessionPresentation(connectionQuery.data);
@@ -1508,6 +1632,10 @@ function App() {
     );
   }
 
+  function toggleShowChainMark() {
+    setShowChainMark((current) => !current);
+  }
+
   function resetTicketFeedback() {
     previewMutation.reset();
     submitMutation.reset();
@@ -1515,10 +1643,191 @@ function App() {
     setPreviewRequestKey(null);
   }
 
+  const requestedSymbolPriceLabel = isLoadingDifferentSymbol
+    ? "Loading spot"
+    : activeDisplayedChain
+      ? `Spot ${fmtCurrencySmall(activeDisplayedChain.underlying.price)}`
+      : "No chain loaded";
+  const chainLoadLabel =
+    chainQuery.isFetching && chainSymbolInput.trim().toUpperCase() === chainSymbol ? `Loading ${chainSymbol}…` : "Load chain";
+
+  function renderOptionsQueryBar() {
+    return (
+      <div className="flex min-w-0 flex-col gap-2 lg:flex-row lg:items-center lg:gap-3">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <label className="min-w-0 flex-1">
+            <span className="sr-only">Option symbol</span>
+            <input
+              className="h-9 w-full rounded-xl border border-line/80 bg-panelSoft px-3 text-sm text-text outline-none transition focus:border-accent/60"
+              data-testid="chain-symbol-input"
+              onChange={(event) => setChainSymbolInput(event.target.value.toUpperCase())}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  submitChainSymbolInput();
+                }
+              }}
+              placeholder="Enter ticker"
+              ref={chainSymbolInputRef}
+              spellCheck={false}
+              type="text"
+              value={chainSymbolInput}
+            />
+          </label>
+          <button
+            className="inline-flex h-9 shrink-0 items-center justify-center rounded-xl border border-accent/30 bg-accent/10 px-3 text-sm font-medium text-accent transition hover:border-accent/50 hover:bg-accent/16 disabled:cursor-not-allowed disabled:opacity-50"
+            data-testid="chain-load-button"
+            disabled={!chainSymbolInput.trim() || connectMutation.isPending || reconnectMutation.isPending}
+            onClick={submitChainSymbolInput}
+            type="button"
+          >
+            {chainLoadLabel}
+          </button>
+        </div>
+        <div className="shrink-0 text-[11px] text-muted lg:text-right">{requestedSymbolPriceLabel}</div>
+      </div>
+    );
+  }
+
+  function renderTickerQueryBar() {
+    return (
+      <div className="flex min-w-0 flex-col gap-2 lg:flex-row lg:items-center lg:gap-3">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <label className="min-w-0 flex-1">
+            <span className="sr-only">Ticker symbol</span>
+            <input
+              className="h-9 w-full rounded-xl border border-line/80 bg-panelSoft px-3 text-sm text-text outline-none transition focus:border-accent/60"
+              onChange={(event) => setChainSymbolInput(event.target.value.toUpperCase())}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  submitChainSymbolInput();
+                }
+              }}
+              placeholder="Enter ticker"
+              ref={chainSymbolInputRef}
+              spellCheck={false}
+              type="text"
+              value={chainSymbolInput}
+            />
+          </label>
+          <button
+            className="inline-flex h-9 shrink-0 items-center justify-center rounded-xl border border-accent/30 bg-accent/10 px-3 text-sm font-medium text-accent transition hover:border-accent/50 hover:bg-accent/16 disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={!chainSymbolInput.trim() || connectMutation.isPending || reconnectMutation.isPending}
+            onClick={submitChainSymbolInput}
+            type="button"
+          >
+            {chainQuery.isFetching && chainSymbolInput.trim().toUpperCase() === chainSymbol ? `Loading ${chainSymbol}…` : "Load ticker"}
+          </button>
+        </div>
+        <div className="shrink-0 text-[11px] text-muted lg:text-right">
+          {tickerOverviewQuery.isFetching
+            ? "Loading quote"
+            : tickerOverview
+              ? `Spot ${fmtCurrencySmall(tickerOverview.quote.price)}`
+              : "No quote loaded"}
+        </div>
+      </div>
+    );
+  }
+
+  function renderTickerOverviewValue(value: string, change?: string | null) {
+    return (
+      <div className="flex items-baseline justify-end gap-2 text-right">
+        <span className="font-medium text-text">{value}</span>
+        {change ? <span className={change.startsWith("-") ? "text-danger" : "text-safe"}>{change}</span> : null}
+      </div>
+    );
+  }
+
+  function tickerOverviewRows(overview: TickerOverviewResponse) {
+    return [
+      { label: "Market Cap", value: renderTickerOverviewValue(fmtCompactCurrency(overview.marketCap), fmtSignedPct(overview.marketCapChangePct)) },
+      { label: "Revenue (ttm)", value: renderTickerOverviewValue(fmtCompactCurrency(overview.revenueTtm), fmtSignedPct(overview.revenueTtmChangePct)) },
+      { label: "Net Income", value: renderTickerOverviewValue(fmtCompactCurrency(overview.netIncomeTtm), fmtSignedPct(overview.netIncomeTtmChangePct)) },
+      { label: "EPS", value: renderTickerOverviewValue(fmtNumber(overview.epsTtm), fmtSignedPct(overview.epsTtmChangePct)) },
+      { label: "Shares Out", value: renderTickerOverviewValue(fmtCompactNumber(overview.sharesOutstanding)) },
+      { label: "PE Ratio", value: renderTickerOverviewValue(fmtNumber(overview.peRatio)) },
+      { label: "Forward PE", value: renderTickerOverviewValue(fmtNumber(overview.forwardPeRatio)) },
+      {
+        label: "Dividend",
+        value: renderTickerOverviewValue(
+          overview.dividendAmount == null
+            ? "—"
+            : `${fmtCurrencySmall(overview.dividendAmount)}${overview.dividendYieldPct == null ? "" : ` (${fmtNumber(overview.dividendYieldPct)}%)`}`,
+        ),
+      },
+      { label: "Ex-Dividend Date", value: renderTickerOverviewValue(fmtDateShort(overview.exDividendDate)) },
+      { label: "Volume", value: renderTickerOverviewValue(fmtWholeNumber(overview.volume)) },
+      { label: "Open", value: renderTickerOverviewValue(fmtCurrencySmall(overview.open)) },
+      { label: "Previous Close", value: renderTickerOverviewValue(fmtCurrencySmall(overview.previousClose)) },
+      {
+        label: "Day's Range",
+        value: renderTickerOverviewValue(
+          overview.dayRangeLow == null || overview.dayRangeHigh == null
+            ? "—"
+            : `${fmtCurrencySmall(overview.dayRangeLow)} - ${fmtCurrencySmall(overview.dayRangeHigh)}`,
+        ),
+      },
+      {
+        label: "52-Week Range",
+        value: renderTickerOverviewValue(
+          overview.week52Low == null || overview.week52High == null
+            ? "—"
+            : `${fmtCurrencySmall(overview.week52Low)} - ${fmtCurrencySmall(overview.week52High)}`,
+        ),
+      },
+      { label: "Beta", value: renderTickerOverviewValue(fmtNumber(overview.beta)) },
+      { label: "Analysts", value: renderTickerOverviewValue(overview.analystRating ?? "—") },
+      {
+        label: "Price Target",
+        value: renderTickerOverviewValue(fmtCurrencySmall(overview.priceTarget), fmtParenSignedPct(overview.priceTargetUpsidePct)),
+      },
+      { label: "Earnings Date", value: renderTickerOverviewValue(fmtDateShort(overview.earningsDate)) },
+    ];
+  }
+
+  function renderTickerOverview() {
+    if (tickerOverviewQuery.isLoading) {
+      return <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-4 text-sm text-muted">Loading ticker overview…</div>;
+    }
+    if (tickerOverviewError && !tickerOverview) {
+      return <ErrorState message={tickerOverviewError} />;
+    }
+    if (!tickerOverview) {
+      return <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-4 text-sm text-muted">Search for a ticker to load its overview.</div>;
+    }
+    const rows = tickerOverviewRows(tickerOverview);
+    return (
+      <Panel
+        action={<div className="text-xs text-muted">{formatTimestamp(tickerOverview.generatedAt)}</div>}
+        eyebrow={tickerOverview.quote.marketDataStatus}
+        title={`${tickerOverview.symbol} Overview`}
+      >
+        <div className="overflow-hidden rounded-2xl border border-line/80 bg-panel">
+          <div className="grid divide-y divide-line/70 md:grid-cols-2 md:divide-x md:divide-y-0">
+            {[rows.slice(0, Math.ceil(rows.length / 2)), rows.slice(Math.ceil(rows.length / 2))].map((columnRows, columnIndex) => (
+              <div key={columnIndex} className="divide-y divide-line/70">
+                {columnRows.map((row) => (
+                  <div key={row.label} className="grid grid-cols-[minmax(0,1fr)_minmax(9rem,auto)] items-center gap-4 px-4 py-3 text-sm">
+                    <div className="text-muted">{row.label}</div>
+                    {row.value}
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        </div>
+        {tickerOverview.sourceNotice ? <div className="mt-3 text-xs text-muted">{tickerOverview.sourceNotice}</div> : null}
+        {tickerOverviewError ? <div className="mt-3 text-xs text-danger">{tickerOverviewError}</div> : null}
+      </Panel>
+    );
+  }
+
   function renderIbkrOptionsSurface() {
     const busySymbolLabel = chainSymbol;
     const selectedChainGreekOptions = CHAIN_GREEK_OPTIONS.filter((option) => visibleChainGreeks.includes(option.key));
-    const chainTableColumnCount = 15 + selectedChainGreekOptions.length * 2;
+    const chainTableColumnCount = 11 + selectedChainGreekOptions.length * 2 + (showChainMark ? 2 : 0);
+    const callSectionColumnCount = 5 + selectedChainGreekOptions.length + (showChainMark ? 1 : 0);
+    const putSectionColumnCount = 5 + selectedChainGreekOptions.length + (showChainMark ? 1 : 0);
     const selectedContractLabel = ticketDraft
       ? `${ticketDraft.symbol} ${ticketDraft.expiry} ${fmtNumber(ticketDraft.strike)}${ticketDraft.right}`
       : null;
@@ -1530,11 +1839,6 @@ function App() {
     const chainContextLabel = isLoadingDifferentSymbol
       ? "Showing the last loaded chain until the new one is ready."
       : activeDisplayedChain?.quoteNotice;
-    const requestedSymbolPriceLabel = isLoadingDifferentSymbol
-      ? "Loading spot"
-      : activeDisplayedChain
-        ? `Spot ${fmtCurrencySmall(activeDisplayedChain.underlying.price)}`
-        : "No chain loaded";
     const spotPrice = activeDisplayedChain?.underlying.price ?? null;
     const hasExactSpotStrike =
       spotPrice != null && displayedChainRows.some((row) => Math.abs(row.strike - spotPrice) < 0.0001);
@@ -1544,44 +1848,45 @@ function App() {
         : displayedChainRows.findIndex((row) => row.strike >= spotPrice);
     const normalizedSpotInsertIndex =
       spotInsertIndex === -1 && spotPrice != null && !hasExactSpotStrike ? displayedChainRows.length : spotInsertIndex;
+    const isSelectedTicketRow = (row: ChainRow, right: TicketContractSide) =>
+      ticketDraft != null &&
+      ticketDraft.expiry === (selectedExpiry ?? activeDisplayedChain?.selectedExpiry ?? "") &&
+      ticketDraft.strike === row.strike &&
+      ticketDraft.right === right;
+
+    function renderContractEntryButton(
+      value: number | null | undefined,
+      row: ChainRow,
+      right: TicketContractSide,
+      tone: "call" | "put",
+      label: string,
+    ) {
+      if (value == null || Number.isNaN(value)) {
+        return <span className="text-muted">—</span>;
+      }
+      const selected = isSelectedTicketRow(row, right);
+      const baseToneClass =
+        tone === "call"
+          ? selected
+            ? "border-accent/55 bg-accent/18 text-accent shadow-[0_0_0_1px_rgba(123,243,214,0.16)]"
+            : "border-accent/25 bg-accent/8 text-accent hover:border-accent/45 hover:bg-accent/14"
+          : selected
+            ? "border-caution/55 bg-caution/18 text-caution shadow-[0_0_0_1px_rgba(255,207,92,0.14)]"
+            : "border-caution/25 bg-caution/8 text-caution hover:border-caution/45 hover:bg-caution/14";
+      return (
+        <button
+          className={`inline-flex min-w-[4.75rem] items-center justify-center rounded-full border px-2.5 py-1.5 text-sm font-medium transition ${baseToneClass}`}
+          onClick={() => loadTicket(row, right)}
+          title={`${label} ${right === "C" ? "call" : "put"} ${fmtCurrencySmall(value)}`}
+          type="button"
+        >
+          {fmtCurrencySmall(value)}
+        </button>
+      );
+    }
 
     return (
       <div className="grid gap-4">
-        <div className="grid gap-3 rounded-2xl border border-line/80 bg-panel px-4 py-4">
-          <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-            <div className="flex min-w-0 flex-1 flex-col gap-3 sm:flex-row sm:items-center">
-              <label className="flex-1">
-                <span className="sr-only">Option symbol</span>
-                <input
-                  className="w-full rounded-xl border border-line/80 bg-panelSoft px-4 py-3 text-base text-text outline-none transition focus:border-accent/60"
-                  data-testid="chain-symbol-input"
-                  onChange={(event) => setChainSymbolInput(event.target.value.toUpperCase())}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      submitChainSymbolInput();
-                    }
-                  }}
-                  placeholder="Enter ticker"
-                  ref={chainSymbolInputRef}
-                  spellCheck={false}
-                  type="text"
-                  value={chainSymbolInput}
-                />
-              </label>
-              <button
-                className="inline-flex h-12 items-center justify-center rounded-xl border border-accent/30 bg-accent/10 px-4 text-sm font-medium text-accent transition hover:border-accent/50 hover:bg-accent/16 disabled:cursor-not-allowed disabled:opacity-50"
-                data-testid="chain-load-button"
-                disabled={!chainSymbolInput.trim() || connectMutation.isPending || reconnectMutation.isPending}
-                onClick={submitChainSymbolInput}
-                type="button"
-              >
-                {chainQuery.isFetching && chainSymbolInput.trim().toUpperCase() === chainSymbol ? `Loading ${chainSymbol}…` : "Load chain"}
-              </button>
-            </div>
-            <div className="text-xs text-muted">{requestedSymbolPriceLabel}</div>
-          </div>
-
-        </div>
         {displayedExpiries.length ? (
           <div className="flex flex-wrap gap-2">
             {displayedExpiries.map((expiry) => (
@@ -1603,7 +1908,7 @@ function App() {
           </div>
         ) : null}
 
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
+        <div className={`grid gap-4 ${optionsTradeRailOpen ? "xl:grid-cols-[minmax(0,1fr)_340px]" : "xl:grid-cols-[minmax(0,1fr)_44px]"}`}>
           <div className="relative overflow-hidden rounded-2xl border border-line/80 bg-panel">
             {chainQuery.isFetching ? (
               <div className="pointer-events-none absolute right-3 top-3 z-10 rounded-full border border-accent/20 bg-shell/90 px-3 py-1 text-xs text-accent">
@@ -1621,82 +1926,98 @@ function App() {
               </div>
             ) : null}
             <div className="border-b border-line/70 px-4 py-4">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                <div className="min-w-0">
                   <div className="text-[11px] uppercase tracking-[0.22em] text-muted">Options Chain</div>
                   <div className="mt-1 text-lg font-semibold text-text" data-testid="chain-heading">
                     {chainHeadingLabel}
                   </div>
                   {chainContextLabel ? <div className="mt-2 max-w-3xl text-xs leading-5 text-muted">{chainContextLabel}</div> : null}
                 </div>
-              </div>
-              <div className="mt-3 flex flex-wrap items-center gap-2">
-                <div className="text-[11px] uppercase tracking-[0.18em] text-muted">Greeks</div>
-                {CHAIN_GREEK_OPTIONS.map((option) => {
-                  const checked = visibleChainGreeks.includes(option.key);
-                  return (
+                <div className="flex flex-wrap items-center justify-end gap-3 lg:max-w-[55%]">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="text-[11px] uppercase tracking-[0.18em] text-muted">Columns</div>
                     <button
-                      key={option.key}
                       className={`rounded-full border px-3 py-1.5 text-xs font-medium transition ${
-                        checked
+                        showChainMark
                           ? "border-accent/45 bg-accent/12 text-accent"
                           : "border-line/80 bg-panelSoft text-muted hover:border-accent/25 hover:text-text"
                       }`}
-                      data-testid={`toggle-greek-${option.key}`}
-                      onClick={() => toggleVisibleGreek(option.key)}
+                      data-testid="toggle-column-mark"
+                      onClick={toggleShowChainMark}
                       type="button"
                     >
-                      {option.label}
+                      Mark
                     </button>
-                  );
-                })}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="text-[11px] uppercase tracking-[0.18em] text-muted">Greeks</div>
+                    {CHAIN_GREEK_OPTIONS.map((option) => {
+                      const checked = visibleChainGreeks.includes(option.key);
+                      return (
+                        <button
+                          key={option.key}
+                          className={`rounded-full border px-3 py-1.5 text-xs font-medium transition ${
+                            checked
+                              ? "border-accent/45 bg-accent/12 text-accent"
+                              : "border-line/80 bg-panelSoft text-muted hover:border-accent/25 hover:text-text"
+                          }`}
+                          data-testid={`toggle-greek-${option.key}`}
+                          onClick={() => toggleVisibleGreek(option.key)}
+                          type="button"
+                        >
+                          {option.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
               </div>
             </div>
 
             {displayedChainRows.length ? (
-              <div className={`${isLoadingDifferentSymbol ? "opacity-55" : chainQuery.isFetching ? "opacity-80" : ""} overflow-x-auto`}>
+              <div
+                className={`${
+                  isLoadingDifferentSymbol ? "opacity-55" : chainQuery.isFetching ? "opacity-80" : ""
+                } max-h-[70vh] overflow-auto overscroll-contain`}
+              >
                 <table className="min-w-max text-left text-sm">
-                  <thead className="bg-panel/95 text-[11px] uppercase tracking-[0.18em] text-muted">
+                  <thead className="sticky top-0 z-[1] bg-panel/95 text-[11px] uppercase tracking-[0.18em] text-muted">
                     <tr className="border-b border-line/70 text-[10px] tracking-[0.24em]">
-                      <th className="px-4 pb-2 pt-3 text-accent" colSpan={6 + selectedChainGreekOptions.length}>
+                      <th className="px-2.5 pb-2 pt-3 text-right text-accent" colSpan={callSectionColumnCount}>
                         Calls
                       </th>
-                      <th className="px-4 pb-2 pt-3 text-text" colSpan={1}>
+                      <th className="px-2.5 pb-2 pt-3 text-text" colSpan={1}>
                         Strike
                       </th>
-                      <th className="px-4 pb-2 pt-3 text-caution" colSpan={selectedChainGreekOptions.length + 6}>
+                      <th className="px-2.5 pb-2 pt-3 text-left text-caution" colSpan={putSectionColumnCount}>
                         Puts
-                      </th>
-                      <th className="px-4 pb-2 pt-3 text-right text-muted" colSpan={2}>
-                        Ticket
                       </th>
                     </tr>
                     <tr>
-                      <th className="px-4 py-3">Bid</th>
-                      <th className="px-4 py-3">Ask</th>
-                      <th className="px-4 py-3">Mark</th>
-                      <th className="px-4 py-3">Vol</th>
-                      <th className="px-4 py-3">OI</th>
+                      <th className="px-2.5 py-1.5">Bid</th>
+                      <th className="px-2.5 py-1.5">Ask</th>
+                      {showChainMark ? <th className="px-2.5 py-1.5">Mark</th> : null}
+                      <th className="px-2.5 py-1.5">Vol</th>
+                      <th className="px-2.5 py-1.5">OI</th>
                       {selectedChainGreekOptions.map((option) => (
-                        <th key={`call-${option.key}`} className="px-4 py-3">
+                        <th key={`call-${option.key}`} className="px-2.5 py-1.5">
                           {option.label}
                         </th>
                       ))}
-                      <th className="px-4 py-3">ITM %</th>
-                      <th className="px-4 py-3">Strike</th>
-                      <th className="px-4 py-3">ITM %</th>
+                      <th className="px-2.5 py-1.5">ITM %</th>
+                      <th className="px-2.5 py-1.5">Strike</th>
+                      <th className="px-2.5 py-1.5">ITM %</th>
                       {selectedChainGreekOptions.map((option) => (
-                        <th key={`put-${option.key}`} className="px-4 py-3">
+                        <th key={`put-${option.key}`} className="px-2.5 py-1.5">
                           {option.label}
                         </th>
                       ))}
-                      <th className="px-4 py-3">OI</th>
-                      <th className="px-4 py-3">Vol</th>
-                      <th className="px-4 py-3">Mark</th>
-                      <th className="px-4 py-3">Ask</th>
-                      <th className="px-4 py-3">Bid</th>
-                      <th className="px-4 py-3 text-right">Call</th>
-                      <th className="px-4 py-3 text-right">Put</th>
+                      <th className="px-2.5 py-1.5">OI</th>
+                      <th className="px-2.5 py-1.5">Vol</th>
+                      {showChainMark ? <th className="px-2.5 py-1.5">Mark</th> : null}
+                      <th className="px-2.5 py-1.5">Ask</th>
+                      <th className="px-2.5 py-1.5">Bid</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1731,7 +2052,7 @@ function App() {
                               data-testid="chain-spot-row"
                             >
                               <td
-                                className="px-4 py-2"
+                                className="px-2.5 py-2"
                                 colSpan={chainTableColumnCount}
                                 style={{
                                   backgroundImage:
@@ -1750,51 +2071,33 @@ function App() {
                             className={`${boundaryClass} ${boundaryToneClass} transition hover:bg-white/[0.02]`}
                             data-testid={`chain-row-${index}`}
                           >
-                            <td className="px-4 py-3">{fmtCurrencySmall(row.callBid)}</td>
-                            <td className="px-4 py-3">{fmtCurrencySmall(row.callAsk)}</td>
-                            <td className="px-4 py-3">{fmtCurrencySmall(row.callMid)}</td>
-                            <td className="px-4 py-3">{fmtWholeNumber(row.callVolume)}</td>
-                            <td className="px-4 py-3">{fmtWholeNumber(row.callOpenInterest)}</td>
+                            <td className="px-2.5 py-1.5">{renderContractEntryButton(row.callBid, row, "C", "call", "Bid")}</td>
+                            <td className="px-2.5 py-1.5">{renderContractEntryButton(row.callAsk, row, "C", "call", "Ask")}</td>
+                            {showChainMark ? (
+                              <td className="px-2.5 py-1.5">{renderContractEntryButton(row.callMid, row, "C", "call", "Mark")}</td>
+                            ) : null}
+                            <td className="px-2.5 py-1.5">{fmtWholeNumber(row.callVolume)}</td>
+                            <td className="px-2.5 py-1.5">{fmtWholeNumber(row.callOpenInterest)}</td>
                             {selectedChainGreekOptions.map((option) => (
-                              <td key={`call-cell-${option.key}-${row.strike}`} className="px-4 py-3">
+                              <td key={`call-cell-${option.key}-${row.strike}`} className="px-2.5 py-1.5">
                                 {fmtGreek(option.callValue(row), option.suffix ?? "")}
                               </td>
                             ))}
-                            <td className="px-4 py-3">{fmtNumber(callItmPct, "%")}</td>
-                            <td className="px-4 py-3 font-medium text-text">{fmtCurrencySmall(row.strike)}</td>
-                            <td className="px-4 py-3">{fmtNumber(putItmPct, "%")}</td>
+                            <td className="px-2.5 py-1.5">{fmtNumber(callItmPct, "%")}</td>
+                            <td className="px-2.5 py-1.5 font-medium text-text">{fmtCurrencySmall(row.strike)}</td>
+                            <td className="px-2.5 py-1.5">{fmtNumber(putItmPct, "%")}</td>
                             {selectedChainGreekOptions.map((option) => (
-                              <td key={`put-cell-${option.key}-${row.strike}`} className="px-4 py-3">
+                              <td key={`put-cell-${option.key}-${row.strike}`} className="px-2.5 py-1.5">
                                 {fmtGreek(option.putValue(row), option.suffix ?? "")}
                               </td>
                             ))}
-                            <td className="px-4 py-3">{fmtWholeNumber(row.putOpenInterest)}</td>
-                            <td className="px-4 py-3">{fmtWholeNumber(row.putVolume)}</td>
-                            <td className="px-4 py-3">{fmtCurrencySmall(row.putMid)}</td>
-                            <td className="px-4 py-3">{fmtCurrencySmall(row.putAsk)}</td>
-                            <td className="px-4 py-3">{fmtCurrencySmall(row.putBid)}</td>
-                            <td className="px-4 py-3 text-right">
-                              <button
-                                className="rounded-full border border-accent/30 bg-accent/10 px-3 py-1.5 text-xs font-medium text-accent transition hover:border-accent/50 hover:bg-accent/16"
-                                data-testid={`load-call-${index}`}
-                                disabled={isLoadingDifferentSymbol}
-                                onClick={() => loadTicket(row, "C")}
-                                type="button"
-                              >
-                                Load call
-                              </button>
-                            </td>
-                            <td className="px-4 py-3 text-right">
-                              <button
-                                className="rounded-full border border-caution/30 bg-caution/10 px-3 py-1.5 text-xs font-medium text-caution transition hover:border-caution/50 hover:bg-caution/16"
-                                data-testid={`load-put-${index}`}
-                                disabled={isLoadingDifferentSymbol}
-                                onClick={() => loadTicket(row, "P")}
-                                type="button"
-                              >
-                                Load put
-                              </button>
-                            </td>
+                            <td className="px-2.5 py-1.5">{fmtWholeNumber(row.putOpenInterest)}</td>
+                            <td className="px-2.5 py-1.5">{fmtWholeNumber(row.putVolume)}</td>
+                            {showChainMark ? (
+                              <td className="px-2.5 py-1.5">{renderContractEntryButton(row.putMid, row, "P", "put", "Mark")}</td>
+                            ) : null}
+                            <td className="px-2.5 py-1.5">{renderContractEntryButton(row.putAsk, row, "P", "put", "Ask")}</td>
+                            <td className="px-2.5 py-1.5">{renderContractEntryButton(row.putBid, row, "P", "put", "Bid")}</td>
                           </tr>
                         </Fragment>
                       );
@@ -1806,7 +2109,7 @@ function App() {
                         data-testid="chain-spot-row"
                       >
                         <td
-                          className="px-4 py-2"
+                          className="px-2.5 py-2"
                           colSpan={chainTableColumnCount}
                           style={{
                             backgroundImage:
@@ -1830,244 +2133,276 @@ function App() {
             )}
           </div>
 
-          <div className="grid content-start gap-4">
-            <div className="rounded-2xl border border-line/80 bg-panel px-4 py-4">
-              <div>
-                <div className="text-[11px] uppercase tracking-[0.22em] text-muted">Trade Ticket</div>
-                <div className="mt-1 text-lg font-semibold text-text">{selectedContractLabel ?? "Select a contract"}</div>
-              </div>
-
-              {ticketDraft ? (
-                <div className="mt-4 grid gap-4">
-                  <div className="grid grid-cols-2 gap-2">
-                    <button
-                      className={`rounded-xl border px-3 py-2 text-sm font-medium transition ${
-                        ticketAction === "BUY"
-                          ? "border-accent/45 bg-accent/12 text-accent"
-                          : "border-line/80 bg-panelSoft text-muted hover:text-text"
-                      }`}
-                      data-testid="ticket-buy-button"
-                      onClick={() => {
-                        setTicketAction("BUY");
-                        resetTicketFeedback();
-                      }}
-                      type="button"
-                    >
-                      Buy
-                    </button>
-                    <button
-                      className={`rounded-xl border px-3 py-2 text-sm font-medium transition ${
-                        ticketAction === "SELL"
-                          ? "border-accent/45 bg-accent/12 text-accent"
-                          : "border-line/80 bg-panelSoft text-muted hover:text-text"
-                      }`}
-                      data-testid="ticket-sell-button"
-                      onClick={() => {
-                        setTicketAction("SELL");
-                        resetTicketFeedback();
-                      }}
-                      type="button"
-                    >
-                      Sell
-                    </button>
+          {optionsTradeRailOpen ? (
+            <div className="grid content-start gap-4">
+              <div className="rounded-2xl border border-line/80 bg-panel px-4 py-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-[11px] uppercase tracking-[0.22em] text-muted">Trade Ticket</div>
+                    <div className="mt-1 text-lg font-semibold text-text">{selectedContractLabel ?? "Select a contract"}</div>
                   </div>
+                  <button
+                    aria-expanded={optionsTradeRailOpen}
+                    aria-label="Collapse trade ticket rail"
+                    className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-line/80 bg-panelSoft text-muted transition hover:border-accent/25 hover:text-text"
+                    data-testid="toggle-trade-rail"
+                    onClick={() => setOptionsTradeRailOpen(false)}
+                    type="button"
+                  >
+                    <SidebarToggleIcon open={optionsTradeRailOpen} />
+                  </button>
+                </div>
 
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <label className="grid gap-2">
-                      <span className="text-xs uppercase tracking-[0.18em] text-muted">Qty</span>
-                      <input
-                        className="rounded-xl border border-line/80 bg-panelSoft px-3 py-2 text-sm text-text outline-none transition focus:border-accent/60"
-                        data-testid="ticket-quantity-input"
-                        min={1}
-                        onChange={(event) => {
-                          setTicketQuantity(Math.max(1, Number.parseInt(event.target.value || "1", 10) || 1));
+                {ticketDraft ? (
+                  <div className="mt-4 grid gap-4">
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        className={`rounded-xl border px-3 py-2 text-sm font-medium transition ${
+                          ticketAction === "BUY"
+                            ? "border-accent/45 bg-accent/12 text-accent"
+                            : "border-line/80 bg-panelSoft text-muted hover:text-text"
+                        }`}
+                        data-testid="ticket-buy-button"
+                        onClick={() => {
+                          setTicketAction("BUY");
                           resetTicketFeedback();
                         }}
-                        type="number"
-                        value={ticketQuantity}
-                      />
-                    </label>
-                    <label className="grid gap-2">
-                      <span className="text-xs uppercase tracking-[0.18em] text-muted">Order type</span>
-                      <select
-                        className="rounded-xl border border-line/80 bg-panelSoft px-3 py-2 text-sm text-text outline-none transition focus:border-accent/60"
-                        data-testid="ticket-order-type-select"
-                        onChange={(event) => {
-                          setTicketOrderType(event.target.value as "LMT" | "MKT");
-                          resetTicketFeedback();
-                        }}
-                        value={ticketOrderType}
+                        type="button"
                       >
-                        <option value="LMT">LMT</option>
-                        <option value="MKT">MKT</option>
-                      </select>
-                    </label>
-                    {ticketOrderType === "LMT" ? (
+                        Buy
+                      </button>
+                      <button
+                        className={`rounded-xl border px-3 py-2 text-sm font-medium transition ${
+                          ticketAction === "SELL"
+                            ? "border-accent/45 bg-accent/12 text-accent"
+                            : "border-line/80 bg-panelSoft text-muted hover:text-text"
+                        }`}
+                        data-testid="ticket-sell-button"
+                        onClick={() => {
+                          setTicketAction("SELL");
+                          resetTicketFeedback();
+                        }}
+                        type="button"
+                      >
+                        Sell
+                      </button>
+                    </div>
+
+                    <div className="grid gap-3 sm:grid-cols-2">
                       <label className="grid gap-2">
-                        <span className="text-xs uppercase tracking-[0.18em] text-muted">Limit</span>
+                        <span className="text-xs uppercase tracking-[0.18em] text-muted">Qty</span>
                         <input
                           className="rounded-xl border border-line/80 bg-panelSoft px-3 py-2 text-sm text-text outline-none transition focus:border-accent/60"
-                          data-testid="ticket-limit-price-input"
+                          data-testid="ticket-quantity-input"
+                          min={1}
                           onChange={(event) => {
-                            setTicketLimitPrice(event.target.value);
+                            setTicketQuantity(Math.max(1, Number.parseInt(event.target.value || "1", 10) || 1));
                             resetTicketFeedback();
                           }}
                           type="number"
-                          value={ticketLimitPrice}
+                          value={ticketQuantity}
                         />
                       </label>
-                    ) : null}
-                    <label className="grid gap-2">
-                      <span className="text-xs uppercase tracking-[0.18em] text-muted">Time in force</span>
-                      <select
-                        className="rounded-xl border border-line/80 bg-panelSoft px-3 py-2 text-sm text-text outline-none transition focus:border-accent/60"
-                        data-testid="ticket-tif-select"
-                        onChange={(event) => {
-                          setTicketTif(event.target.value as "DAY" | "GTC");
-                          resetTicketFeedback();
-                        }}
-                        value={ticketTif}
-                      >
-                        <option value="DAY">DAY</option>
-                        <option value="GTC">GTC</option>
-                      </select>
-                    </label>
-                  </div>
-
-                  <div className="grid gap-2 text-sm text-muted">
-                    <div className="flex items-center justify-between gap-3">
-                      <span>Bid / ask</span>
-                      <span>{fmtCurrencySmall(ticketDraft.bid)} / {fmtCurrencySmall(ticketDraft.ask)}</span>
-                    </div>
-                    <div className="flex items-center justify-between gap-3">
-                      <span>Reference</span>
-                      <span>{fmtCurrencySmall(ticketDraft.referencePrice)}</span>
-                    </div>
-                  </div>
-
-                  {previewIsCurrent && previewMutation.data ? <PreviewSummary preview={previewMutation.data} /> : null}
-                  {previewError ? <ErrorState message={previewError} /> : null}
-                  {submitError ? <ErrorState message={submitError} /> : null}
-                  {cancelError ? <ErrorState message={cancelError} /> : null}
-                  {submitIsCurrent && submitMutation.data ? <SubmitSummary submitted={submitMutation.data} /> : null}
-
-                  <div className="grid gap-2 sm:grid-cols-2">
-                    <button
-                      className="rounded-xl border border-line/80 bg-panelSoft px-4 py-3 text-sm font-medium text-text transition hover:border-accent/25 hover:text-accent disabled:cursor-not-allowed disabled:opacity-50"
-                      data-testid="preview-order-button"
-                      disabled={!canPreviewTicket || previewMutation.isPending}
-                      onClick={() => {
-                        if (ticketRequest) {
-                          void previewMutation.mutateAsync(ticketRequest);
-                        }
-                      }}
-                      type="button"
-                    >
-                      {previewMutation.isPending ? "Previewing…" : "Preview order"}
-                    </button>
-                    <button
-                      className="rounded-xl border border-accent/30 bg-accent/10 px-4 py-3 text-sm font-medium text-accent transition hover:border-accent/50 hover:bg-accent/16 disabled:cursor-not-allowed disabled:opacity-50"
-                      data-testid="submit-order-button"
-                      disabled={!canSubmitTicket || submitMutation.isPending}
-                      onClick={() => {
-                        if (ticketRequest) {
-                          void submitMutation.mutateAsync(ticketRequest);
-                        }
-                      }}
-                      type="button"
-                    >
-                      {submitMutation.isPending ? "Submitting…" : "Submit order"}
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="mt-4 rounded-xl border border-line/80 bg-panelSoft px-3 py-4 text-sm text-muted">
-                  Load any call or put from the chain to build an order ticket.
-                </div>
-              )}
-            </div>
-
-            <div className="rounded-2xl border border-line/80 bg-panel px-4 py-4">
-              <div>
-                <div className="text-[11px] uppercase tracking-[0.22em] text-muted">Working Orders</div>
-                <div className="mt-1 text-lg font-semibold text-text">{openOptionOrders.length}</div>
-              </div>
-              <div className="mt-4 grid gap-3">
-                {cancelMutation.data ? <CancelSummary cancelled={cancelMutation.data} /> : null}
-                {openOptionOrders.length ? (
-                  openOptionOrders.map((order) => (
-                    <div
-                      key={order.orderId}
-                      className="rounded-xl border border-line/80 bg-panelSoft px-3 py-3"
-                      data-testid={`open-order-${order.orderId}`}
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <div className="font-medium text-text">
-                            {order.side} {fmtNumber(order.quantity)} {order.symbol} {order.expiry} {fmtNumber(order.strike)}
-                            {order.right ?? ""}
-                          </div>
-                          <div className="mt-1 text-xs text-muted">
-                            {order.orderType}
-                            {order.limitPrice != null ? ` ${fmtCurrencySmall(order.limitPrice)}` : ""}
-                            {" · "}
-                            {order.status}
-                            {" · filled "}
-                            {fmtNumber(order.filledQuantity)}
-                            {" / remaining "}
-                            {fmtNumber(order.remainingQuantity)}
-                          </div>
-                        </div>
-                        <button
-                          className="rounded-full border border-danger/30 bg-danger/10 px-3 py-1.5 text-xs font-medium text-danger transition hover:border-danger/50 hover:bg-danger/16 disabled:cursor-not-allowed disabled:opacity-50"
-                          data-testid={`cancel-order-${order.orderId}`}
-                          disabled={!selectedAccount || cancelMutation.isPending}
-                          onClick={() => {
-                            if (selectedAccount) {
-                              void cancelMutation.mutateAsync({ orderId: order.orderId, accountId: selectedAccount });
-                            }
+                      <label className="grid gap-2">
+                        <span className="text-xs uppercase tracking-[0.18em] text-muted">Order type</span>
+                        <select
+                          className="rounded-xl border border-line/80 bg-panelSoft px-3 py-2 text-sm text-text outline-none transition focus:border-accent/60"
+                          data-testid="ticket-order-type-select"
+                          onChange={(event) => {
+                            setTicketOrderType(event.target.value as "LMT" | "MKT");
+                            resetTicketFeedback();
                           }}
-                          type="button"
+                          value={ticketOrderType}
                         >
-                          Cancel
-                        </button>
-                      </div>
+                          <option value="LMT">LMT</option>
+                          <option value="MKT">MKT</option>
+                        </select>
+                      </label>
+                      {ticketOrderType === "LMT" ? (
+                        <label className="grid gap-2">
+                          <span className="text-xs uppercase tracking-[0.18em] text-muted">Limit</span>
+                          <input
+                            className="rounded-xl border border-line/80 bg-panelSoft px-3 py-2 text-sm text-text outline-none transition focus:border-accent/60"
+                            data-testid="ticket-limit-price-input"
+                            onChange={(event) => {
+                              setTicketLimitPrice(event.target.value);
+                              resetTicketFeedback();
+                            }}
+                            type="number"
+                            value={ticketLimitPrice}
+                          />
+                        </label>
+                      ) : null}
+                      <label className="grid gap-2">
+                        <span className="text-xs uppercase tracking-[0.18em] text-muted">Time in force</span>
+                        <select
+                          className="rounded-xl border border-line/80 bg-panelSoft px-3 py-2 text-sm text-text outline-none transition focus:border-accent/60"
+                          data-testid="ticket-tif-select"
+                          onChange={(event) => {
+                            setTicketTif(event.target.value as "DAY" | "GTC");
+                            resetTicketFeedback();
+                          }}
+                          value={ticketTif}
+                        >
+                          <option value="DAY">DAY</option>
+                          <option value="GTC">GTC</option>
+                        </select>
+                      </label>
                     </div>
-                  ))
-                ) : (
-                  <div className="rounded-xl border border-line/80 bg-panelSoft px-3 py-4 text-sm text-muted">
-                    No working option orders in the selected routed account.
-                  </div>
-                )}
-              </div>
-            </div>
 
-            <div className="rounded-2xl border border-line/80 bg-panel px-4 py-4">
-              <div>
-                <div className="text-[11px] uppercase tracking-[0.22em] text-muted">Open Option Positions</div>
-                <div className="mt-1 text-lg font-semibold text-text">{optionPositions.length}</div>
-              </div>
-              <div className="mt-4 grid gap-3">
-                {optionPositions.length ? (
-                  optionPositions.slice(0, 6).map((position) => (
-                    <div key={`${position.symbol}-${position.expiry}-${position.strike}-${position.right}`} className="rounded-xl border border-line/80 bg-panelSoft px-3 py-3">
-                      <div className="font-medium text-text">
-                        {position.symbol} {position.expiry} {fmtNumber(position.strike)}
-                        {position.right}
+                    <div className="grid gap-2 text-sm text-muted">
+                      <div className="flex items-center justify-between gap-3">
+                        <span>Bid / ask</span>
+                        <span>{fmtCurrencySmall(ticketDraft.bid)} / {fmtCurrencySmall(ticketDraft.ask)}</span>
                       </div>
-                      <div className="mt-1 text-xs text-muted">
-                        {position.shortOrLong} {fmtNumber(position.quantity)} · mid {fmtCurrencySmall(position.currentMid)} · delta {fmtNumber(position.delta)}
+                      <div className="flex items-center justify-between gap-3">
+                        <span>Reference</span>
+                        <span>{fmtCurrencySmall(ticketDraft.referencePrice)}</span>
                       </div>
                     </div>
-                  ))
+
+                    {previewIsCurrent && previewMutation.data ? <PreviewSummary preview={previewMutation.data} /> : null}
+                    {previewError ? <ErrorState message={previewError} /> : null}
+                    {submitError ? <ErrorState message={submitError} /> : null}
+                    {cancelError ? <ErrorState message={cancelError} /> : null}
+                    {submitIsCurrent && submitMutation.data ? <SubmitSummary submitted={submitMutation.data} /> : null}
+
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <button
+                        className="rounded-xl border border-line/80 bg-panelSoft px-4 py-3 text-sm font-medium text-text transition hover:border-accent/25 hover:text-accent disabled:cursor-not-allowed disabled:opacity-50"
+                        data-testid="preview-order-button"
+                        disabled={!canPreviewTicket || previewMutation.isPending}
+                        onClick={() => {
+                          if (ticketRequest) {
+                            void previewMutation.mutateAsync(ticketRequest);
+                          }
+                        }}
+                        type="button"
+                      >
+                        {previewMutation.isPending ? "Previewing…" : "Preview order"}
+                      </button>
+                      <button
+                        className="rounded-xl border border-accent/30 bg-accent/10 px-4 py-3 text-sm font-medium text-accent transition hover:border-accent/50 hover:bg-accent/16 disabled:cursor-not-allowed disabled:opacity-50"
+                        data-testid="submit-order-button"
+                        disabled={!canSubmitTicket || submitMutation.isPending}
+                        onClick={() => {
+                          if (ticketRequest) {
+                            void submitMutation.mutateAsync(ticketRequest);
+                          }
+                        }}
+                        type="button"
+                      >
+                        {submitMutation.isPending ? "Submitting…" : "Submit order"}
+                      </button>
+                    </div>
+                  </div>
                 ) : (
-                  <div className="rounded-xl border border-line/80 bg-panelSoft px-3 py-4 text-sm text-muted">
-                    No option positions yet. The trade flow above comes first.
+                  <div className="mt-4 rounded-xl border border-line/80 bg-panelSoft px-3 py-4 text-sm text-muted">
+                    Load any call or put from the chain to build an order ticket.
                   </div>
                 )}
               </div>
+
+              <div className="rounded-2xl border border-line/80 bg-panel px-4 py-4">
+                <div>
+                  <div className="text-[11px] uppercase tracking-[0.22em] text-muted">Working Orders</div>
+                  <div className="mt-1 text-lg font-semibold text-text">{openOptionOrders.length}</div>
+                </div>
+                <div className="mt-4 grid gap-3">
+                  {cancelMutation.data ? <CancelSummary cancelled={cancelMutation.data} /> : null}
+                  {openOptionOrders.length ? (
+                    openOptionOrders.map((order) => (
+                      <div
+                        key={order.orderId}
+                        className="rounded-xl border border-line/80 bg-panelSoft px-3 py-3"
+                        data-testid={`open-order-${order.orderId}`}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="font-medium text-text">
+                              {order.side} {fmtNumber(order.quantity)} {order.symbol} {order.expiry} {fmtNumber(order.strike)}
+                              {order.right ?? ""}
+                            </div>
+                            <div className="mt-1 text-xs text-muted">
+                              {order.orderType}
+                              {order.limitPrice != null ? ` ${fmtCurrencySmall(order.limitPrice)}` : ""}
+                              {" · "}
+                              {order.status}
+                              {" · filled "}
+                              {fmtNumber(order.filledQuantity)}
+                              {" / remaining "}
+                              {fmtNumber(order.remainingQuantity)}
+                            </div>
+                          </div>
+                          <button
+                            className="rounded-full border border-danger/30 bg-danger/10 px-3 py-1.5 text-xs font-medium text-danger transition hover:border-danger/50 hover:bg-danger/16 disabled:cursor-not-allowed disabled:opacity-50"
+                            data-testid={`cancel-order-${order.orderId}`}
+                            disabled={!selectedAccount || cancelMutation.isPending}
+                            onClick={() => {
+                              if (selectedAccount) {
+                                void cancelMutation.mutateAsync({ orderId: order.orderId, accountId: selectedAccount });
+                              }
+                            }}
+                            type="button"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="rounded-xl border border-line/80 bg-panelSoft px-3 py-4 text-sm text-muted">
+                      No working option orders in the selected routed account.
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-line/80 bg-panel px-4 py-4">
+                <div>
+                  <div className="text-[11px] uppercase tracking-[0.22em] text-muted">Open Option Positions</div>
+                  <div className="mt-1 text-lg font-semibold text-text">{optionPositions.length}</div>
+                </div>
+                <div className="mt-4 grid gap-3">
+                  {optionPositions.length ? (
+                    optionPositions.slice(0, 6).map((position) => (
+                      <div key={`${position.symbol}-${position.expiry}-${position.strike}-${position.right}`} className="rounded-xl border border-line/80 bg-panelSoft px-3 py-3">
+                        <div className="font-medium text-text">
+                          {position.symbol} {position.expiry} {fmtNumber(position.strike)}
+                          {position.right}
+                        </div>
+                        <div className="mt-1 text-xs text-muted">
+                          {position.shortOrLong} {fmtNumber(position.quantity)} · mid {fmtCurrencySmall(position.currentMid)} · delta {fmtNumber(position.delta)}
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="rounded-xl border border-line/80 bg-panelSoft px-3 py-4 text-sm text-muted">
+                      No option positions yet. The trade flow above comes first.
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
-          </div>
+          ) : (
+            <div className="flex h-full min-h-[280px] items-start justify-center">
+              <div className="flex h-full min-h-[280px] w-full flex-col items-center rounded-xl border border-line/80 bg-panel py-2">
+                <button
+                  aria-expanded={optionsTradeRailOpen}
+                  aria-label="Expand trade ticket rail"
+                  className="inline-flex h-8 w-full items-center justify-center text-muted transition hover:text-text"
+                  data-testid="toggle-trade-rail"
+                  onClick={() => setOptionsTradeRailOpen(true)}
+                  type="button"
+                >
+                  <SidebarToggleIcon open={optionsTradeRailOpen} />
+                </button>
+                <div className="mt-2 flex-1 [writing-mode:vertical-rl] rotate-180 text-center text-[10px] uppercase tracking-[0.16em] text-muted">
+                  Trade Ticket
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -2650,54 +2985,27 @@ function App() {
       </AccountConnectorSection>
 
       {dashboardAccountHasAttachedSource(selectedDashboardAccount, "coinbase") ? (
-        <AccountConnectorSection
+        <CoinbaseAccountSource
           collapsed={coinbaseConnectorCollapsed}
-          details={
-            <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
-              <InlinePill
-                label={coinbaseConnectorStatus}
-                tone={toInlinePillTone(coinbaseAccountSourceSummary?.tone ?? coinbaseConnectorTone)}
-              />
-            </div>
-          }
-          eyebrow="Coinbase source"
           onToggle={() => setCoinbaseConnectorCollapsed((value) => !value)}
-          title="Coinbase"
+          statusLabel={coinbaseConnectorStatus}
+          statusTone={toInlinePillTone(coinbaseAccountSourceSummary?.tone ?? coinbaseConnectorTone)}
         >
           {renderCoinbasePanelContent()}
-        </AccountConnectorSection>
+        </CoinbaseAccountSource>
       ) : null}
 
-      {filesystemAccountSourceSummaries.map((filesystemAccountSourceSummary) => {
-        const filesystemStatus = filesystemConnectorStatusBySourceId[filesystemAccountSourceSummary.id];
-        const connectorCatalogEntry = filesystemStatus
-          ? getConnectorCatalogEntry(filesystemStatus.connectorId as ConnectorCatalogId)
-          : getConnectorCatalogEntry(CSV_FOLDER_CONNECTOR_ID);
-        return (
-        <AccountConnectorSection
-          key={filesystemAccountSourceSummary.id}
-          collapsed={filesystemConnectorCollapsedBySourceId[filesystemAccountSourceSummary.id] ?? false}
-          details={
-            <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
-              <InlinePill
-                label={filesystemAccountSourceSummary.status}
-                tone={toInlinePillTone(filesystemAccountSourceSummary.tone)}
-              />
-            </div>
-          }
-          eyebrow={connectorCatalogEntry?.dashboardEyebrow ?? "Filesystem source"}
-          onToggle={() =>
+      <FilesystemAccountSourceList
+        collapsedBySourceId={filesystemConnectorCollapsedBySourceId}
+        onToggleSource={(sourceId) =>
             setFilesystemConnectorCollapsedBySourceId((value) => ({
               ...value,
-              [filesystemAccountSourceSummary.id]: !(value[filesystemAccountSourceSummary.id] ?? false),
+              [sourceId]: !(value[sourceId] ?? false),
             }))
-          }
-          title={filesystemAccountSourceSummary.title}
-        >
-          {renderFilesystemConnectorPanelContent(filesystemAccountSourceSummary.id)}
-        </AccountConnectorSection>
-        );
-      })}
+        }
+        renderSourceContent={renderFilesystemConnectorPanelContent}
+        sources={filesystemAccountSourceItems}
+      />
     </>
   );
 
@@ -3099,68 +3407,12 @@ function App() {
   function renderTickerWorkspace() {
     return (
       <ToolWorkspaceFrame
-        description="Inspect an underlying without entering an account view. Market lookup stays separate from portfolio state."
+        compact
+        titleRowSlot={renderTickerQueryBar()}
         title="Ticker"
       >
         <div className="grid gap-6">
-          <div className="grid gap-3 rounded-2xl border border-line/80 bg-panel px-4 py-4">
-            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-              <div className="flex min-w-0 flex-1 flex-col gap-3 sm:flex-row sm:items-center">
-                <label className="flex-1">
-                  <span className="sr-only">Ticker symbol</span>
-                  <input
-                    className="w-full rounded-xl border border-line/80 bg-panelSoft px-4 py-3 text-base text-text outline-none transition focus:border-accent/60"
-                    onChange={(event) => setChainSymbolInput(event.target.value.toUpperCase())}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") {
-                        submitChainSymbolInput();
-                      }
-                    }}
-                    placeholder="Enter ticker"
-                    ref={chainSymbolInputRef}
-                    spellCheck={false}
-                    type="text"
-                    value={chainSymbolInput}
-                  />
-                </label>
-                <button
-                  className="inline-flex h-12 items-center justify-center rounded-xl border border-accent/30 bg-accent/10 px-4 text-sm font-medium text-accent transition hover:border-accent/50 hover:bg-accent/16 disabled:cursor-not-allowed disabled:opacity-50"
-                  disabled={!chainSymbolInput.trim() || connectMutation.isPending || reconnectMutation.isPending}
-                  onClick={submitChainSymbolInput}
-                  type="button"
-                >
-                  {chainQuery.isFetching && chainSymbolInput.trim().toUpperCase() === chainSymbol ? `Loading ${chainSymbol}…` : "Load ticker"}
-                </button>
-              </div>
-              <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
-                <InlinePill
-                  label={connectionQuery.data?.marketDataMode ?? "DATA"}
-                  tone={connectionQuery.data?.marketDataMode === "LIVE" ? "safe" : "neutral"}
-                />
-                <InlinePill
-                  label={activeDisplayedChain ? `Spot ${fmtCurrencySmall(activeDisplayedChain.underlying.price)}` : "No quote loaded"}
-                  tone="neutral"
-                />
-              </div>
-            </div>
-          </div>
-
-          {chainErrorHeaderLabel ? (
-            <div className="rounded-2xl border border-danger/20 bg-danger/8 px-4 py-3 text-sm text-danger">{chainErrorHeaderLabel}</div>
-          ) : null}
-
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            <MetricCard label="Ticker" value={chainSymbol} />
-            <MetricCard label="Spot" value={activeDisplayedChain ? fmtCurrency(activeDisplayedChain.underlying.price) : "—"} />
-            <MetricCard label="Selected expiry" value={activeDisplayedChain?.selectedExpiry ?? "—"} />
-            <MetricCard label="Expiries loaded" value={activeDisplayedChain ? fmtNumber(activeDisplayedChain.expiries.length) : "—"} />
-          </div>
-
-          {activeDisplayedChain?.quoteNotice ? (
-            <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-3 text-sm text-muted">
-              {activeDisplayedChain.quoteNotice}
-            </div>
-          ) : null}
+          {renderTickerOverview()}
         </div>
       </ToolWorkspaceFrame>
     );
@@ -3169,20 +3421,19 @@ function App() {
   function renderOptionsWorkspace() {
     return (
       <ToolWorkspaceFrame
-        description="Inspect options chains with market data, execution route, and overlays kept explicit instead of leaking in from the dashboard."
-        headerSlot={
-          <div className="mt-5 flex flex-wrap items-center gap-2 text-xs text-muted">
-            <InlinePill
-              label={optionsDataSourcePill.label}
-              tone={optionsDataSourcePill.tone}
-            />
-            <InlinePill
-              label={routedAccount ? `Execution route · ${routedAccount}` : `Execution route · ${activeExecutionRoute.label.toLowerCase()}`}
-              tone={routedAccount ? "safe" : activeExecutionRoute.tone}
-            />
-            <InlinePill label="Overlay account · off" tone="neutral" />
-          </div>
+        compact
+        titleEndSlot={
+          <button
+            aria-label="Options tool settings"
+            className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-line/80 bg-panelSoft text-muted transition hover:border-accent/25 hover:text-text"
+            data-testid="options-settings-button"
+            title="Options settings"
+            type="button"
+          >
+            <GearIcon />
+          </button>
         }
+        titleRowSlot={renderOptionsQueryBar()}
         title="Options"
       >
         {renderIbkrOptionsSurface()}
@@ -3365,7 +3616,7 @@ function App() {
           </div>
 
           <div className="shell-stage">
-            <div className="mx-auto w-full max-w-[1600px]">
+            <div className={`mx-auto w-full ${activeWorkspace === "options" ? "max-w-[1840px]" : "max-w-[1600px]"}`}>
               {activeWorkspace === "dashboard" ? renderDashboardWorkspace() : null}
               {activeWorkspace === "market" ? renderMarketWorkspace() : null}
               {activeWorkspace === "ticker" ? renderTickerWorkspace() : null}
@@ -3385,29 +3636,51 @@ function ToolWorkspaceFrame({
   title,
   description,
   headerSlot,
+  titleRowSlot,
+  titleEndSlot,
   children,
+  compact = false,
 }: {
   title: string;
-  description: string;
+  description?: string;
   headerSlot?: ReactNode;
+  titleRowSlot?: ReactNode;
+  titleEndSlot?: ReactNode;
   children: ReactNode;
+  compact?: boolean;
 }) {
   return (
     <div className="chrome-header-frame">
       <div className="account-workspace panel overflow-hidden rounded-[16px]">
-        <header className="border-b border-line/70 px-10 py-7 lg:px-12">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-            <div>
-              <div className="flex flex-wrap items-center gap-3">
-                <h1 className="text-3xl font-semibold tracking-tight text-text">{title}</h1>
+        <header className={compact ? "border-b border-line/70 px-8 py-6 lg:px-10" : "border-b border-line/70 px-10 py-7 lg:px-12"}>
+          <div className="grid gap-4">
+            {titleRowSlot ? (
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between lg:gap-4">
+                <div className="flex min-w-0 flex-col gap-3 lg:flex-row lg:items-center lg:gap-4">
+                  <div className="shrink-0">
+                    <div className="flex flex-wrap items-center gap-3">
+                      <h1 className="text-3xl font-semibold tracking-tight text-text">{title}</h1>
+                    </div>
+                  </div>
+                  <div className="min-w-0 lg:w-full lg:max-w-[56rem] lg:flex-[0_1_56rem]">{titleRowSlot}</div>
+                </div>
+                {titleEndSlot ? <div className="shrink-0">{titleEndSlot}</div> : null}
               </div>
-              <p className="mt-2 max-w-3xl text-sm text-muted">{description}</p>
-              {headerSlot}
-            </div>
+            ) : (
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between lg:gap-6">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <h1 className="text-3xl font-semibold tracking-tight text-text">{title}</h1>
+                  </div>
+                </div>
+              </div>
+            )}
+            {description ? <p className="max-w-3xl text-sm text-muted">{description}</p> : null}
+            {headerSlot}
           </div>
         </header>
 
-        <section className="px-10 py-8 lg:px-12">{children}</section>
+        <section className={compact ? "px-8 py-6 lg:px-10" : "px-10 py-8 lg:px-12"}>{children}</section>
       </div>
     </div>
   );

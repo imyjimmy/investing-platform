@@ -165,6 +165,40 @@ class UnderlyingQuote(DashboardModel):
     generatedAt: datetime
 
 
+class TickerOverviewResponse(DashboardModel):
+    symbol: str
+    quote: UnderlyingQuote
+    marketCap: float | None = None
+    marketCapChangePct: float | None = None
+    revenueTtm: float | None = None
+    revenueTtmChangePct: float | None = None
+    netIncomeTtm: float | None = None
+    netIncomeTtmChangePct: float | None = None
+    epsTtm: float | None = None
+    epsTtmChangePct: float | None = None
+    sharesOutstanding: float | None = None
+    peRatio: float | None = None
+    forwardPeRatio: float | None = None
+    dividendAmount: float | None = None
+    dividendYieldPct: float | None = None
+    exDividendDate: date | None = None
+    volume: int | None = None
+    open: float | None = None
+    previousClose: float | None = None
+    dayRangeLow: float | None = None
+    dayRangeHigh: float | None = None
+    week52Low: float | None = None
+    week52High: float | None = None
+    beta: float | None = None
+    analystRating: str | None = None
+    priceTarget: float | None = None
+    priceTargetUpsidePct: float | None = None
+    earningsDate: date | None = None
+    sourceNotice: str | None = None
+    generatedAt: datetime
+    isStale: bool = False
+
+
 class ChainRow(DashboardModel):
     strike: float
     distanceFromSpotPct: float

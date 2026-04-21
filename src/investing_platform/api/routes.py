@@ -162,6 +162,14 @@ def underlying(symbol: str) -> dict:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
+@router.get("/market/ticker/{symbol}")
+def ticker_overview(symbol: str) -> dict:
+    try:
+        return _service().get_ticker_overview(symbol).model_dump()
+    except BrokerUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
 @router.get("/market/chain/{symbol}")
 def option_chain(symbol: str, expiry: str | None = Query(default=None)) -> dict:
     try:

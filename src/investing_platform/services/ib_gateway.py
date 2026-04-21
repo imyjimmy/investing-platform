@@ -12,9 +12,14 @@ from queue import Empty, Queue
 import threading
 import time
 from typing import Any, Callable, Iterable, Literal, TypeVar, cast
+from xml.etree import ElementTree
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+try:
+    import yfinance as yf
+except ImportError:  # pragma: no cover - optional fundamentals fallback
+    yf = None  # type: ignore[assignment]
 
 from investing_platform.config import DashboardSettings
 from investing_platform.models import (
@@ -30,6 +35,7 @@ from investing_platform.models import (
     OrderCancelResponse,
     Position,
     SubmittedOrder,
+    TickerOverviewResponse,
     UnderlyingQuote,
 )
 from investing_platform.services.analytics import build_collateral_summary
@@ -50,6 +56,7 @@ except ImportError:  # pragma: no cover - runtime guard
 
 TaskResultT = TypeVar("TaskResultT")
 OPTION_GENERIC_TICKS = "100,101,106,221"
+STOCK_OVERVIEW_GENERIC_TICKS = "165,258,456"
 
 
 @dataclass(slots=True)
@@ -79,6 +86,7 @@ class IBGatewayBrokerService(BrokerService):
         self._managed_accounts: list[str] = [self.settings.ib_account_id] if self.settings.ib_account_id else []
         self._portfolio_cache: dict[str, CacheEntry[PortfolioSnapshot]] = {}
         self._quote_cache: dict[str, CacheEntry[UnderlyingQuote]] = {}
+        self._ticker_overview_cache: dict[str, CacheEntry[TickerOverviewResponse]] = {}
         self._chain_cache: dict[str, CacheEntry[OptionChainResponse]] = {}
         self._option_snapshot_root = self.settings.data_dir / "raw" / "options"
         self._tasks: Queue[_PendingTask] = Queue()
@@ -156,6 +164,24 @@ class IBGatewayBrokerService(BrokerService):
         except Exception as exc:
             if cached is not None:
                 return cached.value.model_copy(update={"marketDataStatus": "STALE"})
+            raise BrokerUnavailableError(str(exc)) from exc
+
+    def get_ticker_overview(self, symbol: str) -> TickerOverviewResponse:
+        symbol = symbol.upper()
+        cached = self._ticker_overview_cache.get(symbol)
+        if cached and _age_seconds(cached.captured_at) <= self.settings.chain_cache_ttl_seconds:
+            return cached.value
+        try:
+            overview = cast(
+                TickerOverviewResponse,
+                self._submit(lambda ib: self._fetch_ticker_overview(ib, symbol), timeout=self.settings.ib_request_timeout_seconds + 8.0),
+            )
+            self._ticker_overview_cache[symbol] = CacheEntry(overview, datetime.now(UTC))
+            self._quote_cache[symbol] = CacheEntry(overview.quote, datetime.now(UTC))
+            return overview
+        except Exception as exc:
+            if cached is not None:
+                return cached.value.model_copy(update={"isStale": True, "sourceNotice": f"Showing stale ticker overview. {exc}"})
             raise BrokerUnavailableError(str(exc)) from exc
 
     def get_option_chain(self, symbol: str, expiry: str | None = None) -> OptionChainResponse:
@@ -526,7 +552,7 @@ class IBGatewayBrokerService(BrokerService):
             except Exception as exc:
                 last_error = exc
                 continue
-            ib.reqMarketDataType(self.settings.ib_market_data_type)
+            ib.reqMarketDataType(_effective_market_data_type(self.settings.ib_market_data_type))
             self._remember_account_id(self._resolve_account_id(ib))
             self._mark_connected(port)
             return
@@ -724,6 +750,143 @@ class IBGatewayBrokerService(BrokerService):
             close=round(_safe_float(getattr(ticker, "close", None)), 4) if _is_valid_number(_safe_float(getattr(ticker, "close", None))) else None,
             marketDataStatus=_market_data_mode_label(resolved_market_data_type),
             generatedAt=generated_at,
+        )
+
+    def _fetch_ticker_overview(self, ib: Any, symbol: str) -> TickerOverviewResponse:
+        self._ensure_connected(ib)
+        generated_at = datetime.now(UTC)
+        qualified = self._qualify_one(ib, Stock(symbol, self.settings.ib_underlying_exchange, self.settings.ib_currency))
+        ticker, resolved_market_data_type = self._request_underlying_ticker(ib, qualified)
+        overview_ticker = self._req_stock_overview_snapshot(ib, qualified, resolved_market_data_type)
+        if overview_ticker is not None:
+            ticker = _merge_ticker_payloads(ticker, overview_ticker)
+        price = _ticker_market_price(ticker)
+        if not _is_valid_number(price):
+            price = _latest_underlying_price(ib, qualified) or 0.0
+        quote = UnderlyingQuote(
+            symbol=symbol,
+            price=round(price, 4),
+            bid=_round_or_none(_safe_float(getattr(ticker, "bid", None)), 4),
+            ask=_round_or_none(_safe_float(getattr(ticker, "ask", None)), 4),
+            last=_round_or_none(_safe_float(getattr(ticker, "last", None)), 4),
+            close=_round_or_none(_safe_float(getattr(ticker, "close", None)), 4),
+            marketDataStatus=_market_data_mode_label(resolved_market_data_type),
+            generatedAt=generated_at,
+        )
+
+        ratio_values = _extract_fundamental_ratios(getattr(ticker, "fundamentalRatios", None))
+        source_notices: list[str] = []
+        snapshot_xml = self._request_fundamental_report(ib, qualified, "ReportSnapshot")
+        if snapshot_xml:
+            ratio_values.update(_extract_fundamental_xml_values(snapshot_xml))
+        else:
+            source_notices.append("IBKR did not return a fundamental ReportSnapshot for this symbol/session.")
+        calendar_xml = self._request_fundamental_report(ib, qualified, "CalendarReport")
+        if calendar_xml:
+            ratio_values.update(_extract_fundamental_xml_values(calendar_xml))
+
+        fallback_values = _fetch_yfinance_fundamentals(symbol)
+        if fallback_values:
+            source_notices.append("Fundamental overview fields are filled from yfinance when IBKR does not return them.")
+
+        shares_outstanding = _first_present(
+            _normalize_share_count(_metric_value(ratio_values, "sharesoutstanding", "sharesout", "ttmsharesout", "commonsharesoutstanding")),
+            _metric_value(fallback_values, "sharesoutstanding", "impliedsharesoutstanding"),
+        )
+        market_cap = _first_present(
+            _normalize_large_statement_value(_metric_value(ratio_values, "marketcap", "mktcap", "marketcapitalization")),
+            _metric_value(fallback_values, "marketcap"),
+        )
+        if market_cap is not None and shares_outstanding is not None and _is_valid_number(price):
+            share_implied_market_cap = price * shares_outstanding
+            if abs(market_cap - share_implied_market_cap) > abs(market_cap * 1_000_000.0 - share_implied_market_cap):
+                market_cap *= 1_000_000.0
+        revenue_ttm = _first_present(
+            _normalize_large_statement_value(_metric_value(ratio_values, "revenuettm", "ttmrev", "revenue", "totalrevenuettm")),
+            _metric_value(fallback_values, "totalrevenue", "revenuettm"),
+        )
+        net_income_ttm = _first_present(
+            _normalize_large_statement_value(_metric_value(ratio_values, "netincomettm", "ttminc", "netincome", "incomeaftertax")),
+            _metric_value(fallback_values, "netincometocommon", "netincome"),
+        )
+        eps_ttm = _first_present(
+            _metric_value(ratio_values, "epsttm", "ttmeps", "ttmepsxclx", "eps", "epsinclx"),
+            _metric_value(fallback_values, "trailingeps", "epsttm"),
+        )
+        dividend_data = getattr(ticker, "dividends", None)
+        dividend_amount = _first_present(
+            _metric_value(ratio_values, "dividend", "dividendamount", "dividendpershare", "dps"),
+            _metric_value(fallback_values, "dividendrate", "trailingannualdividendrate"),
+        )
+        if dividend_amount is None:
+            dividend_amount = _safe_float(getattr(dividend_data, "nextAmount", None))
+        dividend_yield_pct = _normalize_percent(
+            _first_present(
+                _metric_value(ratio_values, "dividendyield", "yield", "ttmdividendyield"),
+                _metric_value(fallback_values, "dividendyield", "trailingannualdividendyield"),
+            )
+        )
+        if dividend_amount is not None and _is_valid_number(price):
+            dividend_yield_pct = dividend_amount / price * 100.0
+        ex_dividend_date = _parse_date_value(
+            _first_present(
+                _metric_raw_value(ratio_values, "exdividenddate", "exdate", "dividendexdate"),
+                getattr(dividend_data, "nextDate", None),
+                _metric_raw_value(fallback_values, "exdividenddate"),
+            )
+        )
+        if dividend_amount is None:
+            ex_dividend_date = None
+        price_target = _first_present(
+            _metric_value(ratio_values, "pricetarget", "targetprice", "consensusprice", "meanpricetarget"),
+            _metric_value(fallback_values, "targetmeanprice", "pricetarget"),
+        )
+        price_target_upside_pct = ((price_target / price - 1.0) * 100.0) if price_target is not None and _is_valid_number(price) else None
+        source_notice = " ".join(source_notices) if source_notices else None
+
+        return TickerOverviewResponse(
+            symbol=symbol,
+            quote=quote,
+            marketCap=_round_or_none(market_cap, 2),
+            marketCapChangePct=_round_signed_or_none(_normalize_percent(_metric_value(ratio_values, "marketcapgrowth", "mktcapchg", "marketcapchangepct")), 2),
+            revenueTtm=_round_or_none(revenue_ttm, 2),
+            revenueTtmChangePct=_round_signed_or_none(
+                _normalize_percent(_first_present(_metric_value(ratio_values, "revenuegrowth", "revenuegrowthrate", "ttmrevgrowth"), _metric_value(fallback_values, "revenuegrowth"))),
+                2,
+            ),
+            netIncomeTtm=_round_signed_or_none(net_income_ttm, 2),
+            netIncomeTtmChangePct=_round_signed_or_none(_normalize_percent(_metric_value(ratio_values, "netincomegrowth", "incomegrowth", "ttmincgrowth")), 2),
+            epsTtm=_round_signed_or_none(eps_ttm, 4),
+            epsTtmChangePct=_round_signed_or_none(
+                _normalize_percent(_first_present(_metric_value(ratio_values, "epsgrowth", "ttmepsgrowth", "epsgrowthrate"), _metric_value(fallback_values, "earningsgrowth"))),
+                2,
+            ),
+            sharesOutstanding=_round_or_none(shares_outstanding, 0),
+            peRatio=_round_or_none(_first_present(_metric_value(ratio_values, "peratio", "pe", "peexclxor", "trailingpe"), _metric_value(fallback_values, "trailingpe")), 2),
+            forwardPeRatio=_round_or_none(_first_present(_metric_value(ratio_values, "forwardpe", "forwardperatio", "projpe"), _metric_value(fallback_values, "forwardpe")), 2),
+            dividendAmount=_round_or_none(dividend_amount, 4),
+            dividendYieldPct=_round_or_none(dividend_yield_pct, 2),
+            exDividendDate=ex_dividend_date,
+            volume=_optional_int(_first_present(getattr(ticker, "volume", None), _metric_raw_value(fallback_values, "volume", "regularmarketvolume"))),
+            open=_round_or_none(_first_present(_safe_float(getattr(ticker, "open", None)), _metric_value(fallback_values, "open", "regularmarketopen")), 4),
+            previousClose=_round_or_none(_first_present(quote.close, _metric_value(fallback_values, "previousclose", "regularmarketpreviousclose")), 4),
+            dayRangeLow=_round_or_none(_first_present(_safe_float(getattr(ticker, "low", None)), _metric_value(fallback_values, "daylow", "regularmarketdaylow")), 4),
+            dayRangeHigh=_round_or_none(_first_present(_safe_float(getattr(ticker, "high", None)), _metric_value(fallback_values, "dayhigh", "regularmarketdayhigh")), 4),
+            week52Low=_round_or_none(_first_present(_metric_value(ratio_values, "week52low", "low52week", "price52weeklow", "low52"), _metric_value(fallback_values, "fiftytwoweeklow")), 4),
+            week52High=_round_or_none(_first_present(_metric_value(ratio_values, "week52high", "high52week", "price52weekhigh", "high52"), _metric_value(fallback_values, "fiftytwoweekhigh")), 4),
+            beta=_round_or_none(_first_present(_metric_value(ratio_values, "beta", "betaspy", "beta5y"), _metric_value(fallback_values, "beta")), 2),
+            analystRating=_analyst_rating(_first_present(_metric_raw_value(ratio_values, "analystRating", "recommendation", "consensusrating"), _metric_raw_value(fallback_values, "recommendationkey", "recommendationmean"))),
+            priceTarget=_round_or_none(price_target, 4),
+            priceTargetUpsidePct=_round_signed_or_none(price_target_upside_pct, 2),
+            earningsDate=_parse_date_value(
+                _first_present(
+                    _metric_raw_value(ratio_values, "earningsdate", "nextearningsdate", "epsreportdate"),
+                    _metric_raw_value(fallback_values, "earningstimestamp", "earningstimestampstart", "nextfiscalyearend"),
+                )
+            ),
+            sourceNotice=source_notice,
+            generatedAt=generated_at,
+            isStale=False,
         )
 
     def _fetch_option_chain(self, ib: Any, symbol: str, expiry: str | None) -> OptionChainResponse:
@@ -1213,6 +1376,33 @@ class IBGatewayBrokerService(BrokerService):
             except Exception:
                 pass
 
+    def _req_stock_overview_snapshot(self, ib: Any, contract: Any, market_data_type: int) -> Any | None:
+        ib.reqMarketDataType(market_data_type)
+        ticker = ib.reqMktData(contract, STOCK_OVERVIEW_GENERIC_TICKS, False, False)
+        try:
+            deadline = time.monotonic() + min(max(self.settings.ib_request_timeout_seconds / 3.0, 2.5), 6.0)
+            while time.monotonic() < deadline:
+                ib.sleep(0.25)
+                if _ticker_has_quote_payload(ticker) and (
+                    getattr(ticker, "fundamentalRatios", None) is not None or getattr(ticker, "dividends", None) is not None
+                ):
+                    break
+            return ticker
+        except Exception:
+            return None
+        finally:
+            try:
+                ib.cancelMktData(contract)
+            except Exception:
+                pass
+
+    def _request_fundamental_report(self, ib: Any, contract: Any, report_type: str) -> str | None:
+        try:
+            payload = ib.reqFundamentalData(contract, report_type)
+        except Exception:
+            return None
+        return payload if isinstance(payload, str) and payload.strip() else None
+
     def _req_market_data_in_batches(
         self,
         ib: Any,
@@ -1221,13 +1411,17 @@ class IBGatewayBrokerService(BrokerService):
         generic_tick_list: str = "",
     ) -> list[Any]:
         tickers: list[Any] = []
-        for batch in _batched(contracts, self.settings.chain_batch_size):
+        batch_size = _option_market_data_batch_size(self.settings.chain_batch_size, market_data_type)
+        minimum_wait_seconds, deadline_seconds = _option_market_data_wait_profile(market_data_type)
+        for batch in _batched(contracts, batch_size):
             ib.reqMarketDataType(market_data_type)
             batch_tickers = [ib.reqMktData(contract, generic_tick_list, False, False) for contract in batch]
-            deadline = time.monotonic() + min(max(self.settings.ib_request_timeout_seconds / 18.0, 0.4), 0.8)
+            started_at = time.monotonic()
+            settle_at = started_at + minimum_wait_seconds
+            deadline = started_at + min(max(self.settings.ib_request_timeout_seconds / 8.0, deadline_seconds), deadline_seconds + 1.0)
             while time.monotonic() < deadline:
                 ib.sleep(0.2)
-                if all(_ticker_has_quote_payload(ticker) for ticker in batch_tickers):
+                if time.monotonic() >= settle_at and all(_ticker_has_option_payload(ticker) for ticker in batch_tickers):
                     break
             tickers.extend(batch_tickers)
             for contract in batch:
@@ -1351,7 +1545,8 @@ def _ib_connection_port_candidates(primary_port: int, auto_discover: bool) -> li
 
 
 def _market_data_type_candidates(preferred_type: int) -> list[int]:
-    candidates = [preferred_type, 3, 4]
+    effective_preferred_type = _effective_market_data_type(preferred_type)
+    candidates = [effective_preferred_type, preferred_type, 3, 4]
     deduped: list[int] = []
     for candidate in candidates:
         if candidate not in deduped:
@@ -1360,12 +1555,190 @@ def _market_data_type_candidates(preferred_type: int) -> list[int]:
 
 
 def _option_market_data_type_candidates(preferred_type: int) -> list[int]:
-    candidates = [preferred_type, 3]
+    effective_preferred_type = _effective_market_data_type(preferred_type)
+    candidates = [effective_preferred_type, preferred_type, 3]
     deduped: list[int] = []
     for candidate in candidates:
         if candidate not in deduped:
             deduped.append(candidate)
     return deduped
+
+
+def _option_market_data_batch_size(configured_batch_size: int, market_data_type: int) -> int:
+    effective_market_data_type = _effective_market_data_type(market_data_type)
+    if effective_market_data_type in {2, 4}:
+        return max(6, min(configured_batch_size, 12))
+    return max(8, configured_batch_size)
+
+
+def _option_market_data_wait_profile(market_data_type: int) -> tuple[float, float]:
+    effective_market_data_type = _effective_market_data_type(market_data_type)
+    if effective_market_data_type in {2, 4}:
+        return 1.2, 2.4
+    return 0.5, 1.2
+
+
+def _effective_market_data_type(preferred_type: int) -> int:
+    if preferred_type in {1, 2} and _should_prefer_frozen_market_data():
+        return 2
+    return preferred_type
+
+
+def _merge_ticker_payloads(primary: Any, secondary: Any) -> Any:
+    if primary is None:
+        return secondary
+    if secondary is None:
+        return primary
+    for attr_name in ("bid", "ask", "last", "close", "open", "high", "low", "volume"):
+        secondary_value = getattr(secondary, attr_name, None)
+        primary_value = getattr(primary, attr_name, None)
+        if _safe_float(secondary_value) is None and _safe_float(primary_value) is not None:
+            try:
+                setattr(secondary, attr_name, primary_value)
+            except Exception:
+                pass
+    return secondary
+
+
+def _extract_fundamental_ratios(ratios: Any) -> dict[str, Any]:
+    values: dict[str, Any] = {}
+    if ratios is None:
+        return values
+    if isinstance(ratios, dict):
+        iterable = ratios.items()
+    else:
+        raw = getattr(ratios, "__dict__", None)
+        iterable = raw.items() if isinstance(raw, dict) else ((name, getattr(ratios, name, None)) for name in dir(ratios))
+    for key, value in iterable:
+        if str(key).startswith("_") or callable(value):
+            continue
+        values[_normalize_metric_key(key)] = value
+    return values
+
+
+def _extract_fundamental_xml_values(payload: str) -> dict[str, Any]:
+    values: dict[str, Any] = {}
+    try:
+        root = ElementTree.fromstring(payload)
+    except ElementTree.ParseError:
+        return values
+    for element in root.iter():
+        tag_name = _strip_xml_namespace(element.tag)
+        text = (element.text or "").strip()
+        field_name = (
+            element.attrib.get("FieldName")
+            or element.attrib.get("fieldName")
+            or element.attrib.get("Name")
+            or element.attrib.get("name")
+            or tag_name
+        )
+        if text and field_name:
+            values[_normalize_metric_key(field_name)] = text
+        for attr_key, attr_value in element.attrib.items():
+            if attr_value not in {"", None}:
+                values.setdefault(_normalize_metric_key(attr_key), attr_value)
+    return values
+
+
+def _strip_xml_namespace(tag_name: str) -> str:
+    return tag_name.rsplit("}", 1)[-1] if "}" in tag_name else tag_name
+
+
+def _normalize_metric_key(value: Any) -> str:
+    return "".join(character for character in str(value).lower() if character.isalnum())
+
+
+def _metric_raw_value(values: dict[str, Any], *aliases: str) -> Any | None:
+    for alias in aliases:
+        value = values.get(_normalize_metric_key(alias))
+        if value is not None and value != "":
+            return value
+    return None
+
+
+def _metric_value(values: dict[str, Any], *aliases: str) -> float | None:
+    return _safe_float(_metric_raw_value(values, *aliases))
+
+
+def _first_present(*values: Any) -> Any | None:
+    for value in values:
+        if value is not None and value != "":
+            return value
+    return None
+
+
+def _fetch_yfinance_fundamentals(symbol: str) -> dict[str, Any]:
+    if yf is None:
+        return {}
+    try:
+        info = yf.Ticker(symbol).get_info()
+    except Exception:
+        return {}
+    if not isinstance(info, dict):
+        return {}
+    return {_normalize_metric_key(key): value for key, value in info.items() if value is not None and value != ""}
+
+
+def _normalize_large_statement_value(value: float | None) -> float | None:
+    if value is None or not isfinite(value):
+        return None
+    if 0 < abs(value) < 1_000_000_000:
+        return value * 1_000_000.0
+    return value
+
+
+def _normalize_share_count(value: float | None) -> float | None:
+    if value is None or not isfinite(value):
+        return None
+    if 0 < value < 10_000_000:
+        return value * 1_000_000.0
+    return value
+
+
+def _normalize_percent(value: float | None) -> float | None:
+    if value is None or not isfinite(value):
+        return None
+    if -1.0 <= value <= 1.0:
+        return value * 100.0
+    return value
+
+
+def _parse_date_value(value: Any) -> date | None:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, (int, float)) and value > 100_000:
+        try:
+            return datetime.fromtimestamp(value, UTC).date()
+        except (OverflowError, OSError, ValueError):
+            return None
+    if value is None or value == "":
+        return None
+    text = str(value).strip()
+    for fmt in ("%Y-%m-%d", "%Y%m%d", "%m/%d/%Y", "%b %d, %Y", "%B %d, %Y"):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _analyst_rating(value: Any) -> str | None:
+    if value is None or value == "":
+        return None
+    numeric = _safe_float(value)
+    if numeric is not None:
+        if numeric <= 1.5:
+            return "Strong Buy"
+        if numeric <= 2.5:
+            return "Buy"
+        if numeric <= 3.5:
+            return "Hold"
+        if numeric <= 4.5:
+            return "Sell"
+        return "Strong Sell"
+    return str(value).replace("_", " ").replace("-", " ").strip().title()
 
 
 def _extract_greek(ticker: Any, field_name: str, percent: bool = False) -> float | None:
@@ -1686,6 +2059,8 @@ def _midpoint(bid: float | None, ask: float | None) -> float | None:
 
 
 def _safe_float(value: Any) -> float | None:
+    if isinstance(value, str):
+        value = value.strip().replace(",", "").replace("$", "").replace("%", "")
     try:
         result = float(value)
     except (TypeError, ValueError):
@@ -1994,6 +2369,14 @@ def _market_session_date() -> date:
 
 def _is_weekend_market_session() -> bool:
     return _market_session_date().weekday() >= 5
+
+
+def _should_prefer_frozen_market_data(now: datetime | None = None) -> bool:
+    eastern_now = now.astimezone(ZoneInfo("America/New_York")) if now is not None else datetime.now(ZoneInfo("America/New_York"))
+    if eastern_now.weekday() >= 5:
+        return True
+    current_time = eastern_now.time()
+    return current_time < dt_time(hour=9, minute=30) or current_time >= dt_time(hour=16, minute=0)
 
 
 def _extract_snapshot_date(path: Path) -> date | None:

@@ -17,6 +17,7 @@ from investing_platform.models import (
     OrderCancelResponse,
     Position,
     SubmittedOrder,
+    TickerOverviewResponse,
     UnderlyingQuote,
 )
 
@@ -64,6 +65,9 @@ class BrokerService:
         raise NotImplementedError
 
     def get_underlying_quote(self, symbol: str) -> UnderlyingQuote:
+        raise NotImplementedError
+
+    def get_ticker_overview(self, symbol: str) -> TickerOverviewResponse:
         raise NotImplementedError
 
     def get_option_chain(self, symbol: str, expiry: str | None = None) -> OptionChainResponse:

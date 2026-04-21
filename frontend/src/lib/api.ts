@@ -23,6 +23,7 @@ import type {
   RiskSummaryResponse,
   ScenarioResponse,
   SubmittedOrder,
+  TickerOverviewResponse,
   UniverseSnapshotResponse,
 } from "./types";
 
@@ -137,8 +138,8 @@ export async function postJson<T>(path: string, body?: unknown): Promise<T> {
 
 export const api = {
   connectionStatus: () => fetchJson<ConnectionStatus>("/api/connection-status"),
-  connect: () => fetchJson<ConnectionStatus>("/api/connect"),
-  reconnect: () => fetchJson<ConnectionStatus>("/api/reconnect"),
+  connect: () => postJson<ConnectionStatus>("/api/connect"),
+  reconnect: () => postJson<ConnectionStatus>("/api/reconnect"),
   coinbaseStatus: () => fetchJson<CoinbaseSourceStatus>("/api/sources/coinbase/status"),
   coinbasePortfolio: () => fetchJson<CoinbasePortfolioResponse>("/api/sources/coinbase/portfolio"),
   filesystemConnectorStatuses: (accountKey: string) =>
@@ -172,6 +173,7 @@ export const api = {
   optionPositions: (accountId?: string) =>
     fetchJson<OptionPositionsResponse>(withAccountId("/api/account/options-positions", accountId)),
   openOrders: (accountId?: string) => fetchJson<OpenOrdersResponse>(withAccountId("/api/account/open-orders", accountId)),
+  tickerOverview: (symbol: string) => fetchJson<TickerOverviewResponse>(`/api/market/ticker/${encodeURIComponent(symbol)}`),
   chain: (symbol: string, expiry?: string) =>
     fetchJson<OptionChainResponse>(`/api/market/chain/${symbol}${expiry ? `?expiry=${expiry}` : ""}`),
   marketUniverse: () => fetchJson<UniverseSnapshotResponse>("/api/market/universe"),

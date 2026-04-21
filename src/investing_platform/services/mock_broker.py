@@ -19,11 +19,12 @@ from investing_platform.models import (
     OrderCancelResponse,
     Position,
     SubmittedOrder,
+    TickerOverviewResponse,
     UnderlyingQuote,
 )
 from investing_platform.services.analytics import build_collateral_summary
 from investing_platform.services.base import BrokerService, BrokerServiceError, PortfolioSnapshot
-from options_scanner.providers.mock_provider import MockOptionsChainProvider, MockPriceDataProvider
+from options_scanner.providers.mock_provider import MockOptionsChainProvider, MockPriceDataProvider, _get_profile
 
 
 class MockBrokerService(BrokerService):
@@ -92,6 +93,53 @@ class MockBrokerService(BrokerService):
             close=round(spot * 0.997, 2),
             marketDataStatus="MOCK",
             generatedAt=generated_at,
+        )
+
+    def get_ticker_overview(self, symbol: str) -> TickerOverviewResponse:
+        symbol = symbol.upper()
+        profile = _get_profile(symbol)
+        quote = self.get_underlying_quote(symbol)
+        generated_at = datetime.now(UTC)
+        market_cap = max(profile.market_cap * (quote.price / max(profile.start_price, 1e-6)), 1.0)
+        revenue_ttm = market_cap * (0.18 if profile.is_etf else 0.32)
+        net_income_ttm = revenue_ttm * (0.22 if profile.is_etf else 0.18)
+        eps_ttm = net_income_ttm / max(profile.shares_outstanding, 1.0)
+        pe_ratio = quote.price / max(eps_ttm, 0.01)
+        dividend_amount = 0.0 if profile.is_etf else round(quote.price * 0.0025, 2)
+        dividend_yield_pct = (dividend_amount / quote.price * 100.0) if dividend_amount else None
+        price_target = quote.price * (1.0 + min(max(profile.beta_spy, 0.8), 2.2) * 0.045)
+        return TickerOverviewResponse(
+            symbol=symbol,
+            quote=quote,
+            marketCap=round(market_cap, 2),
+            marketCapChangePct=round((quote.price / max(profile.start_price, 1e-6) - 1.0) * 100.0, 1),
+            revenueTtm=round(revenue_ttm, 2),
+            revenueTtmChangePct=round(8.0 + profile.beta_spy * 3.0, 1),
+            netIncomeTtm=round(net_income_ttm, 2),
+            netIncomeTtmChangePct=round(10.0 + profile.beta_qqq * 4.0, 1),
+            epsTtm=round(eps_ttm, 2),
+            epsTtmChangePct=round(9.0 + profile.beta_spy * 3.5, 1),
+            sharesOutstanding=round(profile.shares_outstanding, 0),
+            peRatio=round(pe_ratio, 2),
+            forwardPeRatio=round(pe_ratio * 0.92, 2),
+            dividendAmount=dividend_amount or None,
+            dividendYieldPct=round(dividend_yield_pct, 2) if dividend_yield_pct is not None else None,
+            exDividendDate=date.today() + timedelta(days=45) if dividend_amount else None,
+            volume=int(profile.avg_volume),
+            open=round(quote.price * 0.998, 2),
+            previousClose=quote.close,
+            dayRangeLow=round(quote.price * 0.985, 2),
+            dayRangeHigh=round(quote.price * 1.012, 2),
+            week52Low=round(quote.price * 0.62, 2),
+            week52High=round(quote.price * 1.18, 2),
+            beta=round(profile.beta_spy, 2),
+            analystRating="Strong Buy" if profile.beta_spy >= 1.3 and not profile.is_etf else "Buy",
+            priceTarget=round(price_target, 2),
+            priceTargetUpsidePct=round((price_target / quote.price - 1.0) * 100.0, 2),
+            earningsDate=date.today() + timedelta(days=profile.next_earnings_offset_days),
+            sourceNotice="Mock ticker overview shaped like the IBKR payload.",
+            generatedAt=generated_at,
+            isStale=False,
         )
 
     def get_option_chain(self, symbol: str, expiry: str | None = None) -> OptionChainResponse:

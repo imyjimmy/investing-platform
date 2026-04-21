@@ -184,6 +184,40 @@ export interface UnderlyingQuote {
   generatedAt: string;
 }
 
+export interface TickerOverviewResponse {
+  symbol: string;
+  quote: UnderlyingQuote;
+  marketCap: number | null;
+  marketCapChangePct: number | null;
+  revenueTtm: number | null;
+  revenueTtmChangePct: number | null;
+  netIncomeTtm: number | null;
+  netIncomeTtmChangePct: number | null;
+  epsTtm: number | null;
+  epsTtmChangePct: number | null;
+  sharesOutstanding: number | null;
+  peRatio: number | null;
+  forwardPeRatio: number | null;
+  dividendAmount: number | null;
+  dividendYieldPct: number | null;
+  exDividendDate: string | null;
+  volume: number | null;
+  open: number | null;
+  previousClose: number | null;
+  dayRangeLow: number | null;
+  dayRangeHigh: number | null;
+  week52Low: number | null;
+  week52High: number | null;
+  beta: number | null;
+  analystRating: string | null;
+  priceTarget: number | null;
+  priceTargetUpsidePct: number | null;
+  earningsDate: string | null;
+  sourceNotice: string | null;
+  generatedAt: string;
+  isStale: boolean;
+}
+
 export interface ChainRow {
   strike: number;
   distanceFromSpotPct: number;
