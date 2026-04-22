@@ -23,6 +23,7 @@ import type {
   RiskSummaryResponse,
   ScenarioResponse,
   SubmittedOrder,
+  TickerFinancialsResponse,
   TickerOverviewResponse,
   UniverseSnapshotResponse,
 } from "./types";
@@ -174,6 +175,8 @@ export const api = {
     fetchJson<OptionPositionsResponse>(withAccountId("/api/account/options-positions", accountId)),
   openOrders: (accountId?: string) => fetchJson<OpenOrdersResponse>(withAccountId("/api/account/open-orders", accountId)),
   tickerOverview: (symbol: string) => fetchJson<TickerOverviewResponse>(`/api/market/ticker/${encodeURIComponent(symbol)}`),
+  tickerFinancials: (symbol: string) =>
+    fetchJson<TickerFinancialsResponse>(`/api/market/ticker/${encodeURIComponent(symbol)}/financials`),
   chain: (
     symbol: string,
     expiry?: string,

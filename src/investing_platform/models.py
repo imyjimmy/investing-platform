@@ -25,6 +25,8 @@ TimeInForce = Literal["DAY", "GTC"]
 EdgarDownloadMode = Literal["primary-document", "all-attachments", "metadata-only", "full-filing-bundle"]
 EdgarPdfLayout = Literal["nested", "by-filing", "both"]
 InvestorPdfCategory = Literal["annual-report", "earnings-deck", "investor-presentation", "company-report", "sec-exhibit"]
+FinancialStatementType = Literal["income_statement", "balance_sheet", "cash_flow", "ratios", "estimates", "summary"]
+FinancialPeriodType = Literal["annual", "quarterly", "ttm", "current", "unknown"]
 
 
 class ConnectionStatus(DashboardModel):
@@ -195,6 +197,44 @@ class TickerOverviewResponse(DashboardModel):
     priceTargetUpsidePct: float | None = None
     earningsDate: date | None = None
     sourceNotice: str | None = None
+    generatedAt: datetime
+    isStale: bool = False
+
+
+class FundamentalReportStatus(DashboardModel):
+    reportType: str
+    available: bool
+    message: str | None = None
+
+
+class FinancialPeriodColumn(DashboardModel):
+    label: str
+    periodEnding: date | None = None
+    fiscalPeriod: str | None = None
+
+
+class FinancialMetricRow(DashboardModel):
+    label: str
+    values: list[float | str | None]
+
+
+class FinancialStatementTable(DashboardModel):
+    statementType: FinancialStatementType
+    periodType: FinancialPeriodType = "unknown"
+    title: str
+    currency: str | None = None
+    unit: str | None = None
+    columns: list[FinancialPeriodColumn] = Field(default_factory=list)
+    rows: list[FinancialMetricRow] = Field(default_factory=list)
+
+
+class TickerFinancialsResponse(DashboardModel):
+    symbol: str
+    reports: list[FundamentalReportStatus] = Field(default_factory=list)
+    statements: list[FinancialStatementTable] = Field(default_factory=list)
+    ratios: list[FinancialStatementTable] = Field(default_factory=list)
+    estimates: list[FinancialStatementTable] = Field(default_factory=list)
+    sourceNotices: list[str] = Field(default_factory=list)
     generatedAt: datetime
     isStale: bool = False
 

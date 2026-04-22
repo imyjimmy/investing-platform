@@ -547,6 +547,11 @@ body {
   border-top: 1px solid rgba(95, 144, 146, 0.1);
 }
 
+.workspace-section--flush {
+  padding-top: 0;
+  border-top: 0;
+}
+
 .chrome-tabs-shell {
   position: relative;
   z-index: 3;

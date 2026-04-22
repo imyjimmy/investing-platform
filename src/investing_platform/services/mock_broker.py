@@ -11,6 +11,10 @@ from investing_platform.models import (
     ChainHighlight,
     ChainRow,
     ConnectionStatus,
+    FinancialMetricRow,
+    FinancialPeriodColumn,
+    FinancialStatementTable,
+    FundamentalReportStatus,
     OpenOrderExposure,
     OptionChainResponse,
     OptionOrderPreview,
@@ -19,6 +23,7 @@ from investing_platform.models import (
     OrderCancelResponse,
     Position,
     SubmittedOrder,
+    TickerFinancialsResponse,
     TickerOverviewResponse,
     UnderlyingQuote,
 )
@@ -138,6 +143,101 @@ class MockBrokerService(BrokerService):
             priceTargetUpsidePct=round((price_target / quote.price - 1.0) * 100.0, 2),
             earningsDate=date.today() + timedelta(days=profile.next_earnings_offset_days),
             sourceNotice="Mock ticker overview shaped like the IBKR payload.",
+            generatedAt=generated_at,
+            isStale=False,
+        )
+
+    def get_ticker_financials(self, symbol: str) -> TickerFinancialsResponse:
+        symbol = symbol.upper()
+        profile = _get_profile(symbol)
+        generated_at = datetime.now(UTC)
+        years = [2026, 2025, 2024, 2023, 2022]
+        columns = [
+            FinancialPeriodColumn(label=f"FY {year}", periodEnding=date(year, 1, 31), fiscalPeriod=f"FY {year}")
+            for year in years
+        ]
+        base_revenue = profile.market_cap * 0.32 / 1_000_000
+        revenue = [round(base_revenue / (1.0 + index * 0.28), 0) for index in range(len(years))]
+        gross_profit = [round(value * 0.68, 0) for value in revenue]
+        operating_income = [round(value * 0.42, 0) for value in revenue]
+        net_income = [round(value * 0.34, 0) for value in revenue]
+        cash = [round(profile.market_cap * 0.05 / 1_000_000 / (1.0 + index * 0.12), 0) for index in range(len(years))]
+        assets = [round(value * 1.9, 0) for value in revenue]
+        liabilities = [round(value * 0.46, 0) for value in assets]
+        equity = [round(asset - liability, 0) for asset, liability in zip(assets, liabilities)]
+        operating_cash_flow = [round(value * 0.38, 0) for value in revenue]
+        capex = [round(value * -0.04, 0) for value in revenue]
+        free_cash_flow = [round(ocf + investment, 0) for ocf, investment in zip(operating_cash_flow, capex)]
+        statements = [
+            FinancialStatementTable(
+                statementType="income_statement",
+                periodType="annual",
+                title="Income Statement",
+                currency="USD",
+                unit="millions",
+                columns=columns,
+                rows=[
+                    FinancialMetricRow(label="Revenue", values=revenue),
+                    FinancialMetricRow(label="Gross Profit", values=gross_profit),
+                    FinancialMetricRow(label="Operating Income", values=operating_income),
+                    FinancialMetricRow(label="Net Income", values=net_income),
+                    FinancialMetricRow(label="EPS (Diluted)", values=[round(value * 1_000_000 / max(profile.shares_outstanding, 1.0), 2) for value in net_income]),
+                ],
+            ),
+            FinancialStatementTable(
+                statementType="balance_sheet",
+                periodType="annual",
+                title="Balance Sheet",
+                currency="USD",
+                unit="millions",
+                columns=columns,
+                rows=[
+                    FinancialMetricRow(label="Cash & Equivalents", values=cash),
+                    FinancialMetricRow(label="Total Assets", values=assets),
+                    FinancialMetricRow(label="Total Liabilities", values=liabilities),
+                    FinancialMetricRow(label="Shareholders' Equity", values=equity),
+                ],
+            ),
+            FinancialStatementTable(
+                statementType="cash_flow",
+                periodType="annual",
+                title="Cash Flow",
+                currency="USD",
+                unit="millions",
+                columns=columns,
+                rows=[
+                    FinancialMetricRow(label="Operating Cash Flow", values=operating_cash_flow),
+                    FinancialMetricRow(label="Capital Expenditures", values=capex),
+                    FinancialMetricRow(label="Free Cash Flow", values=free_cash_flow),
+                ],
+            ),
+        ]
+        ratios = [
+            FinancialStatementTable(
+                statementType="ratios",
+                periodType="current",
+                title="Ratios",
+                columns=[FinancialPeriodColumn(label="Current")],
+                rows=[
+                    FinancialMetricRow(label="PE Ratio", values=[round(profile.start_price / max(net_income[0] * 1_000_000 / max(profile.shares_outstanding, 1.0), 0.01), 2)]),
+                    FinancialMetricRow(label="Debt / Equity", values=[0.18]),
+                    FinancialMetricRow(label="Gross Margin", values=[round(gross_profit[0] / max(revenue[0], 1.0) * 100.0, 2)]),
+                    FinancialMetricRow(label="Profit Margin", values=[round(net_income[0] / max(revenue[0], 1.0) * 100.0, 2)]),
+                ],
+            )
+        ]
+        return TickerFinancialsResponse(
+            symbol=symbol,
+            reports=[
+                FundamentalReportStatus(reportType="ReportsFinStatements", available=True),
+                FundamentalReportStatus(reportType="ReportRatios", available=True),
+                FundamentalReportStatus(reportType="ReportsFinSummary", available=True),
+                FundamentalReportStatus(reportType="RESC", available=True),
+            ],
+            statements=statements,
+            ratios=ratios,
+            estimates=[],
+            sourceNotices=["Mock financials are shaped like parsed IBKR fundamental report tables."],
             generatedAt=generated_at,
             isStale=False,
         )

@@ -10,6 +10,7 @@ interface AccountConnectorSectionProps extends PropsWithChildren {
   className?: string;
   action?: ReactNode;
   details?: ReactNode;
+  topDivider?: boolean;
 }
 
 export function AccountConnectorSection({
@@ -20,6 +21,7 @@ export function AccountConnectorSection({
   className = "",
   action,
   details,
+  topDivider,
   children,
 }: AccountConnectorSectionProps) {
   return (
@@ -31,6 +33,7 @@ export function AccountConnectorSection({
       eyebrow={eyebrow}
       onToggle={onToggle}
       title={title}
+      topDivider={topDivider}
     >
       {children}
     </AccountSource>

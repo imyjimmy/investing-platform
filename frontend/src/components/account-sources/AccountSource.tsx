@@ -12,6 +12,7 @@ export interface AccountSourceProps extends PropsWithChildren {
   className?: string;
   action?: ReactNode;
   details?: ReactNode;
+  topDivider?: boolean;
 }
 
 const pillToneClasses: Record<AccountSourceTone, string> = {
@@ -30,6 +31,7 @@ export function AccountSource({
   className = "",
   action,
   details,
+  topDivider,
   children,
 }: AccountSourceProps) {
   return (
@@ -37,6 +39,7 @@ export function AccountSource({
       action={action}
       className={className}
       eyebrow={eyebrow}
+      topDivider={topDivider}
       title={
         <div className="flex flex-col gap-3">
           <div className="flex flex-wrap items-center gap-3">

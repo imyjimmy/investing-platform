@@ -27,6 +27,7 @@ from investing_platform.models import (
     ChainHighlight,
     ChainRow,
     ConnectionStatus,
+    FundamentalReportStatus,
     OpenOrderExposure,
     OptionChainResponse,
     OptionOrderPreview,
@@ -35,11 +36,13 @@ from investing_platform.models import (
     OrderCancelResponse,
     Position,
     SubmittedOrder,
+    TickerFinancialsResponse,
     TickerOverviewResponse,
     UnderlyingQuote,
 )
 from investing_platform.services.analytics import build_collateral_summary
 from investing_platform.services.base import BrokerService, BrokerUnavailableError, CacheEntry, PortfolioSnapshot
+from investing_platform.services.ibkr_fundamentals import parse_ibkr_fundamental_reports
 
 
 try:
@@ -58,6 +61,7 @@ TaskResultT = TypeVar("TaskResultT")
 OPTION_GENERIC_TICKS = "100,101,106,221"
 OPTION_CHAIN_GENERIC_TICKS = "100,101,221"
 STOCK_OVERVIEW_GENERIC_TICKS = "165,258,456"
+FUNDAMENTAL_FINANCIAL_REPORT_TYPES = ("ReportsFinStatements", "ReportRatios", "ReportsFinSummary", "RESC")
 
 
 @dataclass(slots=True)
@@ -88,6 +92,7 @@ class IBGatewayBrokerService(BrokerService):
         self._portfolio_cache: dict[str, CacheEntry[PortfolioSnapshot]] = {}
         self._quote_cache: dict[str, CacheEntry[UnderlyingQuote]] = {}
         self._ticker_overview_cache: dict[str, CacheEntry[TickerOverviewResponse]] = {}
+        self._ticker_financials_cache: dict[str, CacheEntry[TickerFinancialsResponse]] = {}
         self._chain_cache: dict[str, CacheEntry[OptionChainResponse]] = {}
         self._option_snapshot_root = self.settings.data_dir / "raw" / "options"
         self._tasks: Queue[_PendingTask] = Queue()
@@ -183,6 +188,24 @@ class IBGatewayBrokerService(BrokerService):
         except Exception as exc:
             if cached is not None:
                 return cached.value.model_copy(update={"isStale": True, "sourceNotice": f"Showing stale ticker overview. {exc}"})
+            raise BrokerUnavailableError(str(exc)) from exc
+
+    def get_ticker_financials(self, symbol: str) -> TickerFinancialsResponse:
+        symbol = symbol.upper()
+        cached = self._ticker_financials_cache.get(symbol)
+        if cached and _age_seconds(cached.captured_at) <= self.settings.chain_cache_ttl_seconds:
+            return cached.value
+        try:
+            financials = cast(
+                TickerFinancialsResponse,
+                self._submit(lambda ib: self._fetch_ticker_financials(ib, symbol), timeout=self.settings.ib_request_timeout_seconds + 16.0),
+            )
+            self._ticker_financials_cache[symbol] = CacheEntry(financials, datetime.now(UTC))
+            return financials
+        except Exception as exc:
+            if cached is not None:
+                notices = [*cached.value.sourceNotices, f"Showing stale ticker financials. {exc}"]
+                return cached.value.model_copy(update={"isStale": True, "sourceNotices": notices})
             raise BrokerUnavailableError(str(exc)) from exc
 
     def get_option_chain(
@@ -943,6 +966,43 @@ class IBGatewayBrokerService(BrokerService):
                 )
             ),
             sourceNotice=source_notice,
+            generatedAt=generated_at,
+            isStale=False,
+        )
+
+    def _fetch_ticker_financials(self, ib: Any, symbol: str) -> TickerFinancialsResponse:
+        self._ensure_connected(ib)
+        generated_at = datetime.now(UTC)
+        qualified = self._qualify_one(ib, Stock(symbol, self.settings.ib_underlying_exchange, self.settings.ib_currency))
+        report_payloads: dict[str, str] = {}
+        report_statuses: list[FundamentalReportStatus] = []
+        for report_type in FUNDAMENTAL_FINANCIAL_REPORT_TYPES:
+            payload = self._request_fundamental_report(ib, qualified, report_type)
+            if payload:
+                report_payloads[report_type] = payload
+                report_statuses.append(FundamentalReportStatus(reportType=report_type, available=True))
+            else:
+                report_statuses.append(
+                    FundamentalReportStatus(
+                        reportType=report_type,
+                        available=False,
+                        message="IBKR returned no payload for this symbol/session.",
+                    )
+                )
+
+        parsed = parse_ibkr_fundamental_reports(report_payloads)
+        source_notices = [*parsed.source_notices]
+        if not report_payloads:
+            source_notices.append(
+                "IBKR did not return financial statement reports for this symbol/session. Check fundamentals entitlements and TWS/Gateway support."
+            )
+        return TickerFinancialsResponse(
+            symbol=symbol,
+            reports=report_statuses,
+            statements=parsed.statements,
+            ratios=parsed.ratios,
+            estimates=parsed.estimates,
+            sourceNotices=source_notices,
             generatedAt=generated_at,
             isStale=False,
         )

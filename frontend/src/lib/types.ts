@@ -218,6 +218,44 @@ export interface TickerOverviewResponse {
   isStale: boolean;
 }
 
+export interface FundamentalReportStatus {
+  reportType: string;
+  available: boolean;
+  message: string | null;
+}
+
+export interface FinancialPeriodColumn {
+  label: string;
+  periodEnding: string | null;
+  fiscalPeriod: string | null;
+}
+
+export interface FinancialMetricRow {
+  label: string;
+  values: Array<number | string | null>;
+}
+
+export interface FinancialStatementTable {
+  statementType: "income_statement" | "balance_sheet" | "cash_flow" | "ratios" | "estimates" | "summary";
+  periodType: "annual" | "quarterly" | "ttm" | "current" | "unknown";
+  title: string;
+  currency: string | null;
+  unit: string | null;
+  columns: FinancialPeriodColumn[];
+  rows: FinancialMetricRow[];
+}
+
+export interface TickerFinancialsResponse {
+  symbol: string;
+  reports: FundamentalReportStatus[];
+  statements: FinancialStatementTable[];
+  ratios: FinancialStatementTable[];
+  estimates: FinancialStatementTable[];
+  sourceNotices: string[];
+  generatedAt: string;
+  isStale: boolean;
+}
+
 export interface ChainRow {
   strike: number;
   distanceFromSpotPct: number;

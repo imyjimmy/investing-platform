@@ -744,7 +744,7 @@ export function OptionValuationTool({
 
   return (
     <div className="grid gap-6">
-      <Panel eyebrow="Decision" title="Current Read">
+      <Panel eyebrow="Decision" title="Current Read" topDivider={false}>
         <div className="grid gap-3 lg:grid-cols-3">
           <DecisionCard
             label={valuationVerdict.label}
