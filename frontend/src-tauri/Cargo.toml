@@ -2,7 +2,7 @@
 name = "investing-platform-workstation"
 version = "0.1.0"
 description = "Desktop shell for the Investing Platform"
-authors = ["Van Aken Investments LLC"]
+authors = ["Investing Platform Contributors"]
 license = ""
 repository = ""
 edition = "2021"

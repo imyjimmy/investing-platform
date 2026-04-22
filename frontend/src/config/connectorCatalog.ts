@@ -12,6 +12,8 @@ export type ConnectorCatalogEntry = {
   settingsDetail: string;
   dashboardTitle: string;
   dashboardEyebrow: string;
+  defaultDisplayNamePlaceholder: string;
+  directoryPathPlaceholder: string;
   availability: "ready" | "comingSoon";
 };
 

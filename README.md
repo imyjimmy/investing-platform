@@ -1,6 +1,6 @@
 # Investing Platform
 
-This repo now includes a local-first investing platform for **Van Aken Investments LLC** that connects to the **Interactive Brokers socket API through IB Gateway or TWS**, using `ib_insync` on the backend.
+This repo now includes a local-first investing platform that connects to the **Interactive Brokers socket API through IB Gateway or TWS**, using `ib_insync` on the backend.
 
 The original options-scanner pipeline is still present under `src/options_scanner/`, but the new MVP is built around a FastAPI service plus a React workstation UI for:
 
@@ -27,8 +27,8 @@ The original options-scanner pipeline is still present under `src/options_scanne
 - Connects to local IB Gateway on `127.0.0.1`
 - Defaults to the IB Gateway paper port `4002` when running live mode
 - Pulls account summary, portfolio positions, and open orders
-- Pulls Coinbase account balances into a separate Van Aken dashboard section
-- Links account-owned CSV folder connectors from Account Settings for sources such as Fidelity
+- Pulls Coinbase account balances into an account-bound dashboard section
+- Links account-owned CSV folder connectors from Account Settings for broker or custodian exports
 - Normalizes option positions into short-put / covered-call views
 - Estimates collateral usage and free option-selling capacity
 - Fetches option chains for selected symbols, including **NVDA**
@@ -74,6 +74,8 @@ INVESTING_PLATFORM_EDGAR_USER_AGENT=Your Name your_email@example.com
 INVESTING_PLATFORM_EDGAR_MAX_REQUESTS_PER_SECOND=5
 ```
 
+Account tabs and account-to-route mappings are configured in `frontend/src/config/dashboardAccounts.json`. For local builds, you can also provide a JSON array through `VITE_DASHBOARD_ACCOUNTS_JSON` in the frontend environment.
+
 For Coinbase account access, either add a CDP Ed25519 key id + secret, a bearer token, or a PEM-style key:
 
 ```env
@@ -86,7 +88,7 @@ COINBASE_API_KEY_FILE=
 
 If you use a CDP Secret API Key with the default **Ed25519** algorithm, the dashboard expects both `COINBASE_API_KEY_ID` and `COINBASE_API_KEY`.
 
-For the Fidelity CSV connector in `Van Aken > Account > Settings`, open `Add (+)` and save a folder path that contains your end-of-day Fidelity CSV exports. The backend stores connector paths in `data/filesystem-connectors/connectors.json` and reads the latest CSV in that folder as the current snapshot.
+For a CSV folder connector, open the target account's settings, choose `Add (+)`, and save a folder path that contains end-of-day CSV exports. By default, the backend stores connector paths outside the repo at `~/.investing-platform/filesystem-connectors/connectors.json`; override `INVESTING_PLATFORM_FILESYSTEM_CONNECTORS_STATE_PATH` if you want a different local state file.
 
 If you use paper **TWS** instead of **IB Gateway**, the paper socket port is commonly `7497` instead of `4002`.
 

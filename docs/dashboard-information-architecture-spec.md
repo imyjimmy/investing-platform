@@ -41,7 +41,7 @@ An `Account` is a portfolio and execution context.
 
 Examples:
 
-- `Van Aken`
+- `Primary`
 - `Personal`
 
 Accounts own:
@@ -100,7 +100,7 @@ These belong to one account and are managed from that account's settings.
 
 Examples:
 
-- `IBKR Van Aken`
+- `IBKR Primary`
 - `IBKR Personal`
 - `Coinbase account`
 - future bank / brokerage / wallet connections
@@ -223,7 +223,7 @@ Not allowed in the primary sidebar:
 
 Initial tabs:
 
-- `Van Aken`
+- `Primary`
 - `Personal`
 
 Possible later tab:
@@ -327,7 +327,7 @@ The main account page may summarize route state in one compact, passive way, but
 Examples of allowed passive account facts:
 
 - `IBKR routed`
-- `Acct U25316101`
+- `Acct U12345678`
 - `Live trading`
 
 Examples of forbidden settings leakage on the main account page:
@@ -354,11 +354,11 @@ Owns:
 
 Initial examples:
 
-#### Van Aken settings
+#### Primary settings
 
-- IBKR route for Van Aken
-- Coinbase connector used by Van Aken
-- future Fidelity / Chase / banking connectors when those are account-bound
+- IBKR route for Primary
+- Coinbase connector used by Primary
+- future custodian / bank / wallet connectors when those are account-bound
 
 #### Personal settings
 
@@ -510,7 +510,7 @@ Answers:
 Examples:
 
 - `IBKR Personal`
-- `IBKR Van Aken`
+- `IBKR Primary`
 - `EDGAR`
 - future absorbed earnings DB
 
@@ -522,7 +522,7 @@ Answers:
 
 Examples:
 
-- `U25316101 · Live trading`
+- `U12345678 · Live trading`
 - `DU... · Paper trading`
 
 ### Overlay Account
@@ -534,7 +534,7 @@ Answers:
 Examples:
 
 - `None`
-- `Van Aken`
+- `Primary`
 - `Personal`
 
 These three contexts must never be collapsed into one ambiguous pill.

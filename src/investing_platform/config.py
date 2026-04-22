@@ -111,6 +111,7 @@ class DashboardSettings:
     coinbase_api_key_file: Path | None = None
     coinbase_timeout_seconds: float = 15.0
     coinbase_snapshot_cache_ttl_seconds: float = 30.0
+    filesystem_connectors_state_file: Path = Path("~/.investing-platform/filesystem-connectors/connectors.json").expanduser()
     backend_host: str = "127.0.0.1"
     backend_port: int = 8000
     frontend_port: int = 5173
@@ -253,6 +254,10 @@ class DashboardSettings:
             coinbase_api_key_file=_env_optional_path("COINBASE_API_KEY_FILE"),
             coinbase_timeout_seconds=_env_float("COINBASE_TIMEOUT_SECONDS", default=15.0),
             coinbase_snapshot_cache_ttl_seconds=_env_float("COINBASE_SNAPSHOT_CACHE_TTL_SECONDS", default=30.0),
+            filesystem_connectors_state_file=_env_path(
+                "INVESTING_PLATFORM_FILESYSTEM_CONNECTORS_STATE_PATH",
+                default="~/.investing-platform/filesystem-connectors/connectors.json",
+            ),
             backend_host=_env_str(
                 "INVESTING_PLATFORM_BACKEND_HOST",
                 "OPTIONS_DASHBOARD_BACKEND_HOST",
@@ -276,7 +281,7 @@ class DashboardSettings:
 
     @property
     def filesystem_connectors_state_path(self) -> Path:
-        return self.data_dir / "filesystem-connectors" / "connectors.json"
+        return self.filesystem_connectors_state_file
 
     @property
     def stocks_root(self) -> Path:

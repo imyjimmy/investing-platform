@@ -8,6 +8,8 @@
     "settingsDetail": "Reads the latest CSV snapshot from a local filesystem folder.",
     "dashboardTitle": "CSV Folder",
     "dashboardEyebrow": "Filesystem investment source",
+    "defaultDisplayNamePlaceholder": "Brokerage CSV export",
+    "directoryPathPlaceholder": "~/Documents/investing/csv-exports",
     "availability": "ready"
   },
   {
@@ -19,6 +21,8 @@
     "settingsDetail": "Reads a local PDF library folder and surfaces recent documents.",
     "dashboardTitle": "PDF Folder",
     "dashboardEyebrow": "Filesystem document source",
+    "defaultDisplayNamePlaceholder": "Research PDFs",
+    "directoryPathPlaceholder": "~/Documents/investing/research-pdfs",
     "availability": "ready"
   }
 ]

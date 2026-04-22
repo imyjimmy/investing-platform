@@ -12,7 +12,17 @@ export type DashboardAccountConfig = {
 
 export type DashboardAccountKey = DashboardAccountConfig["key"];
 
-export const DASHBOARD_ACCOUNTS = rawDashboardAccounts as DashboardAccountConfig[];
+const FALLBACK_DASHBOARD_ACCOUNTS: DashboardAccountConfig[] = [
+  {
+    key: "primary",
+    name: "Primary",
+    headerEyebrow: "Configured brokerage account",
+    routeAccountIds: [],
+    attachedSourceIds: [],
+  },
+];
+
+export const DASHBOARD_ACCOUNTS = loadDashboardAccounts();
 export const DEFAULT_DASHBOARD_ACCOUNT_KEY: DashboardAccountKey = DASHBOARD_ACCOUNTS[0]?.key ?? "";
 
 export function getDashboardAccountByKey(accountKey: DashboardAccountKey | null | undefined) {
@@ -45,4 +55,67 @@ export function dashboardAccountHasAttachedSource(
 
 export function getDashboardAccountWithAttachedSource(sourceId: DashboardAttachedSourceId) {
   return DASHBOARD_ACCOUNTS.find((account) => account.attachedSourceIds.includes(sourceId)) ?? null;
+}
+
+function loadDashboardAccounts(): DashboardAccountConfig[] {
+  const envConfig = import.meta.env.VITE_DASHBOARD_ACCOUNTS_JSON;
+  if (envConfig) {
+    const parsed = parseDashboardAccounts(envConfig);
+    if (parsed.length) {
+      return parsed;
+    }
+  }
+  const parsed = normalizeDashboardAccounts(rawDashboardAccounts);
+  return parsed.length ? parsed : FALLBACK_DASHBOARD_ACCOUNTS;
+}
+
+function parseDashboardAccounts(value: string): DashboardAccountConfig[] {
+  try {
+    return normalizeDashboardAccounts(JSON.parse(value));
+  } catch {
+    return [];
+  }
+}
+
+function normalizeDashboardAccounts(value: unknown): DashboardAccountConfig[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") {
+        return null;
+      }
+      const raw = item as Partial<Record<keyof DashboardAccountConfig, unknown>>;
+      const key = typeof raw.key === "string" ? raw.key.trim() : "";
+      const name = typeof raw.name === "string" ? raw.name.trim() : "";
+      if (!key || !name) {
+        return null;
+      }
+      return {
+        key,
+        name,
+        headerEyebrow:
+          typeof raw.headerEyebrow === "string" && raw.headerEyebrow.trim()
+            ? raw.headerEyebrow.trim()
+            : "Configured investing account",
+        routeAccountIds: normalizeStringList(raw.routeAccountIds),
+        attachedSourceIds: normalizeAttachedSourceIds(raw.attachedSourceIds),
+      };
+    })
+    .filter((account): account is DashboardAccountConfig => Boolean(account));
+}
+
+function normalizeStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.map((item) => (typeof item === "string" ? item.trim().toUpperCase() : "")).filter(Boolean);
+}
+
+function normalizeAttachedSourceIds(value: unknown): DashboardAttachedSourceId[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((item): item is DashboardAttachedSourceId => item === "coinbase");
 }

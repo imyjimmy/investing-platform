@@ -1,4 +1,4 @@
-"""Coinbase account connector for the Van Aken dashboard."""
+"""Coinbase account connector for the investing platform dashboard."""
 
 from __future__ import annotations
 

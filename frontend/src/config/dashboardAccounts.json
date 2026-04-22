@@ -1,16 +1,16 @@
 [
   {
-    "key": "vanAken",
-    "name": "Van Aken",
-    "headerEyebrow": "Van Aken Investments LLC",
-    "routeAccountIds": ["DUP433635"],
+    "key": "primary",
+    "name": "Primary",
+    "headerEyebrow": "Configured brokerage account",
+    "routeAccountIds": ["DU-MOCK"],
     "attachedSourceIds": ["coinbase"]
   },
   {
-    "key": "personal",
-    "name": "Personal",
-    "headerEyebrow": "Personal investing account",
-    "routeAccountIds": ["U25316101"],
+    "key": "secondary",
+    "name": "Secondary",
+    "headerEyebrow": "Additional investing account",
+    "routeAccountIds": [],
     "attachedSourceIds": []
   }
 ]

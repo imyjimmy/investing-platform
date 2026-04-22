@@ -2400,7 +2400,7 @@ function App() {
                         <input
                           className="w-full rounded-xl border border-line/80 bg-panelSoft px-4 py-3 text-sm text-text outline-none transition focus:border-accent/60"
                           onChange={(event) => updateConnectorDraft(connector.id, { displayName: event.target.value })}
-                          placeholder={connector.id === CSV_FOLDER_CONNECTOR_ID ? "Fidelity" : "Annual reports"}
+                          placeholder={connector.defaultDisplayNamePlaceholder}
                           spellCheck={false}
                           type="text"
                           value={connectorDraft.displayName}
@@ -2414,11 +2414,7 @@ function App() {
                           <input
                             className="w-full rounded-xl border border-line/80 bg-panelSoft px-4 py-3 text-sm text-text outline-none transition focus:border-accent/60"
                             onChange={(event) => updateConnectorDraft(connector.id, { directoryPath: event.target.value })}
-                            placeholder={
-                              connector.id === CSV_FOLDER_CONNECTOR_ID
-                                ? "/Users/imyjimmy/Documents/.../fidelity/daily-positions"
-                                : "/Users/imyjimmy/Documents/.../research/pdfs"
-                            }
+                            placeholder={connector.directoryPathPlaceholder}
                             spellCheck={false}
                             type="text"
                             value={connectorDraft.directoryPath}
