@@ -1,4 +1,5 @@
-import { useQuery, type UseQueryResult } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 
 import { api } from "../lib/api";
 import {
@@ -19,32 +20,39 @@ import { TickerFinancialsPanel } from "./TickerFinancialsPanel";
 import { ErrorState } from "./ui/ErrorState";
 
 type TickerWorkspaceProps = {
-  chainSymbol: string;
-  chainSymbolInput: string;
-  setChainSymbolInput: (value: string) => void;
-  submitChainSymbolInput: () => void;
-  tickerOverviewQuery: UseQueryResult<TickerOverviewResponse, Error>;
+  selectedSymbol: string;
+  onSymbolChange: (symbol: string) => void;
   controlsDisabled: boolean;
 };
 
 export function TickerWorkspace({
-  chainSymbol,
-  chainSymbolInput,
-  setChainSymbolInput,
-  submitChainSymbolInput,
-  tickerOverviewQuery,
+  selectedSymbol,
+  onSymbolChange,
   controlsDisabled,
 }: TickerWorkspaceProps) {
+  const symbol = selectedSymbol.trim().toUpperCase() || "NVDA";
+  const [symbolInput, setSymbolInput] = useState(symbol);
+  const tickerOverviewQuery = useQuery({
+    queryKey: ["ticker-overview", symbol],
+    queryFn: () => api.tickerOverview(symbol),
+    enabled: Boolean(symbol.trim()),
+    refetchInterval: false,
+    staleTime: 120_000,
+  });
   const tickerOverview = tickerOverviewQuery.data;
   const tickerOverviewError = tickerOverviewQuery.error instanceof Error ? tickerOverviewQuery.error.message : null;
   const tickerFinancialsQuery = useQuery({
-    queryKey: ["ticker-financials", chainSymbol],
-    queryFn: () => api.tickerFinancials(chainSymbol),
-    enabled: Boolean(chainSymbol.trim()),
+    queryKey: ["ticker-financials", symbol],
+    queryFn: () => api.tickerFinancials(symbol),
+    enabled: Boolean(symbol.trim()),
     refetchInterval: false,
     staleTime: 120_000,
   });
   const tickerFinancialsError = tickerFinancialsQuery.error instanceof Error ? tickerFinancialsQuery.error.message : null;
+
+  useEffect(() => {
+    setSymbolInput(symbol);
+  }, [symbol]);
 
   return (
     <ToolWorkspaceFrame compact titleRowSlot={renderTickerQueryBar()} title="Ticker">
@@ -67,25 +75,25 @@ export function TickerWorkspace({
             <span className="sr-only">Ticker symbol</span>
             <input
               className="h-9 w-full rounded-xl border border-line/80 bg-panelSoft px-3 text-sm text-text outline-none transition focus:border-accent/60"
-              onChange={(event) => setChainSymbolInput(event.target.value.toUpperCase())}
+              onChange={(event) => setSymbolInput(event.target.value.toUpperCase())}
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
-                  submitChainSymbolInput();
+                  submitTickerInput();
                 }
               }}
               placeholder="Enter ticker"
               spellCheck={false}
               type="text"
-              value={chainSymbolInput}
+              value={symbolInput}
             />
           </label>
           <button
             className="inline-flex h-9 shrink-0 items-center justify-center rounded-xl border border-accent/30 bg-accent/10 px-3 text-sm font-medium text-accent transition hover:border-accent/50 hover:bg-accent/16 disabled:cursor-not-allowed disabled:opacity-50"
-            disabled={!chainSymbolInput.trim() || controlsDisabled}
-            onClick={submitChainSymbolInput}
+            disabled={!symbolInput.trim() || controlsDisabled}
+            onClick={submitTickerInput}
             type="button"
           >
-            {tickerOverviewQuery.isFetching && chainSymbolInput.trim().toUpperCase() === chainSymbol ? `Loading ${chainSymbol}...` : "Load ticker"}
+            {tickerOverviewQuery.isFetching && symbolInput.trim().toUpperCase() === symbol ? `Loading ${symbol}...` : "Load ticker"}
           </button>
         </div>
         <div className="shrink-0 text-[11px] text-muted lg:text-right">
@@ -135,6 +143,14 @@ export function TickerWorkspace({
         {tickerOverviewError ? <div className="mt-3 text-xs text-danger">{tickerOverviewError}</div> : null}
       </Panel>
     );
+  }
+
+  function submitTickerInput() {
+    const normalizedSymbol = symbolInput.trim().toUpperCase();
+    if (!normalizedSymbol) {
+      return;
+    }
+    onSymbolChange(normalizedSymbol);
   }
 }
 

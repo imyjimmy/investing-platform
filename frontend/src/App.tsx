@@ -1,4 +1,4 @@
-import { useEffect, useState, useDeferredValue, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./lib/api";
 import {
@@ -11,7 +11,6 @@ import {
   fmtWholeNumber,
 } from "./lib/formatters";
 import type {
-  ChainRow,
   ConnectionStatus,
   EdgarDownloadRequest,
   EdgarDownloadResponse,
@@ -21,13 +20,8 @@ import type {
   InvestorPdfDownloadRequest,
   InvestorPdfDownloadResponse,
   OpenOrderExposure,
-  OptionChainResponse,
-  OrderCancelResponse,
-  OptionOrderPreview,
-  OptionOrderRequest,
   OptionPosition,
   Position,
-  SubmittedOrder,
 } from "./lib/types";
 import {
   DASHBOARD_ACCOUNTS,
@@ -48,24 +42,11 @@ import { EdgarWorkspace } from "./components/EdgarWorkspace";
 import { InvestorPdfsWorkspace } from "./components/InvestorPdfsWorkspace";
 import { MetricCard } from "./components/MetricCard";
 import { TickerWorkspace } from "./components/TickerWorkspace";
-import {
-  OptionBuilderTool,
-  OptionScannerTool,
-  OptionStructuresTool,
-  OptionValuationTool,
-  OptionVolatilityTool,
-  type OptionToolSharedProps,
-} from "./components/options/OptionToolWorkspaces";
-import {
-  OptionsChainTable,
-  type OptionsChainGreekOption,
-  type TicketContractSide,
-} from "./components/options/OptionsChainTable";
-import { useOptionChain } from "./components/options/useOptionChain";
 import { Panel } from "./components/Panel";
 import { ToolWorkspaceFrame } from "./components/shell/ToolWorkspaceFrame";
 import { CryptoLeverageWorkspace } from "./features/crypto/CryptoLeverageWorkspace";
 import { CryptoMarketWorkspace } from "./features/crypto/CryptoMarketWorkspace";
+import { OptionsWorkspace, type OptionsWorkspaceSurface } from "./features/options/OptionsWorkspace";
 import { StockMarketWorkspace } from "./features/stocks/market/StockMarketWorkspace";
 
 function pnlTone(value: number | null | undefined) {
@@ -219,16 +200,6 @@ function routePresentation(routeKind: "live" | "paper" | "unknown") {
 
 type InlinePillTone = "neutral" | "safe" | "caution" | "danger" | "accent";
 
-type TicketDraft = {
-  symbol: string;
-  expiry: string;
-  strike: number;
-  right: TicketContractSide;
-  referencePrice: number | null;
-  bid: number | null;
-  ask: number | null;
-};
-
 type SourceTone = "live" | "off" | "planned";
 type WorkspaceSurface =
   | "dashboard"
@@ -271,54 +242,6 @@ type ConnectorDraftState = {
   detectFooter: boolean;
 };
 
-type ChainGreekKey = "iv" | "delta" | "gamma" | "theta" | "vega" | "rho";
-
-type ChainGreekOption = OptionsChainGreekOption;
-
-const CHAIN_GREEK_STORAGE_KEY = "options-chain-visible-greeks";
-const CHAIN_MARK_STORAGE_KEY = "options-chain-show-mark";
-const OPTIONS_TRADE_RAIL_STORAGE_KEY = "options-trade-rail-open";
-const DEFAULT_VISIBLE_CHAIN_GREEKS: ChainGreekKey[] = ["iv", "delta", "gamma", "theta", "vega"];
-const CHAIN_GREEK_OPTIONS: ChainGreekOption[] = [
-  {
-    key: "iv",
-    label: "IV",
-    callValue: (row) => row.callIV,
-    putValue: (row) => row.putIV,
-    suffix: "%",
-  },
-  {
-    key: "delta",
-    label: "Delta",
-    callValue: (row) => row.callDelta,
-    putValue: (row) => row.putDelta,
-  },
-  {
-    key: "gamma",
-    label: "Gamma",
-    callValue: (row) => row.callGamma,
-    putValue: (row) => row.putGamma,
-  },
-  {
-    key: "theta",
-    label: "Theta",
-    callValue: (row) => row.callTheta,
-    putValue: (row) => row.putTheta,
-  },
-  {
-    key: "vega",
-    label: "Vega",
-    callValue: (row) => row.callVega,
-    putValue: (row) => row.putVega,
-  },
-  {
-    key: "rho",
-    label: "Rho",
-    callValue: (row) => row.callRho,
-    putValue: (row) => row.putRho,
-  },
-];
-
 function gatewaySessionPresentation(status: ConnectionStatus | undefined): { label: string; tone: InlinePillTone } {
   if (!status) {
     return { label: "Gateway checking", tone: "neutral" };
@@ -360,173 +283,8 @@ function executionRoutePresentation(
   };
 }
 
-function optionDataSourcePresentation(
-  chain: OptionChainResponse | null | undefined,
-  status: ConnectionStatus | undefined,
-  hasBidAsk: boolean,
-  hasMarks: boolean,
-): { label: string; tone: InlinePillTone } {
-  if (chain?.isStale) {
-    if (chain.quoteSource === "historical") {
-      return { label: "Data source · cached historical chain", tone: "caution" };
-    }
-    if (chain.quoteSource === "streaming") {
-      return { label: "Data source · cached streaming chain", tone: "caution" };
-    }
-    return { label: "Data source · cached chain", tone: "caution" };
-  }
-  if (chain?.quoteSource === "historical") {
-    return { label: "Data source · historical fallback", tone: "caution" };
-  }
-  if (chain?.underlying.marketDataStatus === "DELAYED" || chain?.underlying.marketDataStatus === "DELAYED_FROZEN") {
-    if (hasBidAsk) {
-      return { label: "Data source · delayed IBKR", tone: "caution" };
-    }
-    if (hasMarks) {
-      return { label: "Data source · delayed marks only", tone: "caution" };
-    }
-    return { label: "Data source · delayed IBKR", tone: "caution" };
-  }
-  if (chain?.underlying.marketDataStatus === "FROZEN") {
-    return { label: hasMarks ? "Data source · frozen marks only" : "Data source · frozen IBKR", tone: "caution" };
-  }
-  if (chain?.quoteSource === "streaming") {
-    return hasBidAsk ? { label: "Data source · streaming IBKR", tone: "safe" } : { label: "Data source · marks only", tone: "neutral" };
-  }
-  if (chain?.quoteSource === "unavailable") {
-    return { label: "Data source · quotes unavailable", tone: "danger" };
-  }
-  if (!status) {
-    return { label: "Data source · checking", tone: "neutral" };
-  }
-  if (!status.connected) {
-    return { label: "Data source · gateway offline", tone: "danger" };
-  }
-  if (status.marketDataMode === "LIVE") {
-    return { label: "Data source · gateway connected", tone: "safe" };
-  }
-  if (status.marketDataMode === "DELAYED" || status.marketDataMode === "DELAYED_FROZEN") {
-    return { label: "Data source · delayed session", tone: "caution" };
-  }
-  return { label: "Data source · connected session", tone: "neutral" };
-}
-
-function optionQuoteStatePresentation({
-  chain,
-  hasBidAsk,
-  hasMarks,
-  isLoadingDifferentSymbol,
-}: {
-  chain: OptionChainResponse | null | undefined;
-  hasBidAsk: boolean;
-  hasMarks: boolean;
-  isLoadingDifferentSymbol: boolean;
-}): { label: string; tone: InlinePillTone } {
-  if (isLoadingDifferentSymbol) {
-    return { label: "Loading requested symbol", tone: "accent" };
-  }
-  if (!chain) {
-    return { label: "No chain loaded", tone: "neutral" };
-  }
-  if (chain.isStale) {
-    if (hasBidAsk) {
-      return { label: "Cached bid/ask", tone: "caution" };
-    }
-    if (hasMarks) {
-      return { label: "Cached marks", tone: "caution" };
-    }
-    return { label: "Cached quotes", tone: "caution" };
-  }
-  if (chain.quoteSource === "historical") {
-    return { label: hasMarks ? "Historical marks" : "Historical fallback", tone: "caution" };
-  }
-  if (chain.quoteSource === "streaming") {
-    if (hasBidAsk) {
-      return { label: "Streaming bid/ask", tone: "safe" };
-    }
-    if (hasMarks) {
-      return { label: "Streaming marks", tone: "neutral" };
-    }
-  }
-  if (hasMarks) {
-    return { label: "Marks only", tone: "neutral" };
-  }
-  return { label: "Quotes unavailable", tone: "danger" };
-}
-
-function optionQuoteSourcePresentation(chain: OptionChainResponse | null | undefined): { label: string; tone: InlinePillTone } {
-  if (!chain) {
-    return { label: "Source unavailable", tone: "neutral" };
-  }
-  if (chain.isStale) {
-    if (chain.quoteSource === "historical") {
-      return { label: "Cached historical", tone: "caution" };
-    }
-    if (chain.quoteSource === "streaming") {
-      return { label: "Cached streaming", tone: "caution" };
-    }
-    return { label: "Cached chain", tone: "caution" };
-  }
-  if (chain.quoteSource === "streaming") {
-    return { label: "Current session", tone: "safe" };
-  }
-  if (chain.quoteSource === "historical") {
-    return { label: "Historical fallback", tone: "caution" };
-  }
-  return { label: "No option quotes", tone: "danger" };
-}
-
 const CSV_FOLDER_CONNECTOR_ID: ConnectorCatalogId = "csvFolder";
 const PDF_FOLDER_CONNECTOR_ID: ConnectorCatalogId = "pdfFolder";
-
-function readVisibleChainGreeks(): ChainGreekKey[] {
-  if (typeof window === "undefined") {
-    return [...DEFAULT_VISIBLE_CHAIN_GREEKS];
-  }
-  try {
-    const raw = window.localStorage.getItem(CHAIN_GREEK_STORAGE_KEY);
-    if (!raw) {
-      return [...DEFAULT_VISIBLE_CHAIN_GREEKS];
-    }
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) {
-      return [...DEFAULT_VISIBLE_CHAIN_GREEKS];
-    }
-    return parsed.filter((value): value is ChainGreekKey => CHAIN_GREEK_OPTIONS.some((option) => option.key === value));
-  } catch {
-    return [...DEFAULT_VISIBLE_CHAIN_GREEKS];
-  }
-}
-
-function readShowChainMark(): boolean {
-  if (typeof window === "undefined") {
-    return true;
-  }
-  try {
-    const raw = window.localStorage.getItem(CHAIN_MARK_STORAGE_KEY);
-    if (raw == null) {
-      return true;
-    }
-    return raw === "true";
-  } catch {
-    return true;
-  }
-}
-
-function readOptionsTradeRailOpen(): boolean {
-  if (typeof window === "undefined") {
-    return true;
-  }
-  try {
-    const raw = window.localStorage.getItem(OPTIONS_TRADE_RAIL_STORAGE_KEY);
-    if (raw == null) {
-      return true;
-    }
-    return raw === "true";
-  } catch {
-    return true;
-  }
-}
 
 function App() {
   const queryClient = useQueryClient();
@@ -540,60 +298,14 @@ function App() {
   const [connectorDraftsById, setConnectorDraftsById] = useState<Partial<Record<ConnectorCatalogId, ConnectorDraftState>>>({});
   const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceSurface>("dashboard");
   const [selectedDashboardAccountKey, setSelectedDashboardAccountKey] = useState<DashboardAccountKey>(DEFAULT_DASHBOARD_ACCOUNT_KEY);
-  const [showChainMark, setShowChainMark] = useState<boolean>(() => readShowChainMark());
-  const [optionsTradeRailOpen, setOptionsTradeRailOpen] = useState<boolean>(() => readOptionsTradeRailOpen());
-  const [visibleChainGreeks, setVisibleChainGreeks] = useState<ChainGreekKey[]>(() => readVisibleChainGreeks());
+  const [selectedStockSymbol, setSelectedStockSymbol] = useState("NVDA");
   const [selectedAccountId, setSelectedAccountId] = useState<string | undefined>(undefined);
-  const [ticketDraft, setTicketDraft] = useState<TicketDraft | null>(null);
-  const [ticketAction, setTicketAction] = useState<"BUY" | "SELL">("SELL");
-  const [ticketQuantity, setTicketQuantity] = useState(1);
-  const [ticketOrderType, setTicketOrderType] = useState<"LMT" | "MKT">("LMT");
-  const [ticketLimitPrice, setTicketLimitPrice] = useState("");
-  const [ticketTif, setTicketTif] = useState<"DAY" | "GTC">("DAY");
-  const [previewRequestKey, setPreviewRequestKey] = useState<string | null>(null);
-  const [tickerFilter, setTickerFilter] = useState("");
-  const [rightFilter, setRightFilter] = useState<"ALL" | "C" | "P">("ALL");
-  const [shortOnly, setShortOnly] = useState(true);
-  const [coveredOnly, setCoveredOnly] = useState(false);
-  const [cashSecuredOnly, setCashSecuredOnly] = useState(false);
-  const [nearExpiryOnly, setNearExpiryOnly] = useState(false);
-  const [moneynessFilter, setMoneynessFilter] = useState<"ALL" | "ITM" | "NTM" | "OTM">("ALL");
-  const [sortKey, setSortKey] = useState<keyof OptionPosition>("assignmentRiskLevel");
-  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
-  const [movePct, setMovePct] = useState(-10);
-  const [daysForward, setDaysForward] = useState(7);
-  const [ivShockPct, setIvShockPct] = useState(0);
   const [edgarSyncing, setEdgarSyncing] = useState(false);
   const [edgarSyncResult, setEdgarSyncResult] = useState<EdgarDownloadResponse | undefined>(undefined);
   const [edgarSyncError, setEdgarSyncError] = useState<string | null>(null);
   const [investorPdfSyncing, setInvestorPdfSyncing] = useState(false);
   const [investorPdfSyncResult, setInvestorPdfSyncResult] = useState<InvestorPdfDownloadResponse | undefined>(undefined);
   const [investorPdfSyncError, setInvestorPdfSyncError] = useState<string | null>(null);
-  const deferredTickerFilter = useDeferredValue(tickerFilter);
-  const {
-    activeDisplayedChain,
-    activeExpiry,
-    chainBandFetchDirection,
-    chainErrorHeaderLabel,
-    chainHasBidAsk,
-    chainHasOptionMarks,
-    chainLoadedRangePct,
-    chainQuery,
-    chainSymbol,
-    chainSymbolInput,
-    displayedChainRows,
-    displayedExpiries,
-    handleChainSymbolSelection,
-    handleExpirySelection,
-    isLoadingDifferentSymbol,
-    maxChainWindowPct,
-    requestWiderChainWindow,
-    rowDisplayStates,
-    selectedExpiry,
-    setChainSymbolInput,
-    submitChainSymbolInput,
-    tickerOverviewQuery,
-  } = useOptionChain("NVDA");
 
   const connectionQuery = useQuery({
     queryKey: ["connection-status"],
@@ -659,10 +371,6 @@ function App() {
     refetchInterval: false,
   });
 
-  const scenarioQuery = useQuery({
-    queryKey: ["scenario", selectedAccountId, movePct, daysForward, ivShockPct],
-    queryFn: () => api.scenario(movePct, daysForward, ivShockPct, selectedAccountId),
-  });
   const edgarStatusQuery = useQuery({
     queryKey: ["edgar-status"],
     queryFn: api.edgarStatus,
@@ -710,53 +418,6 @@ function App() {
       void queryClient.invalidateQueries({ queryKey: ["investor-pdf-status"] });
     },
   });
-  const previewMutation = useMutation({
-    mutationFn: api.previewOptionOrder,
-    onSuccess: (_data, variables) => setPreviewRequestKey(JSON.stringify(variables)),
-  });
-  const submitMutation = useMutation({
-    mutationFn: api.submitOptionOrder,
-    onSuccess: async (_data, variables) => {
-      setPreviewRequestKey(JSON.stringify(variables));
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["risk-summary", selectedAccountId] }),
-        queryClient.invalidateQueries({ queryKey: ["option-positions", selectedAccountId] }),
-        queryClient.invalidateQueries({ queryKey: ["open-orders", selectedAccountId] }),
-      ]);
-    },
-  });
-  const cancelMutation = useMutation({
-    mutationFn: ({ orderId, accountId }: { orderId: number; accountId: string }) => api.cancelOrder(orderId, accountId),
-    onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["risk-summary", selectedAccountId] }),
-        queryClient.invalidateQueries({ queryKey: ["option-positions", selectedAccountId] }),
-        queryClient.invalidateQueries({ queryKey: ["open-orders", selectedAccountId] }),
-      ]);
-    },
-  });
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-    window.localStorage.setItem(CHAIN_GREEK_STORAGE_KEY, JSON.stringify(visibleChainGreeks));
-  }, [visibleChainGreeks]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-    window.localStorage.setItem(CHAIN_MARK_STORAGE_KEY, String(showChainMark));
-  }, [showChainMark]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-    window.localStorage.setItem(OPTIONS_TRADE_RAIL_STORAGE_KEY, String(optionsTradeRailOpen));
-  }, [optionsTradeRailOpen]);
-
   useEffect(() => {
     const availableAccounts = uniqueAccounts([
       ...(connectionQuery.data?.managedAccounts ?? []),
@@ -786,30 +447,6 @@ function App() {
   }, [connectorPickerOpen]);
 
   useEffect(() => {
-    if (!ticketDraft) {
-      return;
-    }
-    if (ticketDraft.symbol !== chainSymbol) {
-      setTicketDraft(null);
-      setPreviewRequestKey(null);
-      previewMutation.reset();
-      submitMutation.reset();
-    }
-  }, [chainSymbol, previewMutation, submitMutation, ticketDraft]);
-
-  useEffect(() => {
-    if (!ticketDraft || !selectedExpiry) {
-      return;
-    }
-    if (ticketDraft.expiry !== selectedExpiry) {
-      setTicketDraft(null);
-      setPreviewRequestKey(null);
-      previewMutation.reset();
-      submitMutation.reset();
-    }
-  }, [previewMutation, selectedExpiry, submitMutation, ticketDraft]);
-
-  useEffect(() => {
     if (!sidebarOpen) {
       return;
     }
@@ -829,86 +466,11 @@ function App() {
   const optionPositions = optionPositionsQuery.data?.positions ?? [];
   const openOrders = openOrdersQuery.data?.orders ?? [];
   const accountId = risk?.account.accountId ?? connectionQuery.data?.accountId ?? null;
-  const tickerOverview = tickerOverviewQuery.data;
-  const openOptionOrders = openOrders.filter((order) => order.secType === "OPT");
   const executionEnabled = connectionQuery.data?.executionMode === "enabled";
   const selectedAccount = selectedAccountId ?? accountId ?? undefined;
   const activeExecutionRoute = executionRoutePresentation(connectionQuery.data);
   const routedAccount = activeExecutionRoute.accountId;
   const routedAccountPill = { label: activeExecutionRoute.label, tone: activeExecutionRoute.tone };
-  const optionsDataSourcePill = optionDataSourcePresentation(activeDisplayedChain, connectionQuery.data, chainHasBidAsk, chainHasOptionMarks);
-  const parsedLimitPrice = ticketOrderType === "LMT" ? Number(ticketLimitPrice) : null;
-  const validLimitPrice =
-    ticketOrderType === "MKT" ? null : Number.isFinite(parsedLimitPrice) && parsedLimitPrice != null && parsedLimitPrice > 0 ? parsedLimitPrice : null;
-  const ticketRequest: OptionOrderRequest | null =
-    ticketDraft && selectedAccount && (ticketOrderType === "MKT" || validLimitPrice != null)
-      ? {
-          accountId: selectedAccount,
-          symbol: ticketDraft.symbol,
-          expiry: ticketDraft.expiry,
-          strike: ticketDraft.strike,
-          right: ticketDraft.right,
-          action: ticketAction,
-          quantity: Math.max(1, Math.floor(ticketQuantity || 1)),
-          orderType: ticketOrderType,
-          limitPrice: ticketOrderType === "LMT" ? validLimitPrice : null,
-          tif: ticketTif,
-        }
-      : null;
-  const ticketRequestKey = ticketRequest ? JSON.stringify(ticketRequest) : null;
-  const previewIsCurrent = Boolean(previewMutation.data && previewRequestKey && ticketRequestKey === previewRequestKey);
-  const submitIsCurrent = Boolean(submitMutation.data && previewRequestKey && ticketRequestKey === previewRequestKey);
-  const previewError = previewMutation.error instanceof Error ? previewMutation.error.message : null;
-  const submitError = submitMutation.error instanceof Error ? submitMutation.error.message : null;
-  const cancelError = cancelMutation.error instanceof Error ? cancelMutation.error.message : null;
-  const canPreviewTicket = executionEnabled && Boolean(ticketRequest);
-  const canSubmitTicket = canPreviewTicket && previewIsCurrent;
-
-  const filteredPositions = optionPositions
-    .filter((position) => position.symbol.toLowerCase().includes(deferredTickerFilter.trim().toLowerCase()))
-    .filter((position) => rightFilter === "ALL" || position.right === rightFilter)
-    .filter((position) => !shortOnly || position.shortOrLong === "short")
-    .filter((position) => !coveredOnly || position.strategyTag === "covered-call")
-    .filter((position) => !cashSecuredOnly || position.strategyTag === "cash-secured-put")
-    .filter((position) => !nearExpiryOnly || position.dte <= 7)
-    .filter((position) => {
-      if (moneynessFilter === "ALL") {
-        return true;
-      }
-      const value = position.moneynessPct ?? 0;
-      if (moneynessFilter === "ITM") {
-        return value > 0;
-      }
-      if (moneynessFilter === "NTM") {
-        return Math.abs(value) <= 2.5;
-      }
-      return value < 0;
-    })
-    .slice()
-    .sort((left, right) => comparePositions(left, right, sortKey, sortDirection));
-
-  function loadTicket(row: ChainRow, right: TicketContractSide) {
-    const referencePrice =
-      right === "C" ? row.callMid ?? row.callAsk ?? row.callBid ?? null : row.putMid ?? row.putAsk ?? row.putBid ?? null;
-    setTicketDraft({
-      symbol: chainSymbol,
-      expiry: selectedExpiry ?? activeDisplayedChain?.selectedExpiry ?? "",
-      strike: row.strike,
-      right,
-      referencePrice,
-      bid: right === "C" ? row.callBid : row.putBid,
-      ask: right === "C" ? row.callAsk : row.putAsk,
-    });
-    setTicketAction("SELL");
-    setTicketQuantity(1);
-    setTicketOrderType("LMT");
-    setTicketLimitPrice(referencePrice != null ? referencePrice.toFixed(2) : "");
-    setTicketTif("DAY");
-    previewMutation.reset();
-    submitMutation.reset();
-    cancelMutation.reset();
-    setPreviewRequestKey(null);
-  }
 
   const connectError = connectMutation.error instanceof Error ? connectMutation.error.message : null;
   const reconnectError = reconnectMutation.error instanceof Error ? reconnectMutation.error.message : null;
@@ -1221,476 +783,10 @@ function App() {
     if (!normalizedSymbol) {
       return;
     }
-    setChainSymbolInput(normalizedSymbol);
-    handleChainSymbolSelection(normalizedSymbol);
+    setSelectedStockSymbol(normalizedSymbol);
     setActiveWorkspace(nextWorkspace);
   }
 
-  function toggleVisibleGreek(nextGreek: ChainGreekKey) {
-    setVisibleChainGreeks((current) =>
-      current.includes(nextGreek) ? current.filter((value) => value !== nextGreek) : [...current, nextGreek],
-    );
-  }
-
-  function toggleShowChainMark() {
-    setShowChainMark((current) => !current);
-  }
-
-  function resetTicketFeedback() {
-    previewMutation.reset();
-    submitMutation.reset();
-    cancelMutation.reset();
-    setPreviewRequestKey(null);
-  }
-
-  const requestedSymbolPriceLabel = isLoadingDifferentSymbol
-    ? "Loading spot"
-    : activeDisplayedChain
-      ? `Spot ${fmtCurrencySmall(activeDisplayedChain.underlying.price)}`
-      : "No chain loaded";
-  const chainLoadLabel =
-    chainQuery.isFetching && chainSymbolInput.trim().toUpperCase() === chainSymbol ? `Loading ${chainSymbol}…` : "Load chain";
-
-  function renderOptionsQueryBar() {
-    return (
-      <div className="flex min-w-0 flex-col gap-2 lg:flex-row lg:items-center lg:gap-3">
-        <div className="flex min-w-0 flex-1 items-center gap-2">
-          <label className="min-w-0 flex-1">
-            <span className="sr-only">Option symbol</span>
-            <input
-              className="h-9 w-full rounded-xl border border-line/80 bg-panelSoft px-3 text-sm text-text outline-none transition focus:border-accent/60"
-              data-testid="chain-symbol-input"
-              onChange={(event) => setChainSymbolInput(event.target.value.toUpperCase())}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  submitChainSymbolInput();
-                }
-              }}
-              placeholder="Enter ticker"
-              spellCheck={false}
-              type="text"
-              value={chainSymbolInput}
-            />
-          </label>
-          <button
-            className="inline-flex h-9 shrink-0 items-center justify-center rounded-xl border border-accent/30 bg-accent/10 px-3 text-sm font-medium text-accent transition hover:border-accent/50 hover:bg-accent/16 disabled:cursor-not-allowed disabled:opacity-50"
-            data-testid="chain-load-button"
-            disabled={!chainSymbolInput.trim() || connectMutation.isPending || reconnectMutation.isPending}
-            onClick={submitChainSymbolInput}
-            type="button"
-          >
-            {chainLoadLabel}
-          </button>
-        </div>
-        <div className="shrink-0 text-[11px] text-muted lg:text-right">{requestedSymbolPriceLabel}</div>
-      </div>
-    );
-  }
-
-  function renderIbkrOptionsSurface() {
-    const busySymbolLabel = chainSymbol;
-    const selectedChainGreekOptions = CHAIN_GREEK_OPTIONS.filter((option) => visibleChainGreeks.includes(option.key));
-    const selectedContractLabel = ticketDraft
-      ? `${ticketDraft.symbol} ${ticketDraft.expiry} ${fmtNumber(ticketDraft.strike)}${ticketDraft.right}`
-      : null;
-    const chainHeadingLabel = isLoadingDifferentSymbol
-      ? chainSymbol
-      : activeDisplayedChain
-        ? `${activeDisplayedChain.symbol} ${activeExpiry ?? ""}`.trim()
-        : chainSymbol;
-    const chainContextLabel = isLoadingDifferentSymbol
-      ? "Showing the last loaded chain until the new one is ready."
-      : activeDisplayedChain?.quoteNotice;
-
-    return (
-      <div className="grid gap-4">
-        {displayedExpiries.length ? (
-          <div className="flex flex-wrap gap-2">
-            {displayedExpiries.map((expiry) => (
-              <button
-                key={expiry}
-                className={`rounded-full border px-3 py-2 text-sm transition ${
-                  expiry === activeExpiry
-                    ? "border-accent/45 bg-accent/12 text-accent"
-                    : "border-line/80 bg-panelSoft text-muted hover:border-accent/25 hover:text-text"
-                }`}
-                data-testid={`expiry-button-${expiry}`}
-                disabled={isLoadingDifferentSymbol}
-                onClick={() => handleExpirySelection(expiry)}
-                type="button"
-              >
-                {expiry}
-              </button>
-            ))}
-          </div>
-        ) : null}
-
-        <div className={`grid gap-4 ${optionsTradeRailOpen ? "xl:grid-cols-[minmax(0,1fr)_340px]" : "xl:grid-cols-[minmax(0,1fr)_44px]"}`}>
-          <div className="relative overflow-hidden rounded-2xl border border-line/80 bg-panel">
-            {chainQuery.isFetching ? (
-              <div className="pointer-events-none absolute right-3 top-3 z-10 rounded-full border border-accent/20 bg-shell/90 px-3 py-1 text-xs text-accent">
-                Loading {busySymbolLabel}
-                {selectedExpiry ? ` · ${selectedExpiry}` : ""}
-              </div>
-            ) : null}
-            {isLoadingDifferentSymbol ? (
-              <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-shell/38 backdrop-blur-[1px]">
-                <div className="rounded-2xl border border-accent/20 bg-shell/90 px-4 py-3 text-center text-sm text-text shadow-lg">
-                  <div className="text-[11px] uppercase tracking-[0.18em] text-accent">Loading requested chain</div>
-                  <div className="mt-2 text-base font-medium">{chainSymbol}</div>
-                  <div className="mt-1 text-sm text-muted">Showing the last loaded chain until the new one is ready.</div>
-                </div>
-              </div>
-            ) : null}
-            <div className="border-b border-line/70 px-4 py-4">
-              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                <div className="min-w-0">
-                  <div className="text-[11px] uppercase tracking-[0.22em] text-muted">Options Chain</div>
-                  <div className="mt-1 text-lg font-semibold text-text" data-testid="chain-heading">
-                    {chainHeadingLabel}
-                  </div>
-                  {chainContextLabel ? <div className="mt-2 max-w-3xl text-xs leading-5 text-muted">{chainContextLabel}</div> : null}
-                </div>
-                <div className="flex flex-wrap items-center justify-end gap-3 lg:max-w-[55%]">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <div className="text-[11px] uppercase tracking-[0.18em] text-muted">Columns</div>
-                    <button
-                      className={`rounded-full border px-3 py-1.5 text-xs font-medium transition ${
-                        showChainMark
-                          ? "border-accent/45 bg-accent/12 text-accent"
-                          : "border-line/80 bg-panelSoft text-muted hover:border-accent/25 hover:text-text"
-                      }`}
-                      data-testid="toggle-column-mark"
-                      onClick={toggleShowChainMark}
-                      type="button"
-                    >
-                      Mark
-                    </button>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <div className="text-[11px] uppercase tracking-[0.18em] text-muted">Greeks</div>
-                    {CHAIN_GREEK_OPTIONS.map((option) => {
-                      const checked = visibleChainGreeks.includes(option.key);
-                      return (
-                        <button
-                          key={option.key}
-                          className={`rounded-full border px-3 py-1.5 text-xs font-medium transition ${
-                            checked
-                              ? "border-accent/45 bg-accent/12 text-accent"
-                              : "border-line/80 bg-panelSoft text-muted hover:border-accent/25 hover:text-text"
-                          }`}
-                          data-testid={`toggle-greek-${option.key}`}
-                          onClick={() => toggleVisibleGreek(option.key)}
-                          type="button"
-                        >
-                          {option.label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {displayedChainRows.length ? (
-              <OptionsChainTable
-                activeChain={activeDisplayedChain}
-                activeExpiry={activeExpiry}
-                chainSymbol={chainSymbol}
-                dimmed={isLoadingDifferentSymbol || chainQuery.isFetching}
-                fetchDirection={chainBandFetchDirection}
-                fetchDisabled={chainQuery.isFetching || Boolean(chainBandFetchDirection)}
-                loadedRangePct={chainLoadedRangePct}
-                maxRangePct={maxChainWindowPct}
-                onFetchBand={requestWiderChainWindow}
-                onLoadTicket={loadTicket}
-                rows={displayedChainRows}
-                rowDisplayStates={rowDisplayStates}
-                selectedGreekOptions={selectedChainGreekOptions}
-                showMark={showChainMark}
-                ticketSelection={ticketDraft}
-              />
-            ) : chainQuery.isLoading || chainQuery.isFetching ? (
-              <div className="px-4 py-10 text-sm text-muted">Loading option chain…</div>
-            ) : (
-              <div className="px-4 py-10 text-sm text-muted">Load an optionable ticker to see the chain.</div>
-            )}
-          </div>
-
-          {optionsTradeRailOpen ? (
-            <div className="grid content-start gap-4">
-              <div className="rounded-2xl border border-line/80 bg-panel px-4 py-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <div className="text-[11px] uppercase tracking-[0.22em] text-muted">Trade Ticket</div>
-                    <div className="mt-1 text-lg font-semibold text-text">{selectedContractLabel ?? "Select a contract"}</div>
-                  </div>
-                  <button
-                    aria-expanded={optionsTradeRailOpen}
-                    aria-label="Collapse trade ticket rail"
-                    className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-line/80 bg-panelSoft text-muted transition hover:border-accent/25 hover:text-text"
-                    data-testid="toggle-trade-rail"
-                    onClick={() => setOptionsTradeRailOpen(false)}
-                    type="button"
-                  >
-                    <SidebarToggleIcon open={optionsTradeRailOpen} />
-                  </button>
-                </div>
-
-                {ticketDraft ? (
-                  <div className="mt-4 grid gap-4">
-                    <div className="grid grid-cols-2 gap-2">
-                      <button
-                        className={`rounded-xl border px-3 py-2 text-sm font-medium transition ${
-                          ticketAction === "BUY"
-                            ? "border-accent/45 bg-accent/12 text-accent"
-                            : "border-line/80 bg-panelSoft text-muted hover:text-text"
-                        }`}
-                        data-testid="ticket-buy-button"
-                        onClick={() => {
-                          setTicketAction("BUY");
-                          resetTicketFeedback();
-                        }}
-                        type="button"
-                      >
-                        Buy
-                      </button>
-                      <button
-                        className={`rounded-xl border px-3 py-2 text-sm font-medium transition ${
-                          ticketAction === "SELL"
-                            ? "border-accent/45 bg-accent/12 text-accent"
-                            : "border-line/80 bg-panelSoft text-muted hover:text-text"
-                        }`}
-                        data-testid="ticket-sell-button"
-                        onClick={() => {
-                          setTicketAction("SELL");
-                          resetTicketFeedback();
-                        }}
-                        type="button"
-                      >
-                        Sell
-                      </button>
-                    </div>
-
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      <label className="grid gap-2">
-                        <span className="text-xs uppercase tracking-[0.18em] text-muted">Qty</span>
-                        <input
-                          className="rounded-xl border border-line/80 bg-panelSoft px-3 py-2 text-sm text-text outline-none transition focus:border-accent/60"
-                          data-testid="ticket-quantity-input"
-                          min={1}
-                          onChange={(event) => {
-                            setTicketQuantity(Math.max(1, Number.parseInt(event.target.value || "1", 10) || 1));
-                            resetTicketFeedback();
-                          }}
-                          type="number"
-                          value={ticketQuantity}
-                        />
-                      </label>
-                      <label className="grid gap-2">
-                        <span className="text-xs uppercase tracking-[0.18em] text-muted">Order type</span>
-                        <select
-                          className="rounded-xl border border-line/80 bg-panelSoft px-3 py-2 text-sm text-text outline-none transition focus:border-accent/60"
-                          data-testid="ticket-order-type-select"
-                          onChange={(event) => {
-                            setTicketOrderType(event.target.value as "LMT" | "MKT");
-                            resetTicketFeedback();
-                          }}
-                          value={ticketOrderType}
-                        >
-                          <option value="LMT">LMT</option>
-                          <option value="MKT">MKT</option>
-                        </select>
-                      </label>
-                      {ticketOrderType === "LMT" ? (
-                        <label className="grid gap-2">
-                          <span className="text-xs uppercase tracking-[0.18em] text-muted">Limit</span>
-                          <input
-                            className="rounded-xl border border-line/80 bg-panelSoft px-3 py-2 text-sm text-text outline-none transition focus:border-accent/60"
-                            data-testid="ticket-limit-price-input"
-                            onChange={(event) => {
-                              setTicketLimitPrice(event.target.value);
-                              resetTicketFeedback();
-                            }}
-                            type="number"
-                            value={ticketLimitPrice}
-                          />
-                        </label>
-                      ) : null}
-                      <label className="grid gap-2">
-                        <span className="text-xs uppercase tracking-[0.18em] text-muted">Time in force</span>
-                        <select
-                          className="rounded-xl border border-line/80 bg-panelSoft px-3 py-2 text-sm text-text outline-none transition focus:border-accent/60"
-                          data-testid="ticket-tif-select"
-                          onChange={(event) => {
-                            setTicketTif(event.target.value as "DAY" | "GTC");
-                            resetTicketFeedback();
-                          }}
-                          value={ticketTif}
-                        >
-                          <option value="DAY">DAY</option>
-                          <option value="GTC">GTC</option>
-                        </select>
-                      </label>
-                    </div>
-
-                    <div className="grid gap-2 text-sm text-muted">
-                      <div className="flex items-center justify-between gap-3">
-                        <span>Bid / ask</span>
-                        <span>{fmtCurrencySmall(ticketDraft.bid)} / {fmtCurrencySmall(ticketDraft.ask)}</span>
-                      </div>
-                      <div className="flex items-center justify-between gap-3">
-                        <span>Reference</span>
-                        <span>{fmtCurrencySmall(ticketDraft.referencePrice)}</span>
-                      </div>
-                    </div>
-
-                    {previewIsCurrent && previewMutation.data ? <PreviewSummary preview={previewMutation.data} /> : null}
-                    {previewError ? <ErrorState message={previewError} /> : null}
-                    {submitError ? <ErrorState message={submitError} /> : null}
-                    {cancelError ? <ErrorState message={cancelError} /> : null}
-                    {submitIsCurrent && submitMutation.data ? <SubmitSummary submitted={submitMutation.data} /> : null}
-
-                    <div className="grid gap-2 sm:grid-cols-2">
-                      <button
-                        className="rounded-xl border border-line/80 bg-panelSoft px-4 py-3 text-sm font-medium text-text transition hover:border-accent/25 hover:text-accent disabled:cursor-not-allowed disabled:opacity-50"
-                        data-testid="preview-order-button"
-                        disabled={!canPreviewTicket || previewMutation.isPending}
-                        onClick={() => {
-                          if (ticketRequest) {
-                            void previewMutation.mutateAsync(ticketRequest);
-                          }
-                        }}
-                        type="button"
-                      >
-                        {previewMutation.isPending ? "Previewing…" : "Preview order"}
-                      </button>
-                      <button
-                        className="rounded-xl border border-accent/30 bg-accent/10 px-4 py-3 text-sm font-medium text-accent transition hover:border-accent/50 hover:bg-accent/16 disabled:cursor-not-allowed disabled:opacity-50"
-                        data-testid="submit-order-button"
-                        disabled={!canSubmitTicket || submitMutation.isPending}
-                        onClick={() => {
-                          if (ticketRequest) {
-                            void submitMutation.mutateAsync(ticketRequest);
-                          }
-                        }}
-                        type="button"
-                      >
-                        {submitMutation.isPending ? "Submitting…" : "Submit order"}
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="mt-4 rounded-xl border border-line/80 bg-panelSoft px-3 py-4 text-sm text-muted">
-                    Load any call or put from the chain to build an order ticket.
-                  </div>
-                )}
-              </div>
-
-              <div className="rounded-2xl border border-line/80 bg-panel px-4 py-4">
-                <div>
-                  <div className="text-[11px] uppercase tracking-[0.22em] text-muted">Working Orders</div>
-                  <div className="mt-1 text-lg font-semibold text-text">{openOptionOrders.length}</div>
-                </div>
-                <div className="mt-4 grid gap-3">
-                  {cancelMutation.data ? <CancelSummary cancelled={cancelMutation.data} /> : null}
-                  {openOptionOrders.length ? (
-                    openOptionOrders.map((order) => (
-                      <div
-                        key={order.orderId}
-                        className="rounded-xl border border-line/80 bg-panelSoft px-3 py-3"
-                        data-testid={`open-order-${order.orderId}`}
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <div className="font-medium text-text">
-                              {order.side} {fmtNumber(order.quantity)} {order.symbol} {order.expiry} {fmtNumber(order.strike)}
-                              {order.right ?? ""}
-                            </div>
-                            <div className="mt-1 text-xs text-muted">
-                              {order.orderType}
-                              {order.limitPrice != null ? ` ${fmtCurrencySmall(order.limitPrice)}` : ""}
-                              {" · "}
-                              {order.status}
-                              {" · filled "}
-                              {fmtNumber(order.filledQuantity)}
-                              {" / remaining "}
-                              {fmtNumber(order.remainingQuantity)}
-                            </div>
-                          </div>
-                          <button
-                            className="rounded-full border border-danger/30 bg-danger/10 px-3 py-1.5 text-xs font-medium text-danger transition hover:border-danger/50 hover:bg-danger/16 disabled:cursor-not-allowed disabled:opacity-50"
-                            data-testid={`cancel-order-${order.orderId}`}
-                            disabled={!selectedAccount || cancelMutation.isPending}
-                            onClick={() => {
-                              if (selectedAccount) {
-                                void cancelMutation.mutateAsync({ orderId: order.orderId, accountId: selectedAccount });
-                              }
-                            }}
-                            type="button"
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      </div>
-                    ))
-                  ) : (
-                    <div className="rounded-xl border border-line/80 bg-panelSoft px-3 py-4 text-sm text-muted">
-                      No working option orders in the selected routed account.
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <div className="rounded-2xl border border-line/80 bg-panel px-4 py-4">
-                <div>
-                  <div className="text-[11px] uppercase tracking-[0.22em] text-muted">Open Option Positions</div>
-                  <div className="mt-1 text-lg font-semibold text-text">{optionPositions.length}</div>
-                </div>
-                <div className="mt-4 grid gap-3">
-                  {optionPositions.length ? (
-                    optionPositions.slice(0, 6).map((position) => (
-                      <div key={`${position.symbol}-${position.expiry}-${position.strike}-${position.right}`} className="rounded-xl border border-line/80 bg-panelSoft px-3 py-3">
-                        <div className="font-medium text-text">
-                          {position.symbol} {position.expiry} {fmtNumber(position.strike)}
-                          {position.right}
-                        </div>
-                        <div className="mt-1 text-xs text-muted">
-                          {position.shortOrLong} {fmtNumber(position.quantity)} · mid {fmtCurrencySmall(position.currentMid)} · delta {fmtNumber(position.delta)}
-                        </div>
-                      </div>
-                    ))
-                  ) : (
-                    <div className="rounded-xl border border-line/80 bg-panelSoft px-3 py-4 text-sm text-muted">
-                      No option positions yet. The trade flow above comes first.
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div className="flex h-full min-h-[280px] items-start justify-center">
-              <div className="flex h-full min-h-[280px] w-full flex-col items-center rounded-xl border border-line/80 bg-panel py-2">
-                <button
-                  aria-expanded={optionsTradeRailOpen}
-                  aria-label="Expand trade ticket rail"
-                  className="inline-flex h-8 w-full items-center justify-center text-muted transition hover:text-text"
-                  data-testid="toggle-trade-rail"
-                  onClick={() => setOptionsTradeRailOpen(true)}
-                  type="button"
-                >
-                  <SidebarToggleIcon open={optionsTradeRailOpen} />
-                </button>
-                <div className="mt-2 flex-1 [writing-mode:vertical-rl] rotate-180 text-center text-[10px] uppercase tracking-[0.16em] text-muted">
-                  Trade Ticket
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  }
 
   function renderCoinbasePanelContent() {
     return coinbaseStatusQuery.isLoading ? (
@@ -2227,95 +1323,10 @@ function App() {
   function renderTickerWorkspace() {
     return (
       <TickerWorkspace
-        chainSymbol={chainSymbol}
-        chainSymbolInput={chainSymbolInput}
         controlsDisabled={connectMutation.isPending || reconnectMutation.isPending}
-        setChainSymbolInput={setChainSymbolInput}
-        submitChainSymbolInput={submitChainSymbolInput}
-        tickerOverviewQuery={tickerOverviewQuery}
+        onSymbolChange={setSelectedStockSymbol}
+        selectedSymbol={selectedStockSymbol}
       />
-    );
-  }
-
-  function renderOptionsToolFrame(title: string, children: ReactNode, description?: string) {
-    return (
-      <ToolWorkspaceFrame
-        compact
-        description={description}
-        titleEndSlot={
-          <button
-            aria-label="Options tool settings"
-            className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-line/80 bg-panelSoft text-muted transition hover:border-accent/25 hover:text-text"
-            data-testid="options-settings-button"
-            title="Options settings"
-            type="button"
-          >
-            <GearIcon />
-          </button>
-        }
-        titleRowSlot={renderOptionsQueryBar()}
-        title={title}
-      >
-        {children}
-      </ToolWorkspaceFrame>
-    );
-  }
-
-  function renderOptionsWorkspace() {
-    return renderOptionsToolFrame("Chain", renderIbkrOptionsSurface());
-  }
-
-  function buildOptionToolProps(): OptionToolSharedProps {
-    return {
-      chainSymbol,
-      activeDisplayedChain,
-      displayedChainRows,
-      activeExpiry,
-      optionPositions,
-      tickerOverview,
-      optionsDataSourceLabel: optionsDataSourcePill.label,
-      onLoadTicket: loadTicket,
-      onOpenChain: () => setActiveWorkspace("options"),
-    };
-  }
-
-  function renderOptionsValuationWorkspace() {
-    return renderOptionsToolFrame(
-      "Valuation",
-      <OptionValuationTool {...buildOptionToolProps()} />,
-      "Combine fair-value estimates with put and call premium scenarios for the loaded stock.",
-    );
-  }
-
-  function renderOptionsBuilderWorkspace() {
-    return renderOptionsToolFrame(
-      "Builder",
-      <OptionBuilderTool {...buildOptionToolProps()} />,
-      "Stage single-leg and defined-risk option ideas from the currently loaded stock chain.",
-    );
-  }
-
-  function renderOptionsStructuresWorkspace() {
-    return renderOptionsToolFrame(
-      "Structures",
-      <OptionStructuresTool {...buildOptionToolProps()} />,
-      "Group open option positions by strategy so the account reads as structures instead of loose contracts.",
-    );
-  }
-
-  function renderOptionsVolatilityWorkspace() {
-    return renderOptionsToolFrame(
-      "Volatility",
-      <OptionVolatilityTool {...buildOptionToolProps()} />,
-      "Inspect IV, skew, and open-interest context for the currently loaded stock option chain.",
-    );
-  }
-
-  function renderOptionsScannerWorkspace() {
-    return renderOptionsToolFrame(
-      "Scanner",
-      <OptionScannerTool {...buildOptionToolProps()} />,
-      "Rank contracts from the loaded stock option chain by yield, liquidity, and distance from spot.",
     );
   }
 
@@ -2323,7 +1334,7 @@ function App() {
     return (
       <div className="grid gap-6">
         <EdgarWorkspace
-          defaultTicker={chainSymbol}
+          defaultTicker={selectedStockSymbol}
           onRun={(request) => {
             void runEdgarDownload(request);
           }}
@@ -2335,7 +1346,7 @@ function App() {
           syncing={edgarSyncing}
         />
         <InvestorPdfsWorkspace
-          defaultTicker={chainSymbol}
+          defaultTicker={selectedStockSymbol}
           onRun={(request) => {
             void runInvestorPdfDownload(request);
           }}
@@ -2498,12 +1509,20 @@ function App() {
                 <StockMarketWorkspace gatewayPill={marketGatewayPill} onOpenSymbol={openSymbolWorkspace} />
               ) : null}
               {activeWorkspace === "ticker" ? renderTickerWorkspace() : null}
-              {activeWorkspace === "options" ? renderOptionsWorkspace() : null}
-              {activeWorkspace === "optionsValuation" ? renderOptionsValuationWorkspace() : null}
-              {activeWorkspace === "optionsBuilder" ? renderOptionsBuilderWorkspace() : null}
-              {activeWorkspace === "optionsStructures" ? renderOptionsStructuresWorkspace() : null}
-              {activeWorkspace === "optionsVolatility" ? renderOptionsVolatilityWorkspace() : null}
-              {activeWorkspace === "optionsScanner" ? renderOptionsScannerWorkspace() : null}
+              {isOptionsWorkspace(activeWorkspace) ? (
+                <OptionsWorkspace
+                  connectionStatus={connectionQuery.data}
+                  controlsDisabled={connectMutation.isPending || reconnectMutation.isPending}
+                  executionEnabled={executionEnabled}
+                  initialSymbol={selectedStockSymbol}
+                  onOpenChain={() => setActiveWorkspace("options")}
+                  onSymbolChange={setSelectedStockSymbol}
+                  openOrders={openOrders}
+                  optionPositions={optionPositions}
+                  selectedAccount={selectedAccount}
+                  workspace={activeWorkspace as OptionsWorkspaceSurface}
+                />
+              ) : null}
               {activeWorkspace === "crypto" ? <CryptoMarketWorkspace /> : null}
               {activeWorkspace === "cryptoLeverage" ? <CryptoLeverageWorkspace /> : null}
               {activeWorkspace === "research" ? renderResearchWorkspace() : null}
@@ -2826,56 +1845,6 @@ function InlinePill({ label, tone = "neutral" }: { label: string; tone?: "neutra
   return <span className={`rounded-full border px-2.5 py-1 text-[11px] uppercase tracking-[0.16em] ${toneClasses[tone]}`}>{label}</span>;
 }
 
-function PreviewSummary({ preview }: { preview: OptionOrderPreview }) {
-  return (
-    <div className="rounded-xl border border-line/80 bg-panelSoft px-3 py-3 text-sm">
-      <div className="text-xs uppercase tracking-[0.18em] text-muted">Preview</div>
-      <div className="mt-3 grid gap-2 text-muted">
-        <div className="flex items-center justify-between gap-3">
-          <span>Opening/closing</span>
-          <span className="text-text">{preview.openingOrClosing}</span>
-        </div>
-        <div className="flex items-center justify-between gap-3">
-          <span>Reference</span>
-          <span className="text-text">{fmtCurrencySmall(preview.marketReferencePrice)}</span>
-        </div>
-        <div className="flex items-center justify-between gap-3">
-          <span>Gross premium</span>
-          <span className="text-text">{fmtCurrencySmall(preview.estimatedGrossPremium)}</span>
-        </div>
-        <div className="flex items-center justify-between gap-3">
-          <span>Cash impact</span>
-          <span className="text-text">{fmtCurrencySmall(preview.conservativeCashImpact)}</span>
-        </div>
-        <div className="flex items-center justify-between gap-3">
-          <span>Init margin</span>
-          <span className="text-text">{fmtCurrencySmall(preview.brokerInitialMarginChange)}</span>
-        </div>
-      </div>
-      {preview.warningText ? <div className="mt-3 text-sm text-caution">{preview.warningText}</div> : null}
-      {preview.note ? <div className="mt-2 text-sm text-muted">{preview.note}</div> : null}
-    </div>
-  );
-}
-
-function SubmitSummary({ submitted }: { submitted: SubmittedOrder }) {
-  return (
-    <div className="rounded-xl border border-safe/25 bg-safe/10 px-3 py-3 text-sm text-safe" data-testid="submit-banner">
-      Order {submitted.orderId} accepted with status {submitted.status}.
-      {submitted.message ? ` ${submitted.message}` : ""}
-    </div>
-  );
-}
-
-function CancelSummary({ cancelled }: { cancelled: OrderCancelResponse }) {
-  return (
-    <div className="rounded-xl border border-danger/25 bg-danger/10 px-3 py-3 text-sm text-danger" data-testid="cancel-banner">
-      Order {cancelled.orderId} cancel request returned status {cancelled.status}.
-      {cancelled.message ? ` ${cancelled.message}` : ""}
-    </div>
-  );
-}
-
 function ErrorState({ message }: { message: string }) {
   return <div className="rounded-2xl border border-danger/20 bg-danger/8 px-4 py-3 text-sm text-danger">{message}</div>;
 }
@@ -2932,53 +1901,6 @@ function connectionToneIconClass(tone: ConnectionHealthTone) {
     return "bg-danger/10 text-danger";
   }
   return "bg-white/5 text-text";
-}
-
-function comparePositions(
-  left: OptionPosition,
-  right: OptionPosition,
-  key: keyof OptionPosition,
-  direction: "asc" | "desc",
-) {
-  const factor = direction === "asc" ? 1 : -1;
-  const valueLeft = sortableValue(left, key);
-  const valueRight = sortableValue(right, key);
-  if (valueLeft < valueRight) {
-    return -1 * factor;
-  }
-  if (valueLeft > valueRight) {
-    return 1 * factor;
-  }
-  return left.symbol.localeCompare(right.symbol);
-}
-
-function sortableValue(position: OptionPosition, key: keyof OptionPosition) {
-  if (key === "assignmentRiskLevel") {
-    return { Low: 0, Moderate: 1, Elevated: 2, High: 3 }[position.assignmentRiskLevel];
-  }
-  const value = position[key];
-  if (typeof value === "number") {
-    return value;
-  }
-  if (typeof value === "string") {
-    return value;
-  }
-  return -Infinity;
-}
-
-function handleSort(
-  nextKey: keyof OptionPosition,
-  currentKey: keyof OptionPosition,
-  currentDirection: "asc" | "desc",
-  setKey: (key: keyof OptionPosition) => void,
-  setDirection: (direction: "asc" | "desc") => void,
-) {
-  if (nextKey === currentKey) {
-    setDirection(currentDirection === "asc" ? "desc" : "asc");
-    return;
-  }
-  setKey(nextKey);
-  setDirection(nextKey === "expiry" || nextKey === "dte" ? "asc" : "desc");
 }
 
 function PlusCircleIcon() {
