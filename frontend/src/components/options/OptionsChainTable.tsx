@@ -3,6 +3,10 @@ import type { ChainRow, OptionChainResponse } from "../../lib/types";
 
 export type TicketContractSide = "C" | "P";
 export type ChainBandDirection = "lower" | "upper";
+export type ChainRowDisplayState = {
+  status: "fresh" | "stale" | "refreshing";
+  updatedAt: number | null;
+};
 type ChainGreekKey = "iv" | "delta" | "gamma" | "theta" | "vega" | "rho";
 
 export type OptionsChainGreekOption = {
@@ -36,6 +40,7 @@ type OptionsChainTableProps = {
   onFetchBand: (direction: ChainBandDirection) => void;
   onLoadTicket: (row: ChainRow, right: TicketContractSide) => void;
   rows: ChainRow[];
+  rowDisplayStates: Record<string, ChainRowDisplayState>;
   selectedGreekOptions: OptionsChainGreekOption[];
   showMark: boolean;
   ticketSelection: TicketSelection;
@@ -180,6 +185,24 @@ function ChainFetchChevronRow({
   );
 }
 
+function rowDisplayStateKey(row: ChainRow) {
+  return String(row.strike);
+}
+
+function describeRowDisplayState(rowState: ChainRowDisplayState | undefined) {
+  if (!rowState?.updatedAt) {
+    return undefined;
+  }
+  const ageSeconds = Math.max(0, Math.round((Date.now() - rowState.updatedAt) / 1000));
+  if (rowState.status === "refreshing") {
+    return `Refreshing quote data; previous values are ${ageSeconds}s old.`;
+  }
+  if (rowState.status === "stale") {
+    return `Quote data is stale; last refreshed ${ageSeconds}s ago.`;
+  }
+  return `Quote data refreshed ${ageSeconds}s ago.`;
+}
+
 export function OptionsChainTable({
   activeChain,
   activeExpiry,
@@ -192,6 +215,7 @@ export function OptionsChainTable({
   onFetchBand,
   onLoadTicket,
   rows,
+  rowDisplayStates,
   selectedGreekOptions,
   showMark,
   ticketSelection,
@@ -316,6 +340,7 @@ export function OptionsChainTable({
               onFetchBand={onFetchBand}
             />
             {rows.map((row, index) => {
+              const rowState = rowDisplayStates[rowDisplayStateKey(row)];
               const callItmPct = probabilityItmPct(spotPrice, row.strike, row.callIV, activeExpiry, "C");
               const putItmPct = probabilityItmPct(spotPrice, row.strike, row.putIV, activeExpiry, "P");
               const previousFiveBucket = index === 0 ? null : Math.floor(Math.abs(rows[index - 1].distanceFromSpotPct) / 5);
@@ -330,14 +355,21 @@ export function OptionsChainTable({
                 : isFivePercentBreak
                   ? "bg-white/[0.018] shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]"
                   : "";
+              const freshnessClass =
+                rowState?.status === "refreshing"
+                  ? "opacity-55 saturate-50 animate-pulse"
+                  : rowState?.status === "stale"
+                    ? "opacity-55 saturate-50"
+                    : "";
 
               return (
                 <Fragment key={`${activeChain?.symbol ?? chainSymbol}-${row.strike}-${index}-group`}>
                   {normalizedSpotInsertIndex === index ? renderSpotRow(`${activeChain?.symbol ?? chainSymbol}-spot-row-${index}`) : null}
                   <tr
                     key={`${activeChain?.symbol ?? chainSymbol}-${row.strike}-${index}`}
-                    className={`${boundaryClass} ${boundaryToneClass} transition hover:bg-white/[0.02]`}
+                    className={`${boundaryClass} ${boundaryToneClass} ${freshnessClass} transition hover:bg-white/[0.02]`}
                     data-testid={`chain-row-${index}`}
+                    title={describeRowDisplayState(rowState)}
                   >
                     <td className="px-2.5 py-1.5">{renderContractEntryButton(row.callBid, row, "C", "call", "Bid")}</td>
                     <td className="px-2.5 py-1.5">{renderContractEntryButton(row.callAsk, row, "C", "call", "Ask")}</td>

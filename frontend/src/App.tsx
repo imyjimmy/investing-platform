@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useDeferredValue, startTransition, type ReactNode } from "react";
+import { useEffect, useState, useDeferredValue, startTransition, type ReactNode } from "react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Bar,
@@ -59,10 +59,10 @@ import {
 } from "./components/options/OptionToolWorkspaces";
 import {
   OptionsChainTable,
-  type ChainBandDirection,
   type OptionsChainGreekOption,
   type TicketContractSide,
 } from "./components/options/OptionsChainTable";
+import { useOptionChain } from "./components/options/useOptionChain";
 import { Panel } from "./components/Panel";
 
 const currency = new Intl.NumberFormat("en-US", {
@@ -218,26 +218,6 @@ function sumPositionPnl(positions: Position[]) {
 
 function sumOptionPositionPnl(positions: OptionPosition[]) {
   return positions.reduce((total, position) => total + (position.unrealizedPnL ?? 0) + (position.realizedPnL ?? 0), 0);
-}
-
-function mergeOptionChainResponses(current: OptionChainResponse, next: OptionChainResponse): OptionChainResponse {
-  const rowsByStrike = new Map<number, ChainRow>();
-  for (const row of current.rows) {
-    rowsByStrike.set(row.strike, row);
-  }
-  for (const row of next.rows) {
-    rowsByStrike.set(row.strike, row);
-  }
-  return {
-    ...current,
-    rows: Array.from(rowsByStrike.values()).sort((left, right) => left.strike - right.strike),
-    highlights: next.highlights.length ? next.highlights : current.highlights,
-    quoteSource: next.quoteSource,
-    quoteAsOf: next.quoteAsOf,
-    quoteNotice: next.quoteNotice,
-    generatedAt: next.generatedAt,
-    isStale: current.isStale || next.isStale,
-  };
 }
 
 function isOptionsWorkspace(workspace: WorkspaceSurface) {
@@ -608,12 +588,6 @@ type ChainGreekOption = OptionsChainGreekOption;
 const CHAIN_GREEK_STORAGE_KEY = "options-chain-visible-greeks";
 const CHAIN_MARK_STORAGE_KEY = "options-chain-show-mark";
 const OPTIONS_TRADE_RAIL_STORAGE_KEY = "options-trade-rail-open";
-const INITIAL_CHAIN_WINDOW_PCT = 0.05;
-const CHAIN_WINDOW_STEP_PCT = 0.05;
-const MAX_CHAIN_WINDOW_PCT = 0.5;
-const MAX_CHAIN_STRIKE_LIMIT = 96;
-const CHAIN_SCROLL_FETCH_DEBOUNCE_MS = 350;
-const INITIAL_CHAIN_RANGE = { min: -INITIAL_CHAIN_WINDOW_PCT, max: INITIAL_CHAIN_WINDOW_PCT };
 const DEFAULT_VISIBLE_CHAIN_GREEKS: ChainGreekKey[] = ["iv", "delta", "gamma", "theta", "vega"];
 const CHAIN_GREEK_OPTIONS: ChainGreekOption[] = [
   {
@@ -757,14 +731,10 @@ function App() {
   const [marketSortKey, setMarketSortKey] = useState<MarketSortKey>("beta");
   const [marketOptionableOnly, setMarketOptionableOnly] = useState(true);
   const [marketShortableOnly, setMarketShortableOnly] = useState(false);
-  const [chainSymbol, setChainSymbol] = useState("NVDA");
-  const [chainSymbolInput, setChainSymbolInput] = useState("NVDA");
   const [showChainMark, setShowChainMark] = useState<boolean>(() => readShowChainMark());
   const [optionsTradeRailOpen, setOptionsTradeRailOpen] = useState<boolean>(() => readOptionsTradeRailOpen());
   const [visibleChainGreeks, setVisibleChainGreeks] = useState<ChainGreekKey[]>(() => readVisibleChainGreeks());
   const [selectedAccountId, setSelectedAccountId] = useState<string | undefined>(undefined);
-  const [selectedExpiry, setSelectedExpiry] = useState<string | undefined>(undefined);
-  const [chainLoadedRangePct, setChainLoadedRangePct] = useState(INITIAL_CHAIN_RANGE);
   const [ticketDraft, setTicketDraft] = useState<TicketDraft | null>(null);
   const [ticketAction, setTicketAction] = useState<"BUY" | "SELL">("SELL");
   const [ticketQuantity, setTicketQuantity] = useState(1);
@@ -772,11 +742,6 @@ function App() {
   const [ticketLimitPrice, setTicketLimitPrice] = useState("");
   const [ticketTif, setTicketTif] = useState<"DAY" | "GTC">("DAY");
   const [previewRequestKey, setPreviewRequestKey] = useState<string | null>(null);
-  const [visibleChain, setVisibleChain] = useState<OptionChainResponse | null>(null);
-  const activeDisplayedChainRef = useRef<OptionChainResponse | null>(null);
-  const [chainBandFetchDirection, setChainBandFetchDirection] = useState<ChainBandDirection | null>(null);
-  const chainWindowDebounceRef = useRef<number | null>(null);
-  const chainBandFetchPendingRef = useRef(false);
   const [tickerFilter, setTickerFilter] = useState("");
   const [rightFilter, setRightFilter] = useState<"ALL" | "C" | "P">("ALL");
   const [shortOnly, setShortOnly] = useState(true);
@@ -795,9 +760,31 @@ function App() {
   const [investorPdfSyncing, setInvestorPdfSyncing] = useState(false);
   const [investorPdfSyncResult, setInvestorPdfSyncResult] = useState<InvestorPdfDownloadResponse | undefined>(undefined);
   const [investorPdfSyncError, setInvestorPdfSyncError] = useState<string | null>(null);
-  const chainSymbolInputRef = useRef<HTMLInputElement | null>(null);
-
   const deferredTickerFilter = useDeferredValue(tickerFilter);
+  const {
+    activeDisplayedChain,
+    activeExpiry,
+    chainBandFetchDirection,
+    chainErrorHeaderLabel,
+    chainHasBidAsk,
+    chainHasOptionMarks,
+    chainLoadedRangePct,
+    chainQuery,
+    chainSymbol,
+    chainSymbolInput,
+    displayedChainRows,
+    displayedExpiries,
+    handleChainSymbolSelection,
+    handleExpirySelection,
+    isLoadingDifferentSymbol,
+    maxChainWindowPct,
+    requestWiderChainWindow,
+    rowDisplayStates,
+    selectedExpiry,
+    setChainSymbolInput,
+    submitChainSymbolInput,
+    tickerOverviewQuery,
+  } = useOptionChain("NVDA");
 
   const connectionQuery = useQuery({
     queryKey: ["connection-status"],
@@ -868,29 +855,6 @@ function App() {
     queryKey: ["open-orders", selectedAccountId],
     queryFn: () => api.openOrders(selectedAccountId),
     refetchInterval: false,
-  });
-
-  const chainQuery = useQuery({
-    queryKey: ["chain", chainSymbol, selectedExpiry],
-    queryFn: () =>
-      api.chain(
-        chainSymbol,
-        selectedExpiry,
-        MAX_CHAIN_STRIKE_LIMIT,
-        undefined,
-        undefined,
-        INITIAL_CHAIN_RANGE.min,
-        INITIAL_CHAIN_RANGE.max,
-      ),
-    refetchInterval: false,
-    staleTime: 120_000,
-  });
-  const tickerOverviewQuery = useQuery({
-    queryKey: ["ticker-overview", chainSymbol],
-    queryFn: () => api.tickerOverview(chainSymbol),
-    enabled: Boolean(chainSymbol.trim()),
-    refetchInterval: false,
-    staleTime: 120_000,
   });
 
   const scenarioQuery = useQuery({
@@ -969,42 +933,6 @@ function App() {
       ]);
     },
   });
-
-  useEffect(() => {
-    const nextExpiry = chainQuery.data?.selectedExpiry;
-    if (nextExpiry && nextExpiry !== selectedExpiry) {
-      setSelectedExpiry(nextExpiry);
-    }
-  }, [chainQuery.data?.selectedExpiry, selectedExpiry]);
-
-  useEffect(() => {
-    if (!chainQuery.data) {
-      return;
-    }
-    setVisibleChain(chainQuery.data);
-    setChainLoadedRangePct(INITIAL_CHAIN_RANGE);
-  }, [chainQuery.data]);
-
-  useEffect(() => {
-    return () => {
-      if (chainWindowDebounceRef.current != null) {
-        window.clearTimeout(chainWindowDebounceRef.current);
-      }
-    };
-  }, []);
-
-  useEffect(() => {
-    if (chainWindowDebounceRef.current != null) {
-      window.clearTimeout(chainWindowDebounceRef.current);
-      chainWindowDebounceRef.current = null;
-    }
-    chainBandFetchPendingRef.current = false;
-    setChainBandFetchDirection(null);
-  }, [chainSymbol, selectedExpiry]);
-
-  useEffect(() => {
-    setChainSymbolInput(chainSymbol);
-  }, [chainSymbol]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -1099,26 +1027,8 @@ function App() {
   const optionPositions = optionPositionsQuery.data?.positions ?? [];
   const openOrders = openOrdersQuery.data?.orders ?? [];
   const accountId = risk?.account.accountId ?? connectionQuery.data?.accountId ?? null;
-  const activeDisplayedChain = visibleChain;
-  activeDisplayedChainRef.current = activeDisplayedChain;
   const tickerOverview = tickerOverviewQuery.data;
   const tickerOverviewError = tickerOverviewQuery.error instanceof Error ? tickerOverviewQuery.error.message : null;
-  const activeChainMatchesRequest = activeDisplayedChain?.symbol === chainSymbol;
-  const isLoadingDifferentSymbol = chainQuery.isFetching && Boolean(activeDisplayedChain) && !activeChainMatchesRequest;
-  const chainHasBidAsk = ((activeChainMatchesRequest ? chainQuery.data?.rows : activeDisplayedChain?.rows) ?? []).some(
-    (row) => row.callBid != null || row.callAsk != null || row.putBid != null || row.putAsk != null,
-  );
-  const chainHasOptionMarks = ((activeChainMatchesRequest ? chainQuery.data?.rows : activeDisplayedChain?.rows) ?? []).some(
-    (row) => row.callMid != null || row.putMid != null,
-  );
-  const chainError = chainQuery.error instanceof Error ? chainQuery.error.message : null;
-  const chainErrorHeaderLabel =
-    chainError && activeDisplayedChain && !activeChainMatchesRequest
-      ? `Could not load ${chainSymbol}. Still showing the last loaded chain. ${chainError}`
-      : chainError;
-  const displayedChainRows = activeDisplayedChain?.rows ?? [];
-  const displayedExpiries = activeChainMatchesRequest ? activeDisplayedChain?.expiries ?? [] : [];
-  const activeExpiry = selectedExpiry ?? activeDisplayedChain?.selectedExpiry ?? undefined;
   const openOptionOrders = openOrders.filter((order) => order.secType === "OPT");
   const executionEnabled = connectionQuery.data?.executionMode === "enabled";
   const selectedAccount = selectedAccountId ?? accountId ?? undefined;
@@ -1553,22 +1463,6 @@ function App() {
     }
   }
 
-  function handleChainSymbolSelection(nextSymbol: string) {
-    const normalizedSymbol = nextSymbol.trim().toUpperCase();
-    if (!normalizedSymbol || normalizedSymbol === chainSymbol) {
-      return;
-    }
-    startTransition(() => {
-      setChainSymbol(normalizedSymbol);
-      setSelectedExpiry(undefined);
-      setChainLoadedRangePct(INITIAL_CHAIN_RANGE);
-    });
-  }
-
-  function submitChainSymbolInput() {
-    handleChainSymbolSelection(chainSymbolInputRef.current?.value ?? chainSymbolInput);
-  }
-
   function applyMarketPreset(preset: MarketPreset) {
     startTransition(() => {
       if (preset === "high-beta") {
@@ -1629,78 +1523,6 @@ function App() {
     setActiveWorkspace(nextWorkspace);
   }
 
-  function handleExpirySelection(nextExpiry: string) {
-    if (!nextExpiry || nextExpiry === selectedExpiry) {
-      return;
-    }
-    startTransition(() => {
-      setSelectedExpiry(nextExpiry);
-      setChainLoadedRangePct(INITIAL_CHAIN_RANGE);
-    });
-  }
-
-  function requestWiderChainWindow(direction: ChainBandDirection) {
-    const chainForBand = activeDisplayedChain;
-    if (chainQuery.isFetching || chainBandFetchPendingRef.current || !chainForBand?.rows.length) {
-      return;
-    }
-    const requestSymbol = chainForBand.symbol;
-    const requestExpiry = chainForBand.selectedExpiry;
-    const currentBoundary = direction === "lower" ? Math.abs(chainLoadedRangePct.min) : chainLoadedRangePct.max;
-    if (currentBoundary >= MAX_CHAIN_WINDOW_PCT) {
-      return;
-    }
-    if (chainWindowDebounceRef.current != null) {
-      window.clearTimeout(chainWindowDebounceRef.current);
-    }
-    setChainBandFetchDirection(direction);
-    const nextRange =
-      direction === "lower"
-        ? {
-            min: Math.max(-MAX_CHAIN_WINDOW_PCT, chainLoadedRangePct.min - CHAIN_WINDOW_STEP_PCT),
-            max: chainLoadedRangePct.min,
-          }
-        : {
-            min: chainLoadedRangePct.max,
-            max: Math.min(MAX_CHAIN_WINDOW_PCT, chainLoadedRangePct.max + CHAIN_WINDOW_STEP_PCT),
-          };
-    chainWindowDebounceRef.current = window.setTimeout(() => {
-      chainWindowDebounceRef.current = null;
-      chainBandFetchPendingRef.current = true;
-      void queryClient
-        .fetchQuery({
-          queryKey: ["chain-band", requestSymbol, requestExpiry, nextRange.min, nextRange.max],
-          queryFn: () =>
-            api.chain(
-              requestSymbol,
-              requestExpiry,
-              MAX_CHAIN_STRIKE_LIMIT,
-              undefined,
-              undefined,
-              nextRange.min,
-              nextRange.max,
-            ),
-          staleTime: 120_000,
-        })
-        .then((nextChain) => {
-          const latestChain = activeDisplayedChainRef.current;
-          if (!latestChain || latestChain.symbol !== requestSymbol || latestChain.selectedExpiry !== requestExpiry) {
-            return;
-          }
-          setVisibleChain((current) => (current ? mergeOptionChainResponses(current, nextChain) : nextChain));
-          setChainLoadedRangePct((current) => ({
-            min: Math.min(current.min, nextRange.min),
-            max: Math.max(current.max, nextRange.max),
-          }));
-        })
-        .catch(() => undefined)
-        .finally(() => {
-          chainBandFetchPendingRef.current = false;
-          setChainBandFetchDirection(null);
-        });
-    }, CHAIN_SCROLL_FETCH_DEBOUNCE_MS);
-  }
-
   function toggleVisibleGreek(nextGreek: ChainGreekKey) {
     setVisibleChainGreeks((current) =>
       current.includes(nextGreek) ? current.filter((value) => value !== nextGreek) : [...current, nextGreek],
@@ -1742,7 +1564,6 @@ function App() {
                 }
               }}
               placeholder="Enter ticker"
-              ref={chainSymbolInputRef}
               spellCheck={false}
               type="text"
               value={chainSymbolInput}
@@ -1778,7 +1599,6 @@ function App() {
                 }
               }}
               placeholder="Enter ticker"
-              ref={chainSymbolInputRef}
               spellCheck={false}
               type="text"
               value={chainSymbolInput}
@@ -2011,10 +1831,11 @@ function App() {
                 fetchDirection={chainBandFetchDirection}
                 fetchDisabled={chainQuery.isFetching || Boolean(chainBandFetchDirection)}
                 loadedRangePct={chainLoadedRangePct}
-                maxRangePct={MAX_CHAIN_WINDOW_PCT}
+                maxRangePct={maxChainWindowPct}
                 onFetchBand={requestWiderChainWindow}
                 onLoadTicket={loadTicket}
                 rows={displayedChainRows}
+                rowDisplayStates={rowDisplayStates}
                 selectedGreekOptions={selectedChainGreekOptions}
                 showMark={showChainMark}
                 ticketSelection={ticketDraft}
