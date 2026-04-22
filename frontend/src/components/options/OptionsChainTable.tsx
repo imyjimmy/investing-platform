@@ -265,13 +265,8 @@ export function OptionsChainTable({
   }
 
   return (
-    <div className="px-4 pb-4 pt-3">
-      <div
-        className={`${
-          dimmed ? "opacity-60" : ""
-        } min-h-[420px] max-h-[70vh] overflow-auto overscroll-contain rounded-xl border border-line/70 bg-panel`}
-      >
-        <table className="min-w-max text-left text-sm">
+    <div className={`${dimmed ? "opacity-60" : ""} max-h-[70vh] min-h-[420px] overflow-auto overscroll-contain`}>
+      <table className="min-w-max text-left text-sm">
           <thead className="sticky top-0 z-[1] bg-panel/95 text-[11px] uppercase tracking-[0.18em] text-muted">
             <tr className="border-b border-line/70 text-[10px] tracking-[0.24em]">
               <th className="px-2.5 pb-2 pt-3 text-right text-accent" colSpan={callSectionColumnCount}>
@@ -382,8 +377,7 @@ export function OptionsChainTable({
               onFetchBand={onFetchBand}
             />
           </tbody>
-        </table>
-      </div>
+      </table>
     </div>
   );
 }
