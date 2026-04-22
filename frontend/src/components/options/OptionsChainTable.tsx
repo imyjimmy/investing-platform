@@ -154,7 +154,8 @@ function ChainFetchChevronRow({
   const loadedPct = direction === "lower" ? Math.abs(loadedRangePct.min) : loadedRangePct.max;
   const capped = loadedPct >= maxRangePct;
   const label = direction === "lower" ? "Load lower strikes" : "Load higher strikes";
-  const rowBorderClass = direction === "lower" ? "border-b border-line/70" : "border-t border-line/70";
+  const separatorClass =
+    direction === "lower" ? "shadow-[inset_0_-1px_0_rgba(95,144,146,0.14)]" : "shadow-[inset_0_1px_0_rgba(95,144,146,0.14)]";
   const chevronStack = (
     <span className="grid h-4 w-5 place-items-center text-[15px] leading-[0.35]">
       <span>⌃</span>
@@ -162,8 +163,8 @@ function ChainFetchChevronRow({
     </span>
   );
   return (
-    <tr className={`${rowBorderClass} h-6 bg-panel`}>
-      <td className="px-2.5 py-0" colSpan={chainTableColumnCount}>
+    <tr className="h-6 bg-panel">
+      <td className={`${separatorClass} px-2.5 py-0`} colSpan={chainTableColumnCount}>
         <div className="flex h-6 items-center justify-center">
           <button
             aria-label={capped ? "Strike range loaded" : label}
@@ -357,7 +358,7 @@ export function OptionsChainTable({
                   : "";
               const freshnessClass =
                 rowState?.status === "refreshing"
-                  ? "opacity-55 saturate-50 animate-pulse"
+                  ? "opacity-55 saturate-50"
                   : rowState?.status === "stale"
                     ? "opacity-55 saturate-50"
                     : "";
