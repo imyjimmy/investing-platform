@@ -171,9 +171,25 @@ def ticker_overview(symbol: str) -> dict:
 
 
 @router.get("/market/chain/{symbol}")
-def option_chain(symbol: str, expiry: str | None = Query(default=None)) -> dict:
+def option_chain(
+    symbol: str,
+    expiry: str | None = Query(default=None),
+    strikeLimit: int | None = Query(default=None, ge=4, le=96),
+    lowerMoneynessPct: float | None = Query(default=None, ge=0, le=1),
+    upperMoneynessPct: float | None = Query(default=None, ge=0, le=1),
+    minMoneynessPct: float | None = Query(default=None, ge=-1, le=1),
+    maxMoneynessPct: float | None = Query(default=None, ge=-1, le=1),
+) -> dict:
     try:
-        return _service().get_option_chain(symbol, expiry=expiry).model_dump()
+        return _service().get_option_chain(
+            symbol,
+            expiry=expiry,
+            strike_limit=strikeLimit,
+            lower_moneyness_pct=lowerMoneynessPct,
+            upper_moneyness_pct=upperMoneynessPct,
+            min_moneyness_pct=minMoneynessPct,
+            max_moneyness_pct=maxMoneynessPct,
+        ).model_dump()
     except BrokerUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
@@ -201,7 +217,15 @@ def option_contract(
     strike: float = Query(...),
     right: str = Query(..., pattern="^[CPcp]$"),
 ) -> dict:
-    chain = option_chain(symbol, expiry)
+    chain = option_chain(
+        symbol=symbol,
+        expiry=expiry,
+        strikeLimit=None,
+        lowerMoneynessPct=None,
+        upperMoneynessPct=None,
+        minMoneynessPct=None,
+        maxMoneynessPct=None,
+    )
     for row in chain["rows"]:
         if abs(float(row["strike"]) - float(strike)) > 1e-6:
             continue

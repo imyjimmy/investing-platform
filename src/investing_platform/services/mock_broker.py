@@ -142,7 +142,16 @@ class MockBrokerService(BrokerService):
             isStale=False,
         )
 
-    def get_option_chain(self, symbol: str, expiry: str | None = None) -> OptionChainResponse:
+    def get_option_chain(
+        self,
+        symbol: str,
+        expiry: str | None = None,
+        strike_limit: int | None = None,
+        lower_moneyness_pct: float | None = None,
+        upper_moneyness_pct: float | None = None,
+        min_moneyness_pct: float | None = None,
+        max_moneyness_pct: float | None = None,
+    ) -> OptionChainResponse:
         symbol = symbol.upper()
         chain_frame = self.options_provider.get_options_chain([symbol], date.today())
         chain_frame = chain_frame.sort_values(["expiration", "strike", "option_type"]).reset_index(drop=True)
@@ -150,6 +159,18 @@ class MockBrokerService(BrokerService):
         selected_expiry = expiry if expiry in expiries else expiries[0]
         filtered = chain_frame[chain_frame["expiration"].astype(str) == selected_expiry]
         spot = float(filtered["underlying_price"].iloc[0])
+        selected_strikes = set(
+            _select_mock_chain_strikes(
+                filtered["strike"].dropna().astype(float).unique().tolist(),
+                spot,
+                strike_limit or self.settings.chain_strike_limit,
+                lower_moneyness_pct or self.settings.chain_moneyness_pct,
+                upper_moneyness_pct or self.settings.chain_moneyness_pct,
+                min_moneyness_pct,
+                max_moneyness_pct,
+            )
+        )
+        filtered = filtered[filtered["strike"].astype(float).isin(selected_strikes)]
         rows: list[ChainRow] = []
         for strike, strike_frame in filtered.groupby("strike", sort=True):
             call_row = strike_frame[strike_frame["option_type"] == "call"].iloc[0] if not strike_frame[strike_frame["option_type"] == "call"].empty else None
@@ -562,3 +583,27 @@ def _mock_chain_highlights(rows: list[ChainRow], expiry: str) -> list[ChainHighl
             )
         )
     return highlights
+
+
+def _select_mock_chain_strikes(
+    strikes: list[float],
+    spot: float,
+    limit: int,
+    lower_pct: float,
+    upper_pct: float,
+    min_pct: float | None,
+    max_pct: float | None,
+) -> list[float]:
+    unique_strikes = sorted({float(strike) for strike in strikes})
+    if min_pct is not None and max_pct is not None:
+        lower = spot * (1.0 + min(min_pct, max_pct))
+        upper = spot * (1.0 + max(min_pct, max_pct))
+    else:
+        lower = spot * (1.0 - max(lower_pct, 0.0))
+        upper = spot * (1.0 + max(upper_pct, 0.0))
+    eligible = [strike for strike in unique_strikes if lower <= strike <= upper] or unique_strikes
+    if len(eligible) <= limit:
+        return eligible
+    ordered_by_spot = sorted(eligible, key=lambda strike: (abs(strike - spot), strike))
+    selected = set(ordered_by_spot[: max(limit, 1)])
+    return [strike for strike in eligible if strike in selected]

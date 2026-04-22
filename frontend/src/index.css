@@ -192,7 +192,45 @@ body {
 .shell-source-list {
   display: flex;
   flex-direction: column;
+  gap: 14px;
+}
+
+.shell-source-group {
+  display: grid;
+  gap: 6px;
+}
+
+.shell-source-group-title {
+  padding: 8px 12px 2px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: rgba(216, 231, 229, 0.5);
+}
+
+.shell-source-group-list {
+  display: grid;
   gap: 4px;
+}
+
+.shell-source-subsection {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px 4px 44px;
+  color: rgba(216, 231, 229, 0.42);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.shell-source-subsection::after {
+  content: "";
+  min-width: 24px;
+  flex: 1;
+  border-top: 1px solid rgba(95, 144, 146, 0.14);
 }
 
 .shell-source-row {

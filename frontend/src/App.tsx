@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState, useDeferredValue, startTransition, type ReactNode } from "react";
+import { useEffect, useRef, useState, useDeferredValue, startTransition, type ReactNode } from "react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Bar,
@@ -49,6 +49,20 @@ import { FilesystemAccountSourceList } from "./components/account-sources/Filesy
 import { EdgarWorkspace } from "./components/EdgarWorkspace";
 import { InvestorPdfsWorkspace } from "./components/InvestorPdfsWorkspace";
 import { MetricCard } from "./components/MetricCard";
+import {
+  OptionBuilderTool,
+  OptionScannerTool,
+  OptionStructuresTool,
+  OptionValuationTool,
+  OptionVolatilityTool,
+  type OptionToolSharedProps,
+} from "./components/options/OptionToolWorkspaces";
+import {
+  OptionsChainTable,
+  type ChainBandDirection,
+  type OptionsChainGreekOption,
+  type TicketContractSide,
+} from "./components/options/OptionsChainTable";
 import { Panel } from "./components/Panel";
 
 const currency = new Intl.NumberFormat("en-US", {
@@ -86,8 +100,6 @@ const greekNumber = new Intl.NumberFormat("en-US", {
 const wholeNumber = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 0,
 });
-
-const ITM_PROBABILITY_RISK_FREE_RATE = 0.045;
 
 function fmtCurrency(value: number | null | undefined) {
   if (value == null || Number.isNaN(value)) {
@@ -180,45 +192,6 @@ function fmtMillions(value: number | null | undefined) {
   return `${wholeNumber.format(value)}M`;
 }
 
-function normalCdf(value: number) {
-  const sign = value < 0 ? -1 : 1;
-  const x = Math.abs(value) / Math.sqrt(2);
-  const t = 1 / (1 + 0.3275911 * x);
-  const a1 = 0.254829592;
-  const a2 = -0.284496736;
-  const a3 = 1.421413741;
-  const a4 = -1.453152027;
-  const a5 = 1.061405429;
-  const erf =
-    1 -
-    (((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t) *
-      Math.exp(-x * x);
-  return 0.5 * (1 + sign * erf);
-}
-
-function probabilityItmPct(
-  spot: number | null | undefined,
-  strike: number | null | undefined,
-  ivPct: number | null | undefined,
-  expiry: string | undefined,
-  right: "C" | "P",
-) {
-  if (spot == null || strike == null || ivPct == null || Number.isNaN(spot) || Number.isNaN(strike) || Number.isNaN(ivPct) || !expiry) {
-    return null;
-  }
-  const expiryDate = new Date(`${expiry}T23:59:59`);
-  const millisToExpiry = expiryDate.getTime() - Date.now();
-  const years = Math.max(millisToExpiry / (365 * 24 * 60 * 60 * 1000), 1 / 365);
-  const sigma = ivPct / 100;
-  if (sigma <= 0 || spot <= 0 || strike <= 0) {
-    return null;
-  }
-  const sqrtT = Math.sqrt(years);
-  const d2 = (Math.log(spot / strike) + (ITM_PROBABILITY_RISK_FREE_RATE - 0.5 * sigma * sigma) * years) / (sigma * sqrtT);
-  const probability = right === "C" ? normalCdf(d2) : normalCdf(-d2);
-  return Math.max(0, Math.min(100, probability * 100));
-}
-
 function pnlTone(value: number | null | undefined) {
   if (value == null || Number.isNaN(value)) {
     return "text-muted";
@@ -245,6 +218,37 @@ function sumPositionPnl(positions: Position[]) {
 
 function sumOptionPositionPnl(positions: OptionPosition[]) {
   return positions.reduce((total, position) => total + (position.unrealizedPnL ?? 0) + (position.realizedPnL ?? 0), 0);
+}
+
+function mergeOptionChainResponses(current: OptionChainResponse, next: OptionChainResponse): OptionChainResponse {
+  const rowsByStrike = new Map<number, ChainRow>();
+  for (const row of current.rows) {
+    rowsByStrike.set(row.strike, row);
+  }
+  for (const row of next.rows) {
+    rowsByStrike.set(row.strike, row);
+  }
+  return {
+    ...current,
+    rows: Array.from(rowsByStrike.values()).sort((left, right) => left.strike - right.strike),
+    highlights: next.highlights.length ? next.highlights : current.highlights,
+    quoteSource: next.quoteSource,
+    quoteAsOf: next.quoteAsOf,
+    quoteNotice: next.quoteNotice,
+    generatedAt: next.generatedAt,
+    isStale: current.isStale || next.isStale,
+  };
+}
+
+function isOptionsWorkspace(workspace: WorkspaceSurface) {
+  return (
+    workspace === "options" ||
+    workspace === "optionsValuation" ||
+    workspace === "optionsBuilder" ||
+    workspace === "optionsStructures" ||
+    workspace === "optionsVolatility" ||
+    workspace === "optionsScanner"
+  );
 }
 
 function filesystemConnectorTone(
@@ -516,7 +520,6 @@ function optionQuoteSourcePresentation(chain: OptionChainResponse | null | undef
   return { label: "No option quotes", tone: "danger" };
 }
 
-type TicketContractSide = "C" | "P";
 type MarketSector =
   | "Communication Services"
   | "Consumer"
@@ -562,7 +565,13 @@ type WorkspaceSurface =
   | "market"
   | "ticker"
   | "options"
+  | "optionsValuation"
+  | "optionsBuilder"
+  | "optionsStructures"
+  | "optionsVolatility"
+  | "optionsScanner"
   | "crypto"
+  | "cryptoLeverage"
   | "research"
   | "globalSettings";
 type ConnectionHealthTone = "safe" | "caution" | "danger" | "planned";
@@ -594,17 +603,17 @@ type ConnectorDraftState = {
 
 type ChainGreekKey = "iv" | "delta" | "gamma" | "theta" | "vega" | "rho";
 
-type ChainGreekOption = {
-  key: ChainGreekKey;
-  label: string;
-  callValue: (row: ChainRow) => number | null;
-  putValue: (row: ChainRow) => number | null;
-  suffix?: string;
-};
+type ChainGreekOption = OptionsChainGreekOption;
 
 const CHAIN_GREEK_STORAGE_KEY = "options-chain-visible-greeks";
 const CHAIN_MARK_STORAGE_KEY = "options-chain-show-mark";
 const OPTIONS_TRADE_RAIL_STORAGE_KEY = "options-trade-rail-open";
+const INITIAL_CHAIN_WINDOW_PCT = 0.05;
+const CHAIN_WINDOW_STEP_PCT = 0.05;
+const MAX_CHAIN_WINDOW_PCT = 0.5;
+const MAX_CHAIN_STRIKE_LIMIT = 96;
+const CHAIN_SCROLL_FETCH_DEBOUNCE_MS = 350;
+const INITIAL_CHAIN_RANGE = { min: -INITIAL_CHAIN_WINDOW_PCT, max: INITIAL_CHAIN_WINDOW_PCT };
 const DEFAULT_VISIBLE_CHAIN_GREEKS: ChainGreekKey[] = ["iv", "delta", "gamma", "theta", "vega"];
 const CHAIN_GREEK_OPTIONS: ChainGreekOption[] = [
   {
@@ -755,6 +764,7 @@ function App() {
   const [visibleChainGreeks, setVisibleChainGreeks] = useState<ChainGreekKey[]>(() => readVisibleChainGreeks());
   const [selectedAccountId, setSelectedAccountId] = useState<string | undefined>(undefined);
   const [selectedExpiry, setSelectedExpiry] = useState<string | undefined>(undefined);
+  const [chainLoadedRangePct, setChainLoadedRangePct] = useState(INITIAL_CHAIN_RANGE);
   const [ticketDraft, setTicketDraft] = useState<TicketDraft | null>(null);
   const [ticketAction, setTicketAction] = useState<"BUY" | "SELL">("SELL");
   const [ticketQuantity, setTicketQuantity] = useState(1);
@@ -763,6 +773,10 @@ function App() {
   const [ticketTif, setTicketTif] = useState<"DAY" | "GTC">("DAY");
   const [previewRequestKey, setPreviewRequestKey] = useState<string | null>(null);
   const [visibleChain, setVisibleChain] = useState<OptionChainResponse | null>(null);
+  const activeDisplayedChainRef = useRef<OptionChainResponse | null>(null);
+  const [chainBandFetchDirection, setChainBandFetchDirection] = useState<ChainBandDirection | null>(null);
+  const chainWindowDebounceRef = useRef<number | null>(null);
+  const chainBandFetchPendingRef = useRef(false);
   const [tickerFilter, setTickerFilter] = useState("");
   const [rightFilter, setRightFilter] = useState<"ALL" | "C" | "P">("ALL");
   const [shortOnly, setShortOnly] = useState(true);
@@ -781,8 +795,6 @@ function App() {
   const [investorPdfSyncing, setInvestorPdfSyncing] = useState(false);
   const [investorPdfSyncResult, setInvestorPdfSyncResult] = useState<InvestorPdfDownloadResponse | undefined>(undefined);
   const [investorPdfSyncError, setInvestorPdfSyncError] = useState<string | null>(null);
-  const prefetchedExpiriesRef = useRef<Set<string>>(new Set());
-  const prefetchSessionRef = useRef(0);
   const chainSymbolInputRef = useRef<HTMLInputElement | null>(null);
 
   const deferredTickerFilter = useDeferredValue(tickerFilter);
@@ -860,7 +872,16 @@ function App() {
 
   const chainQuery = useQuery({
     queryKey: ["chain", chainSymbol, selectedExpiry],
-    queryFn: () => api.chain(chainSymbol, selectedExpiry),
+    queryFn: () =>
+      api.chain(
+        chainSymbol,
+        selectedExpiry,
+        MAX_CHAIN_STRIKE_LIMIT,
+        undefined,
+        undefined,
+        INITIAL_CHAIN_RANGE.min,
+        INITIAL_CHAIN_RANGE.max,
+      ),
     refetchInterval: false,
     staleTime: 120_000,
   });
@@ -961,41 +982,25 @@ function App() {
       return;
     }
     setVisibleChain(chainQuery.data);
+    setChainLoadedRangePct(INITIAL_CHAIN_RANGE);
   }, [chainQuery.data]);
 
   useEffect(() => {
-    prefetchedExpiriesRef.current.clear();
-  }, [chainSymbol]);
+    return () => {
+      if (chainWindowDebounceRef.current != null) {
+        window.clearTimeout(chainWindowDebounceRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
-    const chain = chainQuery.data;
-    if (!chain) {
-      return;
+    if (chainWindowDebounceRef.current != null) {
+      window.clearTimeout(chainWindowDebounceRef.current);
+      chainWindowDebounceRef.current = null;
     }
-    const sessionId = ++prefetchSessionRef.current;
-    const expiriesToPrefetch = chain.expiries.filter((expiry) => expiry !== chain.selectedExpiry).slice(0, 2);
-    const timer = window.setTimeout(() => {
-      void (async () => {
-        for (const expiry of expiriesToPrefetch) {
-          if (prefetchSessionRef.current !== sessionId) {
-            continue;
-          }
-          const cacheKey = `${chain.symbol}:${expiry}`;
-          if (prefetchedExpiriesRef.current.has(cacheKey)) {
-            continue;
-          }
-          prefetchedExpiriesRef.current.add(cacheKey);
-          await queryClient.prefetchQuery({
-            queryKey: ["chain", chain.symbol, expiry],
-            queryFn: () => api.chain(chain.symbol, expiry),
-            staleTime: 20_000,
-          });
-        }
-      })();
-    }, 3_500);
-
-    return () => window.clearTimeout(timer);
-  }, [chainQuery.data, queryClient]);
+    chainBandFetchPendingRef.current = false;
+    setChainBandFetchDirection(null);
+  }, [chainSymbol, selectedExpiry]);
 
   useEffect(() => {
     setChainSymbolInput(chainSymbol);
@@ -1095,6 +1100,7 @@ function App() {
   const openOrders = openOrdersQuery.data?.orders ?? [];
   const accountId = risk?.account.accountId ?? connectionQuery.data?.accountId ?? null;
   const activeDisplayedChain = visibleChain;
+  activeDisplayedChainRef.current = activeDisplayedChain;
   const tickerOverview = tickerOverviewQuery.data;
   const tickerOverviewError = tickerOverviewQuery.error instanceof Error ? tickerOverviewQuery.error.message : null;
   const activeChainMatchesRequest = activeDisplayedChain?.symbol === chainSymbol;
@@ -1555,6 +1561,7 @@ function App() {
     startTransition(() => {
       setChainSymbol(normalizedSymbol);
       setSelectedExpiry(undefined);
+      setChainLoadedRangePct(INITIAL_CHAIN_RANGE);
     });
   }
 
@@ -1628,7 +1635,70 @@ function App() {
     }
     startTransition(() => {
       setSelectedExpiry(nextExpiry);
+      setChainLoadedRangePct(INITIAL_CHAIN_RANGE);
     });
+  }
+
+  function requestWiderChainWindow(direction: ChainBandDirection) {
+    const chainForBand = activeDisplayedChain;
+    if (chainQuery.isFetching || chainBandFetchPendingRef.current || !chainForBand?.rows.length) {
+      return;
+    }
+    const requestSymbol = chainForBand.symbol;
+    const requestExpiry = chainForBand.selectedExpiry;
+    const currentBoundary = direction === "lower" ? Math.abs(chainLoadedRangePct.min) : chainLoadedRangePct.max;
+    if (currentBoundary >= MAX_CHAIN_WINDOW_PCT) {
+      return;
+    }
+    if (chainWindowDebounceRef.current != null) {
+      window.clearTimeout(chainWindowDebounceRef.current);
+    }
+    setChainBandFetchDirection(direction);
+    const nextRange =
+      direction === "lower"
+        ? {
+            min: Math.max(-MAX_CHAIN_WINDOW_PCT, chainLoadedRangePct.min - CHAIN_WINDOW_STEP_PCT),
+            max: chainLoadedRangePct.min,
+          }
+        : {
+            min: chainLoadedRangePct.max,
+            max: Math.min(MAX_CHAIN_WINDOW_PCT, chainLoadedRangePct.max + CHAIN_WINDOW_STEP_PCT),
+          };
+    chainWindowDebounceRef.current = window.setTimeout(() => {
+      chainWindowDebounceRef.current = null;
+      chainBandFetchPendingRef.current = true;
+      void queryClient
+        .fetchQuery({
+          queryKey: ["chain-band", requestSymbol, requestExpiry, nextRange.min, nextRange.max],
+          queryFn: () =>
+            api.chain(
+              requestSymbol,
+              requestExpiry,
+              MAX_CHAIN_STRIKE_LIMIT,
+              undefined,
+              undefined,
+              nextRange.min,
+              nextRange.max,
+            ),
+          staleTime: 120_000,
+        })
+        .then((nextChain) => {
+          const latestChain = activeDisplayedChainRef.current;
+          if (!latestChain || latestChain.symbol !== requestSymbol || latestChain.selectedExpiry !== requestExpiry) {
+            return;
+          }
+          setVisibleChain((current) => (current ? mergeOptionChainResponses(current, nextChain) : nextChain));
+          setChainLoadedRangePct((current) => ({
+            min: Math.min(current.min, nextRange.min),
+            max: Math.max(current.max, nextRange.max),
+          }));
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          chainBandFetchPendingRef.current = false;
+          setChainBandFetchDirection(null);
+        });
+    }, CHAIN_SCROLL_FETCH_DEBOUNCE_MS);
   }
 
   function toggleVisibleGreek(nextGreek: ChainGreekKey) {
@@ -1830,9 +1900,6 @@ function App() {
   function renderIbkrOptionsSurface() {
     const busySymbolLabel = chainSymbol;
     const selectedChainGreekOptions = CHAIN_GREEK_OPTIONS.filter((option) => visibleChainGreeks.includes(option.key));
-    const chainTableColumnCount = 11 + selectedChainGreekOptions.length * 2 + (showChainMark ? 2 : 0);
-    const callSectionColumnCount = 5 + selectedChainGreekOptions.length + (showChainMark ? 1 : 0);
-    const putSectionColumnCount = 5 + selectedChainGreekOptions.length + (showChainMark ? 1 : 0);
     const selectedContractLabel = ticketDraft
       ? `${ticketDraft.symbol} ${ticketDraft.expiry} ${fmtNumber(ticketDraft.strike)}${ticketDraft.right}`
       : null;
@@ -1844,51 +1911,6 @@ function App() {
     const chainContextLabel = isLoadingDifferentSymbol
       ? "Showing the last loaded chain until the new one is ready."
       : activeDisplayedChain?.quoteNotice;
-    const spotPrice = activeDisplayedChain?.underlying.price ?? null;
-    const hasExactSpotStrike =
-      spotPrice != null && displayedChainRows.some((row) => Math.abs(row.strike - spotPrice) < 0.0001);
-    const spotInsertIndex =
-      spotPrice == null || hasExactSpotStrike
-        ? -1
-        : displayedChainRows.findIndex((row) => row.strike >= spotPrice);
-    const normalizedSpotInsertIndex =
-      spotInsertIndex === -1 && spotPrice != null && !hasExactSpotStrike ? displayedChainRows.length : spotInsertIndex;
-    const isSelectedTicketRow = (row: ChainRow, right: TicketContractSide) =>
-      ticketDraft != null &&
-      ticketDraft.expiry === (selectedExpiry ?? activeDisplayedChain?.selectedExpiry ?? "") &&
-      ticketDraft.strike === row.strike &&
-      ticketDraft.right === right;
-
-    function renderContractEntryButton(
-      value: number | null | undefined,
-      row: ChainRow,
-      right: TicketContractSide,
-      tone: "call" | "put",
-      label: string,
-    ) {
-      if (value == null || Number.isNaN(value)) {
-        return <span className="text-muted">—</span>;
-      }
-      const selected = isSelectedTicketRow(row, right);
-      const baseToneClass =
-        tone === "call"
-          ? selected
-            ? "border-accent/55 bg-accent/18 text-accent shadow-[0_0_0_1px_rgba(123,243,214,0.16)]"
-            : "border-accent/25 bg-accent/8 text-accent hover:border-accent/45 hover:bg-accent/14"
-          : selected
-            ? "border-caution/55 bg-caution/18 text-caution shadow-[0_0_0_1px_rgba(255,207,92,0.14)]"
-            : "border-caution/25 bg-caution/8 text-caution hover:border-caution/45 hover:bg-caution/14";
-      return (
-        <button
-          className={`inline-flex min-w-[4.75rem] items-center justify-center rounded-full border px-2.5 py-1.5 text-sm font-medium transition ${baseToneClass}`}
-          onClick={() => loadTicket(row, right)}
-          title={`${label} ${right === "C" ? "call" : "put"} ${fmtCurrencySmall(value)}`}
-          type="button"
-        >
-          {fmtCurrencySmall(value)}
-        </button>
-      );
-    }
 
     return (
       <div className="grid gap-4">
@@ -1981,156 +2003,22 @@ function App() {
             </div>
 
             {displayedChainRows.length ? (
-              <div
-                className={`${
-                  isLoadingDifferentSymbol ? "opacity-55" : chainQuery.isFetching ? "opacity-80" : ""
-                } max-h-[70vh] overflow-auto overscroll-contain`}
-              >
-                <table className="min-w-max text-left text-sm">
-                  <thead className="sticky top-0 z-[1] bg-panel/95 text-[11px] uppercase tracking-[0.18em] text-muted">
-                    <tr className="border-b border-line/70 text-[10px] tracking-[0.24em]">
-                      <th className="px-2.5 pb-2 pt-3 text-right text-accent" colSpan={callSectionColumnCount}>
-                        Calls
-                      </th>
-                      <th className="px-2.5 pb-2 pt-3 text-text" colSpan={1}>
-                        Strike
-                      </th>
-                      <th className="px-2.5 pb-2 pt-3 text-left text-caution" colSpan={putSectionColumnCount}>
-                        Puts
-                      </th>
-                    </tr>
-                    <tr>
-                      <th className="px-2.5 py-1.5">Bid</th>
-                      <th className="px-2.5 py-1.5">Ask</th>
-                      {showChainMark ? <th className="px-2.5 py-1.5">Mark</th> : null}
-                      <th className="px-2.5 py-1.5">Vol</th>
-                      <th className="px-2.5 py-1.5">OI</th>
-                      {selectedChainGreekOptions.map((option) => (
-                        <th key={`call-${option.key}`} className="px-2.5 py-1.5">
-                          {option.label}
-                        </th>
-                      ))}
-                      <th className="px-2.5 py-1.5">ITM %</th>
-                      <th className="px-2.5 py-1.5">Strike</th>
-                      <th className="px-2.5 py-1.5">ITM %</th>
-                      {selectedChainGreekOptions.map((option) => (
-                        <th key={`put-${option.key}`} className="px-2.5 py-1.5">
-                          {option.label}
-                        </th>
-                      ))}
-                      <th className="px-2.5 py-1.5">OI</th>
-                      <th className="px-2.5 py-1.5">Vol</th>
-                      {showChainMark ? <th className="px-2.5 py-1.5">Mark</th> : null}
-                      <th className="px-2.5 py-1.5">Ask</th>
-                      <th className="px-2.5 py-1.5">Bid</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {displayedChainRows.map((row, index) => {
-                      const callItmPct = probabilityItmPct(spotPrice, row.strike, row.callIV, activeExpiry, "C");
-                      const putItmPct = probabilityItmPct(spotPrice, row.strike, row.putIV, activeExpiry, "P");
-                      const previousFiveBucket =
-                        index === 0 ? null : Math.floor(Math.abs(displayedChainRows[index - 1].distanceFromSpotPct) / 5);
-                      const currentFiveBucket = Math.floor(Math.abs(row.distanceFromSpotPct) / 5);
-                      const previousTenBucket =
-                        index === 0 ? null : Math.floor(Math.abs(displayedChainRows[index - 1].distanceFromSpotPct) / 10);
-                      const currentTenBucket = Math.floor(Math.abs(row.distanceFromSpotPct) / 10);
-                      const isTenPercentBreak = index > 0 && currentTenBucket !== previousTenBucket;
-                      const isFivePercentBreak = index > 0 && !isTenPercentBreak && currentFiveBucket !== previousFiveBucket;
-                      const boundaryClass = isTenPercentBreak
-                        ? "border-t-2 border-accent/40"
-                        : isFivePercentBreak
-                          ? "border-t-2 border-line/95"
-                          : "border-t border-line/70";
-                      const boundaryToneClass = isTenPercentBreak
-                        ? "bg-accent/[0.035]"
-                        : isFivePercentBreak
-                          ? "bg-white/[0.018] shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]"
-                          : "";
-
-                      return (
-                        <Fragment key={`${activeDisplayedChain?.symbol ?? chainSymbol}-${row.strike}-${index}-group`}>
-                          {normalizedSpotInsertIndex === index && spotPrice != null ? (
-                            <tr
-                              key={`${activeDisplayedChain?.symbol ?? chainSymbol}-spot-row-${index}`}
-                              className="border-t border-line/70"
-                              data-testid="chain-spot-row"
-                            >
-                              <td
-                                className="px-2.5 py-2"
-                                colSpan={chainTableColumnCount}
-                                style={{
-                                  backgroundImage:
-                                    "repeating-linear-gradient(135deg, rgba(123, 243, 214, 0.08) 0, rgba(123, 243, 214, 0.08) 10px, transparent 10px, transparent 20px)",
-                                }}
-                              >
-                                <div className="flex items-center justify-center gap-3 text-[11px] uppercase tracking-[0.18em] text-accent">
-                                  <span>Spot</span>
-                                  <span className="text-text">{fmtCurrencySmall(spotPrice)}</span>
-                                </div>
-                              </td>
-                            </tr>
-                          ) : null}
-                          <tr
-                            key={`${activeDisplayedChain?.symbol ?? chainSymbol}-${row.strike}-${index}`}
-                            className={`${boundaryClass} ${boundaryToneClass} transition hover:bg-white/[0.02]`}
-                            data-testid={`chain-row-${index}`}
-                          >
-                            <td className="px-2.5 py-1.5">{renderContractEntryButton(row.callBid, row, "C", "call", "Bid")}</td>
-                            <td className="px-2.5 py-1.5">{renderContractEntryButton(row.callAsk, row, "C", "call", "Ask")}</td>
-                            {showChainMark ? (
-                              <td className="px-2.5 py-1.5">{renderContractEntryButton(row.callMid, row, "C", "call", "Mark")}</td>
-                            ) : null}
-                            <td className="px-2.5 py-1.5">{fmtWholeNumber(row.callVolume)}</td>
-                            <td className="px-2.5 py-1.5">{fmtWholeNumber(row.callOpenInterest)}</td>
-                            {selectedChainGreekOptions.map((option) => (
-                              <td key={`call-cell-${option.key}-${row.strike}`} className="px-2.5 py-1.5">
-                                {fmtGreek(option.callValue(row), option.suffix ?? "")}
-                              </td>
-                            ))}
-                            <td className="px-2.5 py-1.5">{fmtNumber(callItmPct, "%")}</td>
-                            <td className="px-2.5 py-1.5 font-medium text-text">{fmtCurrencySmall(row.strike)}</td>
-                            <td className="px-2.5 py-1.5">{fmtNumber(putItmPct, "%")}</td>
-                            {selectedChainGreekOptions.map((option) => (
-                              <td key={`put-cell-${option.key}-${row.strike}`} className="px-2.5 py-1.5">
-                                {fmtGreek(option.putValue(row), option.suffix ?? "")}
-                              </td>
-                            ))}
-                            <td className="px-2.5 py-1.5">{fmtWholeNumber(row.putOpenInterest)}</td>
-                            <td className="px-2.5 py-1.5">{fmtWholeNumber(row.putVolume)}</td>
-                            {showChainMark ? (
-                              <td className="px-2.5 py-1.5">{renderContractEntryButton(row.putMid, row, "P", "put", "Mark")}</td>
-                            ) : null}
-                            <td className="px-2.5 py-1.5">{renderContractEntryButton(row.putAsk, row, "P", "put", "Ask")}</td>
-                            <td className="px-2.5 py-1.5">{renderContractEntryButton(row.putBid, row, "P", "put", "Bid")}</td>
-                          </tr>
-                        </Fragment>
-                      );
-                    })}
-                    {normalizedSpotInsertIndex === displayedChainRows.length && spotPrice != null ? (
-                      <tr
-                        key={`${activeDisplayedChain?.symbol ?? chainSymbol}-spot-row-tail`}
-                        className="border-t border-line/70"
-                        data-testid="chain-spot-row"
-                      >
-                        <td
-                          className="px-2.5 py-2"
-                          colSpan={chainTableColumnCount}
-                          style={{
-                            backgroundImage:
-                              "repeating-linear-gradient(135deg, rgba(123, 243, 214, 0.08) 0, rgba(123, 243, 214, 0.08) 10px, transparent 10px, transparent 20px)",
-                          }}
-                        >
-                          <div className="flex items-center justify-center gap-3 text-[11px] uppercase tracking-[0.18em] text-accent">
-                            <span>Spot</span>
-                            <span className="text-text">{fmtCurrencySmall(spotPrice)}</span>
-                          </div>
-                        </td>
-                      </tr>
-                    ) : null}
-                  </tbody>
-                </table>
-              </div>
+              <OptionsChainTable
+                activeChain={activeDisplayedChain}
+                activeExpiry={activeExpiry}
+                chainSymbol={chainSymbol}
+                dimmed={isLoadingDifferentSymbol || chainQuery.isFetching}
+                fetchDirection={chainBandFetchDirection}
+                fetchDisabled={chainQuery.isFetching || Boolean(chainBandFetchDirection)}
+                loadedRangePct={chainLoadedRangePct}
+                maxRangePct={MAX_CHAIN_WINDOW_PCT}
+                onFetchBand={requestWiderChainWindow}
+                onLoadTicket={loadTicket}
+                rows={displayedChainRows}
+                selectedGreekOptions={selectedChainGreekOptions}
+                showMark={showChainMark}
+                ticketSelection={ticketDraft}
+              />
             ) : chainQuery.isLoading || chainQuery.isFetching ? (
               <div className="px-4 py-10 text-sm text-muted">Loading option chain…</div>
             ) : (
@@ -3288,10 +3176,11 @@ function App() {
     );
   }
 
-  function renderOptionsWorkspace() {
+  function renderOptionsToolFrame(title: string, children: ReactNode, description?: string) {
     return (
       <ToolWorkspaceFrame
         compact
+        description={description}
         titleEndSlot={
           <button
             aria-label="Options tool settings"
@@ -3304,10 +3193,68 @@ function App() {
           </button>
         }
         titleRowSlot={renderOptionsQueryBar()}
-        title="Options"
+        title={title}
       >
-        {renderIbkrOptionsSurface()}
+        {children}
       </ToolWorkspaceFrame>
+    );
+  }
+
+  function renderOptionsWorkspace() {
+    return renderOptionsToolFrame("Chain", renderIbkrOptionsSurface());
+  }
+
+  function buildOptionToolProps(): OptionToolSharedProps {
+    return {
+      chainSymbol,
+      activeDisplayedChain,
+      displayedChainRows,
+      activeExpiry,
+      optionPositions,
+      tickerOverview,
+      optionsDataSourceLabel: optionsDataSourcePill.label,
+      onLoadTicket: loadTicket,
+      onOpenChain: () => setActiveWorkspace("options"),
+    };
+  }
+
+  function renderOptionsValuationWorkspace() {
+    return renderOptionsToolFrame(
+      "Valuation",
+      <OptionValuationTool {...buildOptionToolProps()} />,
+      "Combine fair-value estimates with put and call premium scenarios for the loaded stock.",
+    );
+  }
+
+  function renderOptionsBuilderWorkspace() {
+    return renderOptionsToolFrame(
+      "Builder",
+      <OptionBuilderTool {...buildOptionToolProps()} />,
+      "Stage single-leg and defined-risk option ideas from the currently loaded stock chain.",
+    );
+  }
+
+  function renderOptionsStructuresWorkspace() {
+    return renderOptionsToolFrame(
+      "Structures",
+      <OptionStructuresTool {...buildOptionToolProps()} />,
+      "Group open option positions by strategy so the account reads as structures instead of loose contracts.",
+    );
+  }
+
+  function renderOptionsVolatilityWorkspace() {
+    return renderOptionsToolFrame(
+      "Volatility",
+      <OptionVolatilityTool {...buildOptionToolProps()} />,
+      "Inspect IV, skew, and open-interest context for the currently loaded stock option chain.",
+    );
+  }
+
+  function renderOptionsScannerWorkspace() {
+    return renderOptionsToolFrame(
+      "Scanner",
+      <OptionScannerTool {...buildOptionToolProps()} />,
+      "Rank contracts from the loaded stock option chain by yield, liquidity, and distance from spot.",
     );
   }
 
@@ -3315,7 +3262,7 @@ function App() {
     return (
       <ToolWorkspaceFrame
         description="Track the crypto market without jumping directly into one account's holdings. Account-owned balances stay on the dashboard."
-        title="Crypto"
+        title="Crypto Market"
       >
         {cryptoMajorsQuery.isLoading ? (
           <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-4 text-sm text-muted">Loading BTC and ETH prices…</div>
@@ -3355,6 +3302,50 @@ function App() {
         ) : (
           <ErrorState message="Crypto prices are unavailable." />
         )}
+      </ToolWorkspaceFrame>
+    );
+  }
+
+  function renderCryptoLeverageWorkspace() {
+    return (
+      <ToolWorkspaceFrame
+        description="Watch derivatives-led pressure, crowding, and forced-unwind risk without opening directly into exchange account balances."
+        title="Crypto Leverage"
+      >
+        <div className="grid gap-6">
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <MetricCard hint="Aggregate BTC and ETH perpetual open interest placeholder until derivatives feeds are connected." label="Open Interest" value="$28.4B" />
+            <MetricCard hint="Weighted funding snapshot across major perpetual venues." label="Funding" value="0.018%" />
+            <MetricCard hint="Perpetual premium versus spot across the major crypto pair set." label="Basis" value="4.2%" />
+            <MetricCard hint="Directional pressure estimate; not tied to a Coinbase account." label="Crowding" value="Long-heavy" />
+          </div>
+
+          <Panel eyebrow="Derivatives Context" title="Leverage Map">
+            <div className="grid gap-3">
+              {[
+                { label: "BTC perpetuals", detail: "Open interest expanding while funding sits modestly positive.", tone: "caution" as const },
+                { label: "ETH perpetuals", detail: "Funding is calm, basis remains constructive, and liquidation pressure is contained.", tone: "safe" as const },
+                { label: "Alt majors", detail: "Crowding read is pending until broader exchange coverage is connected.", tone: "neutral" as const },
+              ].map((row) => (
+                <div key={row.label} className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-4">
+                  <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                    <div>
+                      <div className="text-sm font-medium text-text">{row.label}</div>
+                      <div className="mt-1 text-sm text-muted">{row.detail}</div>
+                    </div>
+                    <InlinePill label={row.tone === "safe" ? "Stable" : row.tone === "caution" ? "Watch" : "Planned"} tone={row.tone} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Panel>
+
+          <Panel eyebrow="Source Model" title="Data Boundary">
+            <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-4 text-sm text-muted">
+              This workspace is intentionally market-native. Exchange connectors can provide data later, but the sidebar entry stays a crypto leverage tool rather than a connector or balances page.
+            </div>
+          </Panel>
+        </div>
       </ToolWorkspaceFrame>
     );
   }
@@ -3427,45 +3418,91 @@ function App() {
               <div className="shell-sidebar-body">
                 <div className="shell-sidebar-scroll">
                   <div className="shell-source-list">
-                    <ShellSourceRow
-                      active={activeWorkspace === "market"}
-                      icon={<MarketIcon />}
-                      onSelect={() => setActiveWorkspace("market")}
-                      title="Market"
-                      tone="live"
-                    />
+                    <ShellSourceGroup title="Stocks">
+                      <ShellSourceRow
+                        active={activeWorkspace === "market"}
+                        icon={<MarketIcon />}
+                        onSelect={() => setActiveWorkspace("market")}
+                        title="Market"
+                        tone="live"
+                      />
 
-                    <ShellSourceRow
-                      active={activeWorkspace === "ticker"}
-                      icon={<BrokerIcon />}
-                      onSelect={() => setActiveWorkspace("ticker")}
-                      title="Ticker"
-                      tone="live"
-                    />
+                      <ShellSourceRow
+                        active={activeWorkspace === "ticker"}
+                        icon={<BrokerIcon />}
+                        onSelect={() => setActiveWorkspace("ticker")}
+                        title="Ticker"
+                        tone="live"
+                      />
 
-                    <ShellSourceRow
-                      active={activeWorkspace === "options"}
-                      icon={<OptionsIcon />}
-                      onSelect={() => setActiveWorkspace("options")}
-                      title="Options"
-                      tone="live"
-                    />
+                      <ShellSourceSubsection title="Options" />
 
-                    <ShellSourceRow
-                      active={activeWorkspace === "research"}
-                      icon={<DocumentIcon />}
-                      onSelect={() => setActiveWorkspace("research")}
-                      title="Research"
-                      tone="live"
-                    />
+                      <ShellSourceRow
+                        active={activeWorkspace === "options"}
+                        icon={<OptionsIcon />}
+                        onSelect={() => setActiveWorkspace("options")}
+                        title="Chain"
+                        tone="live"
+                      />
 
-                    <ShellSourceRow
-                      active={activeWorkspace === "crypto"}
-                      icon={<CoinbaseIcon />}
-                      onSelect={() => setActiveWorkspace("crypto")}
-                      title="Crypto"
-                      tone="live"
-                    />
+                      <ShellSourceRow
+                        active={activeWorkspace === "optionsValuation"}
+                        icon={<ValuationIcon />}
+                        onSelect={() => setActiveWorkspace("optionsValuation")}
+                        title="Valuation"
+                        tone="live"
+                      />
+
+                      <ShellSourceRow
+                        active={activeWorkspace === "optionsBuilder"}
+                        icon={<BuilderIcon />}
+                        onSelect={() => setActiveWorkspace("optionsBuilder")}
+                        title="Builder"
+                        tone="live"
+                      />
+
+                      <ShellSourceRow
+                        active={activeWorkspace === "optionsStructures"}
+                        icon={<StructuresIcon />}
+                        onSelect={() => setActiveWorkspace("optionsStructures")}
+                        title="Structures"
+                        tone="live"
+                      />
+
+                      <ShellSourceRow
+                        active={activeWorkspace === "optionsVolatility"}
+                        icon={<VolatilityIcon />}
+                        onSelect={() => setActiveWorkspace("optionsVolatility")}
+                        title="Volatility"
+                        tone="live"
+                      />
+
+                      <ShellSourceRow
+                        active={activeWorkspace === "optionsScanner"}
+                        icon={<ScannerIcon />}
+                        onSelect={() => setActiveWorkspace("optionsScanner")}
+                        title="Scanner"
+                        tone="live"
+                      />
+                    </ShellSourceGroup>
+
+                    <ShellSourceGroup title="Crypto">
+                      <ShellSourceRow
+                        active={activeWorkspace === "crypto"}
+                        icon={<MarketIcon />}
+                        onSelect={() => setActiveWorkspace("crypto")}
+                        title="Market"
+                        tone="live"
+                      />
+
+                      <ShellSourceRow
+                        active={activeWorkspace === "cryptoLeverage"}
+                        icon={<LeverageIcon />}
+                        onSelect={() => setActiveWorkspace("cryptoLeverage")}
+                        title="Leverage"
+                        tone="live"
+                      />
+                    </ShellSourceGroup>
                   </div>
                 </div>
 
@@ -3486,12 +3523,18 @@ function App() {
           </div>
 
           <div className="shell-stage">
-            <div className={`mx-auto w-full ${activeWorkspace === "options" ? "max-w-[1840px]" : "max-w-[1600px]"}`}>
+            <div className={`mx-auto w-full ${isOptionsWorkspace(activeWorkspace) ? "max-w-[1840px]" : "max-w-[1600px]"}`}>
               {activeWorkspace === "dashboard" ? renderDashboardWorkspace() : null}
               {activeWorkspace === "market" ? renderMarketWorkspace() : null}
               {activeWorkspace === "ticker" ? renderTickerWorkspace() : null}
               {activeWorkspace === "options" ? renderOptionsWorkspace() : null}
+              {activeWorkspace === "optionsValuation" ? renderOptionsValuationWorkspace() : null}
+              {activeWorkspace === "optionsBuilder" ? renderOptionsBuilderWorkspace() : null}
+              {activeWorkspace === "optionsStructures" ? renderOptionsStructuresWorkspace() : null}
+              {activeWorkspace === "optionsVolatility" ? renderOptionsVolatilityWorkspace() : null}
+              {activeWorkspace === "optionsScanner" ? renderOptionsScannerWorkspace() : null}
               {activeWorkspace === "crypto" ? renderCryptoWorkspace() : null}
+              {activeWorkspace === "cryptoLeverage" ? renderCryptoLeverageWorkspace() : null}
               {activeWorkspace === "research" ? renderResearchWorkspace() : null}
               {activeWorkspace === "globalSettings" ? renderGlobalSettingsWorkspace() : null}
             </div>
@@ -3592,6 +3635,23 @@ function ConnectorStatusCard({
         ) : null}
       </div>
       <div className="mt-3 text-sm text-muted">{detail}</div>
+    </div>
+  );
+}
+
+function ShellSourceGroup({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="shell-source-group" aria-label={title}>
+      <div className="shell-source-group-title">{title}</div>
+      <div className="shell-source-group-list">{children}</div>
+    </section>
+  );
+}
+
+function ShellSourceSubsection({ title }: { title: string }) {
+  return (
+    <div className="shell-source-subsection" aria-hidden="true">
+      <span>{title}</span>
     </div>
   );
 }
@@ -3712,6 +3772,57 @@ function OptionsIcon() {
   );
 }
 
+function ValuationIcon() {
+  return (
+    <svg aria-hidden="true" fill="none" height="18" viewBox="0 0 20 20" width="18">
+      <path d="M4.1 15.1h11.8" opacity="0.45" stroke="currentColor" strokeLinecap="round" strokeWidth="1.35" />
+      <path d="M5.2 12.5 8 8.1l2.35 2.3 4.45-5.4" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.55" />
+      <path d="M12.6 5h2.2v2.2" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.45" />
+      <circle cx="7.8" cy="8.2" fill="currentColor" r="0.9" />
+      <circle cx="10.4" cy="10.4" fill="currentColor" r="0.9" />
+    </svg>
+  );
+}
+
+function BuilderIcon() {
+  return (
+    <svg aria-hidden="true" fill="none" height="18" viewBox="0 0 20 20" width="18">
+      <path d="M5.2 5.2h9.6M5.2 10h9.6M5.2 14.8h9.6" opacity="0.45" stroke="currentColor" strokeLinecap="round" strokeWidth="1.35" />
+      <path d="M6 14.2 9.5 7l2.25 4.4L14 6.2" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.55" />
+    </svg>
+  );
+}
+
+function StructuresIcon() {
+  return (
+    <svg aria-hidden="true" fill="none" height="18" viewBox="0 0 20 20" width="18">
+      <rect height="4.4" rx="1.4" stroke="currentColor" strokeWidth="1.4" width="4.4" x="3.7" y="4" />
+      <rect height="4.4" rx="1.4" stroke="currentColor" strokeWidth="1.4" width="4.4" x="11.9" y="4" />
+      <rect height="4.4" rx="1.4" stroke="currentColor" strokeWidth="1.4" width="4.4" x="7.8" y="11.6" />
+      <path d="M8.1 6.2h3.8M10 8.4v3.2" opacity="0.55" stroke="currentColor" strokeLinecap="round" strokeWidth="1.35" />
+    </svg>
+  );
+}
+
+function VolatilityIcon() {
+  return (
+    <svg aria-hidden="true" fill="none" height="18" viewBox="0 0 20 20" width="18">
+      <path d="M4 14.6h12" opacity="0.45" stroke="currentColor" strokeLinecap="round" strokeWidth="1.35" />
+      <path d="M4.8 11.5c1.3 0 1.3-5.9 2.6-5.9s1.3 8.8 2.6 8.8 1.3-6.9 2.6-6.9 1.3 4 2.6 4" stroke="currentColor" strokeLinecap="round" strokeWidth="1.55" />
+    </svg>
+  );
+}
+
+function ScannerIcon() {
+  return (
+    <svg aria-hidden="true" fill="none" height="18" viewBox="0 0 20 20" width="18">
+      <circle cx="8.6" cy="8.6" r="4.5" stroke="currentColor" strokeWidth="1.5" />
+      <path d="m12 12 3.5 3.5" stroke="currentColor" strokeLinecap="round" strokeWidth="1.6" />
+      <path d="M6.5 8.4h4.2M8.6 6.3v4.2" opacity="0.55" stroke="currentColor" strokeLinecap="round" strokeWidth="1.25" />
+    </svg>
+  );
+}
+
 function CalendarIcon() {
   return (
     <svg aria-hidden="true" fill="none" height="18" viewBox="0 0 20 20" width="18">
@@ -3726,6 +3837,17 @@ function CoinbaseIcon() {
     <svg aria-hidden="true" fill="none" height="18" viewBox="0 0 20 20" width="18">
       <circle cx="10" cy="10" r="6.1" stroke="currentColor" strokeWidth="1.6" />
       <path d="M12.65 7.5a3.3 3.3 0 1 0 0 5" stroke="currentColor" strokeLinecap="round" strokeWidth="1.6" />
+    </svg>
+  );
+}
+
+function LeverageIcon() {
+  return (
+    <svg aria-hidden="true" fill="none" height="18" viewBox="0 0 20 20" width="18">
+      <path d="M4.2 14.8h11.6" opacity="0.45" stroke="currentColor" strokeLinecap="round" strokeWidth="1.4" />
+      <path d="M5.3 11.8 8.1 7.5l3.2 3 3.4-5.2" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.55" />
+      <path d="M13.15 5.3h1.55v1.55" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.55" />
+      <path d="M6 6.2v6.1M10 8.4v3.9M14 4.9v7.4" opacity="0.5" stroke="currentColor" strokeLinecap="round" strokeWidth="1.2" />
     </svg>
   );
 }

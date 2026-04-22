@@ -6,7 +6,7 @@ import asyncio
 from concurrent.futures import Future, TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time as dt_time, timedelta
-from math import erf, exp, isfinite, log, pi, sqrt
+from math import isfinite
 from pathlib import Path
 from queue import Empty, Queue
 import threading
@@ -56,6 +56,7 @@ except ImportError:  # pragma: no cover - runtime guard
 
 TaskResultT = TypeVar("TaskResultT")
 OPTION_GENERIC_TICKS = "100,101,106,221"
+OPTION_CHAIN_GENERIC_TICKS = "100,101,221"
 STOCK_OVERVIEW_GENERIC_TICKS = "165,258,456"
 
 
@@ -184,21 +185,41 @@ class IBGatewayBrokerService(BrokerService):
                 return cached.value.model_copy(update={"isStale": True, "sourceNotice": f"Showing stale ticker overview. {exc}"})
             raise BrokerUnavailableError(str(exc)) from exc
 
-    def get_option_chain(self, symbol: str, expiry: str | None = None) -> OptionChainResponse:
+    def get_option_chain(
+        self,
+        symbol: str,
+        expiry: str | None = None,
+        strike_limit: int | None = None,
+        lower_moneyness_pct: float | None = None,
+        upper_moneyness_pct: float | None = None,
+        min_moneyness_pct: float | None = None,
+        max_moneyness_pct: float | None = None,
+    ) -> OptionChainResponse:
         symbol = symbol.upper()
-        cache_key = f"{symbol}:{expiry or 'AUTO'}"
+        requested_strike_limit = _normalize_chain_strike_limit(strike_limit, self.settings.chain_strike_limit)
+        lower_pct, upper_pct = _normalize_chain_window(
+            lower_moneyness_pct,
+            upper_moneyness_pct,
+            self.settings.chain_moneyness_pct,
+        )
+        min_pct, max_pct = _normalize_chain_moneyness_range(min_moneyness_pct, max_moneyness_pct)
+        range_key = f"{min_pct:.4f}:{max_pct:.4f}" if min_pct is not None and max_pct is not None else f"{lower_pct:.4f}:{upper_pct:.4f}"
+        cache_key = f"{symbol}:{expiry or 'AUTO'}:{requested_strike_limit}:{range_key}"
         cached = self._chain_cache.get(cache_key)
         if cached and _age_seconds(cached.captured_at) <= _chain_cache_ttl_seconds(cached.value, self.settings.chain_cache_ttl_seconds):
             return cached.value
         if _is_weekend_market_session():
-            saved_chain = self._load_saved_option_chain(symbol, expiry)
+            saved_chain = self._load_saved_option_chain(symbol, expiry, requested_strike_limit, lower_pct, upper_pct, min_pct, max_pct)
             if saved_chain is not None:
                 self._chain_cache[cache_key] = CacheEntry(saved_chain, datetime.now(UTC))
                 return saved_chain
         try:
             chain = cast(
                 OptionChainResponse,
-                self._submit(lambda ib: self._fetch_option_chain(ib, symbol, expiry), timeout=self.settings.ib_request_timeout_seconds + 18.0),
+                self._submit(
+                    lambda ib: self._fetch_option_chain(ib, symbol, expiry, requested_strike_limit, lower_pct, upper_pct, min_pct, max_pct),
+                    timeout=self.settings.ib_request_timeout_seconds + 18.0,
+                ),
             )
             self._chain_cache[cache_key] = CacheEntry(chain, datetime.now(UTC))
             return chain
@@ -213,7 +234,16 @@ class IBGatewayBrokerService(BrokerService):
                 return cached.value.model_copy(update={"isStale": True})
             raise BrokerUnavailableError(str(exc)) from exc
 
-    def _load_saved_option_chain(self, symbol: str, expiry: str | None) -> OptionChainResponse | None:
+    def _load_saved_option_chain(
+        self,
+        symbol: str,
+        expiry: str | None,
+        strike_limit: int,
+        lower_moneyness_pct: float,
+        upper_moneyness_pct: float,
+        min_moneyness_pct: float | None,
+        max_moneyness_pct: float | None,
+    ) -> OptionChainResponse | None:
         if not self._option_snapshot_root.exists():
             return None
 
@@ -241,7 +271,18 @@ class IBGatewayBrokerService(BrokerService):
             symbol_frame = frame[frame["ticker"].astype(str).str.upper() == symbol].copy()
             if symbol_frame.empty:
                 continue
-            response = self._build_saved_option_chain_response(symbol_frame, symbol, expiry, snapshot_date, provider_name)
+            response = self._build_saved_option_chain_response(
+                symbol_frame,
+                symbol,
+                expiry,
+                strike_limit,
+                lower_moneyness_pct,
+                upper_moneyness_pct,
+                min_moneyness_pct,
+                max_moneyness_pct,
+                snapshot_date,
+                provider_name,
+            )
             if response is not None:
                 return response
         return None
@@ -251,6 +292,11 @@ class IBGatewayBrokerService(BrokerService):
         frame: pd.DataFrame,
         symbol: str,
         expiry: str | None,
+        strike_limit: int,
+        lower_moneyness_pct: float,
+        upper_moneyness_pct: float,
+        min_moneyness_pct: float | None,
+        max_moneyness_pct: float | None,
         snapshot_date: date,
         provider_name: str,
     ) -> OptionChainResponse | None:
@@ -271,6 +317,18 @@ class IBGatewayBrokerService(BrokerService):
 
         quote_as_of = _snapshot_close_timestamp(snapshot_date)
         underlying_price = _snapshot_underlying_price(filtered)
+        selected_strikes = set(
+            _select_strikes_for_window(
+                filtered["strike"].dropna().astype(float).tolist(),
+                underlying_price,
+                lower_moneyness_pct,
+                upper_moneyness_pct,
+                strike_limit,
+                min_moneyness_pct,
+                max_moneyness_pct,
+            )
+        )
+        filtered = filtered[filtered["strike"].astype(float).isin(selected_strikes)].copy()
         rows: list[ChainRow] = []
         for strike, strike_frame in filtered.groupby("strike", sort=True):
             call_row = _snapshot_option_row(strike_frame, "call")
@@ -889,7 +947,17 @@ class IBGatewayBrokerService(BrokerService):
             isStale=False,
         )
 
-    def _fetch_option_chain(self, ib: Any, symbol: str, expiry: str | None) -> OptionChainResponse:
+    def _fetch_option_chain(
+        self,
+        ib: Any,
+        symbol: str,
+        expiry: str | None,
+        strike_limit: int,
+        lower_moneyness_pct: float,
+        upper_moneyness_pct: float,
+        min_moneyness_pct: float | None,
+        max_moneyness_pct: float | None,
+    ) -> OptionChainResponse:
         self._ensure_connected(ib)
         generated_at = datetime.now(UTC)
         underlying_contract = self._qualify_one(ib, Stock(symbol, self.settings.ib_underlying_exchange, self.settings.ib_currency))
@@ -918,11 +986,14 @@ class IBGatewayBrokerService(BrokerService):
             limit=self.settings.chain_expiry_limit,
         )
         selected_expiry = expiry if expiry in expiries else expiries[0]
-        strikes = _select_strikes(
+        strikes = _select_strikes_for_window(
             definition.strikes,
             underlying_price,
-            moneyness_pct=self.settings.chain_moneyness_pct,
-            limit=self.settings.chain_strike_limit,
+            lower_moneyness_pct=lower_moneyness_pct,
+            upper_moneyness_pct=upper_moneyness_pct,
+            limit=strike_limit,
+            min_moneyness_pct=min_moneyness_pct,
+            max_moneyness_pct=max_moneyness_pct,
         )
         contracts: list[Any] = []
         for strike in strikes:
@@ -998,38 +1069,12 @@ class IBGatewayBrokerService(BrokerService):
             call_theta = _extract_greek(call_ticker, "theta")
             call_vega = _extract_greek(call_ticker, "vega")
             call_rho = _extract_greek(call_ticker, "rho")
-            call_iv, call_delta, call_gamma, call_theta, call_vega, call_rho = _fill_missing_chain_greeks(
-                iv=call_iv,
-                delta=call_delta,
-                gamma=call_gamma,
-                theta=call_theta,
-                vega=call_vega,
-                rho=call_rho,
-                premium=call_mid,
-                spot=underlying_price,
-                strike=strike,
-                dte=dte,
-                right="C",
-            )
             put_iv = _extract_greek(put_ticker, "impliedVol", percent=True)
             put_delta = _extract_greek(put_ticker, "delta")
             put_gamma = _extract_greek(put_ticker, "gamma")
             put_theta = _extract_greek(put_ticker, "theta")
             put_vega = _extract_greek(put_ticker, "vega")
             put_rho = _extract_greek(put_ticker, "rho")
-            put_iv, put_delta, put_gamma, put_theta, put_vega, put_rho = _fill_missing_chain_greeks(
-                iv=put_iv,
-                delta=put_delta,
-                gamma=put_gamma,
-                theta=put_theta,
-                vega=put_vega,
-                rho=put_rho,
-                premium=put_mid,
-                spot=underlying_price,
-                strike=strike,
-                dte=dte,
-                right="P",
-            )
             rows.append(
                 ChainRow(
                     strike=round(strike, 2),
@@ -1345,7 +1390,7 @@ class IBGatewayBrokerService(BrokerService):
                 ib,
                 contracts,
                 market_data_type,
-                generic_tick_list=OPTION_GENERIC_TICKS,
+                generic_tick_list=OPTION_CHAIN_GENERIC_TICKS,
             )
             payload_count = sum(1 for ticker in tickers if _ticker_has_option_payload(ticker))
             score = sum(_ticker_option_payload_score(ticker) for ticker in tickers)
@@ -1876,124 +1921,6 @@ def _latest_underlying_price(ib: Any, contract: Any) -> float | None:
     return close_value if _is_valid_number(close_value) else None
 
 
-def _approximate_option_greeks(
-    premium: float,
-    spot: float,
-    strike: float,
-    dte: int,
-    right: str,
-    risk_free_rate: float = 0.045,
-) -> dict[str, float | None]:
-    if not _is_valid_number(premium) or not _is_valid_number(spot) or not _is_valid_number(strike):
-        return {"impliedVolPct": None, "delta": None, "gamma": None, "theta": None, "vega": None, "rho": None}
-    years = max(dte / 365.0, 1.0 / 365.0)
-    intrinsic_value = max(spot - strike, 0.0) if right == "C" else max(strike - spot, 0.0)
-    target_price = max(float(premium), intrinsic_value)
-    sigma = _implied_volatility_from_price(target_price, spot, strike, years, right, risk_free_rate)
-    if sigma is None:
-        return {"impliedVolPct": None, "delta": None, "gamma": None, "theta": None, "vega": None, "rho": None}
-    _, delta, gamma, theta, vega, rho = _black_scholes_metrics(spot, strike, years, sigma, right, risk_free_rate)
-    return {
-        "impliedVolPct": sigma * 100.0,
-        "delta": delta,
-        "gamma": gamma,
-        "theta": theta,
-        "vega": vega,
-        "rho": rho,
-    }
-
-
-def _fill_missing_chain_greeks(
-    *,
-    iv: float | None,
-    delta: float | None,
-    gamma: float | None,
-    theta: float | None,
-    vega: float | None,
-    rho: float | None,
-    premium: float | None,
-    spot: float,
-    strike: float,
-    dte: int,
-    right: str,
-) -> tuple[float | None, float | None, float | None, float | None, float | None, float | None]:
-    current_values = (iv, delta, gamma, theta, vega, rho)
-    if all(_is_finite_number(value) for value in current_values):
-        return current_values
-    approximated = _approximate_option_greeks(premium, spot, strike, dte, right)
-    return (
-        iv if _is_finite_number(iv) else _safe_float(approximated.get("impliedVolPct")),
-        delta if _is_finite_number(delta) else _safe_float(approximated.get("delta")),
-        gamma if _is_finite_number(gamma) else _safe_float(approximated.get("gamma")),
-        theta if _is_finite_number(theta) else _safe_float(approximated.get("theta")),
-        vega if _is_finite_number(vega) else _safe_float(approximated.get("vega")),
-        rho if _is_finite_number(rho) else _safe_float(approximated.get("rho")),
-    )
-
-
-def _implied_volatility_from_price(
-    option_price: float,
-    spot: float,
-    strike: float,
-    years: float,
-    right: str,
-    risk_free_rate: float,
-) -> float | None:
-    lower = 0.0001
-    upper = 6.0
-    lower_price, _, _, _, _, _ = _black_scholes_metrics(spot, strike, years, lower, right, risk_free_rate)
-    upper_price, _, _, _, _, _ = _black_scholes_metrics(spot, strike, years, upper, right, risk_free_rate)
-    if option_price < lower_price - 1e-4 or option_price > upper_price + 1e-4:
-        return None
-    for _ in range(60):
-        midpoint = (lower + upper) / 2.0
-        midpoint_price, _, _, _, _, _ = _black_scholes_metrics(spot, strike, years, midpoint, right, risk_free_rate)
-        if abs(midpoint_price - option_price) <= 1e-4:
-            return midpoint
-        if midpoint_price > option_price:
-            upper = midpoint
-        else:
-            lower = midpoint
-    return (lower + upper) / 2.0
-
-
-def _black_scholes_metrics(
-    spot: float,
-    strike: float,
-    years: float,
-    sigma: float,
-    right: str,
-    risk_free_rate: float,
-) -> tuple[float, float, float, float, float, float]:
-    sqrt_t = sqrt(max(years, 1e-9))
-    sigma = max(sigma, 1e-9)
-    d1 = (log(spot / strike) + (risk_free_rate + 0.5 * sigma * sigma) * years) / (sigma * sqrt_t)
-    d2 = d1 - sigma * sqrt_t
-    discount = exp(-risk_free_rate * years)
-    pdf_d1 = _normal_pdf(d1)
-    gamma = pdf_d1 / (spot * sigma * sqrt_t)
-    vega = spot * pdf_d1 * sqrt_t / 100.0
-    if right == "C":
-        price = spot * _normal_cdf(d1) - strike * discount * _normal_cdf(d2)
-        delta = _normal_cdf(d1)
-        theta_annual = (-(spot * pdf_d1 * sigma) / (2.0 * sqrt_t)) - (risk_free_rate * strike * discount * _normal_cdf(d2))
-        rho = strike * years * discount * _normal_cdf(d2) / 100.0
-    else:
-        price = strike * discount * _normal_cdf(-d2) - spot * _normal_cdf(-d1)
-        delta = _normal_cdf(d1) - 1.0
-        theta_annual = (-(spot * pdf_d1 * sigma) / (2.0 * sqrt_t)) + (risk_free_rate * strike * discount * _normal_cdf(-d2))
-        rho = -(strike * years * discount * _normal_cdf(-d2)) / 100.0
-    return price, delta, gamma, theta_annual / 365.0, vega, rho
-
-
-def _normal_cdf(value: float) -> float:
-    return 0.5 * (1.0 + erf(value / sqrt(2.0)))
-
-
-def _normal_pdf(value: float) -> float:
-    return exp(-0.5 * value * value) / sqrt(2.0 * pi)
-
-
 def _latest_option_midpoint(ib: Any, contract: Any) -> tuple[float | None, datetime | None]:
     for what_to_show in ("MIDPOINT", "TRADES"):
         try:
@@ -2243,8 +2170,24 @@ def _select_expiries(expiries: Iterable[str], min_days: int, max_days: int, limi
 
 
 def _select_strikes(strikes: Iterable[float], spot: float, moneyness_pct: float, limit: int) -> list[float]:
-    lower = spot * (1.0 - moneyness_pct)
-    upper = spot * (1.0 + moneyness_pct)
+    return _select_strikes_for_window(strikes, spot, moneyness_pct, moneyness_pct, limit, None, None)
+
+
+def _select_strikes_for_window(
+    strikes: Iterable[float],
+    spot: float,
+    lower_moneyness_pct: float,
+    upper_moneyness_pct: float,
+    limit: int,
+    min_moneyness_pct: float | None,
+    max_moneyness_pct: float | None,
+) -> list[float]:
+    if min_moneyness_pct is not None and max_moneyness_pct is not None:
+        lower = spot * (1.0 + min(min_moneyness_pct, max_moneyness_pct))
+        upper = spot * (1.0 + max(min_moneyness_pct, max_moneyness_pct))
+    else:
+        lower = spot * (1.0 - max(lower_moneyness_pct, 0.0))
+        upper = spot * (1.0 + max(upper_moneyness_pct, 0.0))
     unique_all = sorted({float(strike) for strike in strikes})
     eligible = [strike for strike in unique_all if lower <= strike <= upper]
     if not eligible:
@@ -2259,6 +2202,32 @@ def _select_strikes(strikes: Iterable[float], spot: float, moneyness_pct: float,
         end = len(eligible)
         start = max(0, end - limit)
     return eligible[start:end]
+
+
+def _normalize_chain_strike_limit(requested_limit: int | None, default_limit: int) -> int:
+    raw_limit = requested_limit if requested_limit is not None else default_limit
+    return max(4, min(int(raw_limit), 96))
+
+
+def _normalize_chain_window(
+    lower_moneyness_pct: float | None,
+    upper_moneyness_pct: float | None,
+    default_moneyness_pct: float,
+) -> tuple[float, float]:
+    lower = default_moneyness_pct if lower_moneyness_pct is None else lower_moneyness_pct
+    upper = default_moneyness_pct if upper_moneyness_pct is None else upper_moneyness_pct
+    return max(0.0, min(float(lower), 1.0)), max(0.0, min(float(upper), 1.0))
+
+
+def _normalize_chain_moneyness_range(
+    min_moneyness_pct: float | None,
+    max_moneyness_pct: float | None,
+) -> tuple[float | None, float | None]:
+    if min_moneyness_pct is None or max_moneyness_pct is None:
+        return None, None
+    lower = max(-1.0, min(float(min_moneyness_pct), 1.0))
+    upper = max(-1.0, min(float(max_moneyness_pct), 1.0))
+    return min(lower, upper), max(lower, upper)
 
 
 def _select_historical_fallback_contracts(contracts: Iterable[Any], spot: float, limit: int) -> list[Any]:

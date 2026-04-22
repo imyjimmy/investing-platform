@@ -70,7 +70,16 @@ class BrokerService:
     def get_ticker_overview(self, symbol: str) -> TickerOverviewResponse:
         raise NotImplementedError
 
-    def get_option_chain(self, symbol: str, expiry: str | None = None) -> OptionChainResponse:
+    def get_option_chain(
+        self,
+        symbol: str,
+        expiry: str | None = None,
+        strike_limit: int | None = None,
+        lower_moneyness_pct: float | None = None,
+        upper_moneyness_pct: float | None = None,
+        min_moneyness_pct: float | None = None,
+        max_moneyness_pct: float | None = None,
+    ) -> OptionChainResponse:
         raise NotImplementedError
 
     def preview_option_order(self, request: OptionOrderRequest) -> OptionOrderPreview:
