@@ -141,6 +141,16 @@ def account_option_positions(accountId: str | None = Query(default=None)) -> dic
     }
 
 
+@router.get("/account/options-strategy-permissions")
+def account_option_strategy_permissions(accountId: str, symbol: str, expiry: str | None = Query(default=None)) -> dict:
+    try:
+        return _service().get_option_strategy_permissions(accountId, symbol, expiry).model_dump()
+    except BrokerUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
 @router.get("/account/open-orders")
 def open_orders(accountId: str | None = Query(default=None)) -> dict:
     snapshot = _portfolio_snapshot(accountId)

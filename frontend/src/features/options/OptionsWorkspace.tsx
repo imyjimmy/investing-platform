@@ -306,7 +306,7 @@ export function OptionsWorkspace({
     return renderOptionsToolFrame(
       "Builder",
       <OptionBuilderTool {...buildOptionToolProps()} />,
-      "Stage single-leg and defined-risk option ideas from the currently loaded stock chain.",
+      "Browse strategy families, see account availability, and stage setups from the loaded option chain.",
     );
   }
   if (workspace === "optionsStructures") {
@@ -337,6 +337,7 @@ export function OptionsWorkspace({
       chainSymbol,
       activeDisplayedChain,
       displayedChainRows,
+      displayedExpiries,
       activeExpiry,
       optionPositions,
       tickerOverview,
@@ -944,7 +945,7 @@ export function OptionsWorkspace({
     setTicketPlan(nextPlan);
     setTicketAction(nextPlan.defaultAction);
     setTicketQuantity(1);
-    setTicketOrderType("LMT");
+    setTicketOrderType(defaultLimit != null ? "LMT" : "MKT");
     setTicketLimitPrice(defaultLimit != null ? defaultLimit.toFixed(2) : "");
     setTicketTif("DAY");
     setOptionsTradeRailOpen(true);

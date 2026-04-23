@@ -12,6 +12,7 @@ from investing_platform.models import (
     OpenOrderExposure,
     OptionOrderPreview,
     OptionOrderRequest,
+    OptionStrategyPermissionsResponse,
     OptionChainResponse,
     OptionPosition,
     OrderCancelResponse,
@@ -84,6 +85,14 @@ class BrokerService:
         min_moneyness_pct: float | None = None,
         max_moneyness_pct: float | None = None,
     ) -> OptionChainResponse:
+        raise NotImplementedError
+
+    def get_option_strategy_permissions(
+        self,
+        account_id: str,
+        symbol: str,
+        expiry: str | None = None,
+    ) -> OptionStrategyPermissionsResponse:
         raise NotImplementedError
 
     def preview_option_order(self, request: OptionOrderRequest) -> OptionOrderPreview:

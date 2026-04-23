@@ -32,17 +32,29 @@ IntentRiskProfile = Literal["conservative", "medium", "medium_aggressive", "aggr
 OptionPositionType = Literal["short_call", "short_put", "long_call", "long_put"]
 StrategyTag = Literal[
     "covered-call",
+    "covered-put",
+    "collar",
     "cash-secured-put",
+    "straddle",
+    "strangle",
     "call-credit-spread",
     "call-debit-spread",
     "put-credit-spread",
     "put-debit-spread",
+    "butterfly",
+    "condor",
+    "iron-butterfly",
+    "iron-condor",
+    "calendar-spread",
+    "diagonal-spread",
+    "ratio-spread",
     "short-option",
     "long-option",
     "stock",
     "other",
 ]
 QuoteSource = Literal["streaming", "historical", "unavailable"]
+OptionStrategyPermissionStatus = Literal["permitted", "blocked", "unknown"]
 ExecutionMode = Literal["disabled", "enabled"]
 RouteKind = Literal["live", "paper", "unknown"]
 OrderAction = Literal["BUY", "SELL"]
@@ -336,6 +348,24 @@ class OpenOrdersResponse(DashboardModel):
     totalCommittedCapital: float
     putSellingCapital: float
     stockOrderCapital: float
+    generatedAt: datetime
+    isStale: bool = False
+
+
+class OptionStrategyPermission(DashboardModel):
+    strategyKey: str
+    label: str
+    status: OptionStrategyPermissionStatus
+    permitted: bool | None = None
+    detail: str | None = None
+
+
+class OptionStrategyPermissionsResponse(DashboardModel):
+    accountId: str
+    symbol: str
+    expiry: str
+    permissions: list[OptionStrategyPermission] = Field(default_factory=list)
+    source: str
     generatedAt: datetime
     isStale: bool = False
 

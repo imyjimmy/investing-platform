@@ -19,6 +19,8 @@ from investing_platform.models import (
     OptionChainResponse,
     OptionOrderPreview,
     OptionOrderRequest,
+    OptionStrategyPermission,
+    OptionStrategyPermissionsResponse,
     OptionPosition,
     OrderCancelResponse,
     Position,
@@ -323,6 +325,38 @@ class MockBrokerService(BrokerService):
 
     def preview_option_order(self, request: OptionOrderRequest) -> OptionOrderPreview:
         raise BrokerServiceError("Trade execution is disabled in mock mode. Switch to the live IB Gateway adapter to preview or submit orders.")
+
+    def get_option_strategy_permissions(
+        self,
+        account_id: str,
+        symbol: str,
+        expiry: str | None = None,
+    ) -> OptionStrategyPermissionsResponse:
+        chain = self.get_option_chain(symbol, expiry=expiry)
+        permissions = [
+            OptionStrategyPermission(strategyKey="single-option", label="Single Option", status="permitted", permitted=True, detail="Available."),
+            OptionStrategyPermission(strategyKey="covered-option", label="Covered Option", status="permitted", permitted=True, detail="Available."),
+            OptionStrategyPermission(strategyKey="straddle", label="Straddle", status="permitted", permitted=True, detail="Available."),
+            OptionStrategyPermission(strategyKey="strangle", label="Strangle", status="permitted", permitted=True, detail="Available."),
+            OptionStrategyPermission(strategyKey="vertical", label="Vertical", status="permitted", permitted=True, detail="Available."),
+            OptionStrategyPermission(strategyKey="butterfly", label="Butterfly", status="permitted", permitted=True, detail="Available."),
+            OptionStrategyPermission(strategyKey="condor", label="Condor", status="permitted", permitted=True, detail="Available."),
+            OptionStrategyPermission(strategyKey="collar", label="Collar (with stock)", status="permitted", permitted=True, detail="Available when stock is owned."),
+            OptionStrategyPermission(strategyKey="iron-butterfly", label="Iron Butterfly", status="permitted", permitted=True, detail="Available."),
+            OptionStrategyPermission(strategyKey="iron-condor", label="Iron Condor", status="permitted", permitted=True, detail="Available."),
+            OptionStrategyPermission(strategyKey="calendar", label="Calendar", status="permitted", permitted=True, detail="Available."),
+            OptionStrategyPermission(strategyKey="diagonal", label="Diagonal", status="permitted", permitted=True, detail="Available."),
+            OptionStrategyPermission(strategyKey="ratio", label="Ratio", status="permitted", permitted=True, detail="Available."),
+        ]
+        return OptionStrategyPermissionsResponse(
+            accountId=account_id,
+            symbol=chain.symbol,
+            expiry=chain.selectedExpiry,
+            permissions=permissions,
+            source="mock-preview",
+            generatedAt=datetime.now(UTC),
+            isStale=False,
+        )
 
     def submit_option_order(self, request: OptionOrderRequest) -> SubmittedOrder:
         raise BrokerServiceError("Trade execution is disabled in mock mode. Switch to the live IB Gateway adapter to submit orders.")

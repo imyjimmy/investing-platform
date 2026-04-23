@@ -325,6 +325,26 @@ export interface OptionPositionsResponse {
   isStale: boolean;
 }
 
+export type OptionStrategyPermissionStatus = "permitted" | "blocked" | "unknown";
+
+export interface OptionStrategyPermission {
+  strategyKey: string;
+  label: string;
+  status: OptionStrategyPermissionStatus;
+  permitted: boolean | null;
+  detail: string | null;
+}
+
+export interface OptionStrategyPermissionsResponse {
+  accountId: string;
+  symbol: string;
+  expiry: string;
+  permissions: OptionStrategyPermission[];
+  source: string;
+  generatedAt: string;
+  isStale: boolean;
+}
+
 export interface ScenarioTickerImpact {
   symbol: string;
   currentPrice: number;

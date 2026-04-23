@@ -34,6 +34,8 @@ from investing_platform.models import (
     OptionOrderLegRequest,
     OptionOrderPreview,
     OptionOrderRequest,
+    OptionStrategyPermission,
+    OptionStrategyPermissionsResponse,
     OptionPosition,
     OrderCancelResponse,
     Position,
@@ -85,6 +87,14 @@ class _ResolvedOptionOrder:
     contract: Any
     market_reference_price: float | None
     legs: list[_ResolvedOptionLeg]
+
+
+@dataclass(slots=True)
+class _StrategyPermissionProbe:
+    strategy_key: str
+    label: str
+    request: OptionOrderRequest | None
+    unavailable_detail: str | None = None
 
 
 class IBGatewayBrokerService(BrokerService):
@@ -274,6 +284,26 @@ class IBGatewayBrokerService(BrokerService):
                 return cached.value.model_copy(update={"isStale": True})
             raise BrokerUnavailableError(str(exc)) from exc
 
+    def get_option_strategy_permissions(
+        self,
+        account_id: str,
+        symbol: str,
+        expiry: str | None = None,
+    ) -> OptionStrategyPermissionsResponse:
+        symbol = symbol.upper()
+        try:
+            return cast(
+                OptionStrategyPermissionsResponse,
+                self._submit(
+                    lambda ib: self._fetch_option_strategy_permissions(ib, account_id, symbol, expiry),
+                    timeout=self.settings.ib_request_timeout_seconds + 24.0,
+                ),
+            )
+        except FutureTimeoutError as exc:
+            raise BrokerUnavailableError(
+                f"Timed out checking option strategy permissions for {symbol}. The IBKR worker is busy or contract lookups are slow."
+            ) from exc
+
     def _load_saved_option_chain(
         self,
         symbol: str,
@@ -453,6 +483,60 @@ class IBGatewayBrokerService(BrokerService):
             resolved_order=resolved_order,
             order_state=order_state,
             opening_or_closing=opening_or_closing,
+        )
+
+    def _fetch_option_strategy_permissions(
+        self,
+        ib: Any,
+        account_id: str,
+        symbol: str,
+        expiry: str | None = None,
+    ) -> OptionStrategyPermissionsResponse:
+        self._ensure_connected(ib)
+        resolved_account_id = self._resolve_account_id(ib, account_id)
+        self._ensure_execution_allowed(resolved_account_id)
+        requested_strike_limit = max(16, _normalize_chain_strike_limit(None, self.settings.chain_strike_limit))
+        lower_pct, upper_pct = _normalize_chain_window(None, None, self.settings.chain_moneyness_pct)
+        chain = self._fetch_option_chain(ib, symbol, expiry, requested_strike_limit, lower_pct, upper_pct, None, None)
+        stock_qty, _option_qty = self._position_maps_for_account(ib, resolved_account_id)
+        probes = _build_strategy_permission_probes(chain, stock_shares=int(stock_qty.get(symbol, 0)))
+        permissions: list[OptionStrategyPermission] = []
+        for probe in probes:
+            if probe.request is None:
+                permissions.append(
+                    OptionStrategyPermission(
+                        strategyKey=probe.strategy_key,
+                        label=probe.label,
+                        status="unknown",
+                        permitted=None,
+                        detail=probe.unavailable_detail,
+                    )
+                )
+                continue
+            request = probe.request.model_copy(update={"accountId": resolved_account_id})
+            try:
+                preview = self._preview_option_order_on_thread(ib, request)
+            except Exception as exc:
+                status, detail = _strategy_permission_from_error(str(exc))
+            else:
+                status, detail = _strategy_permission_from_preview(preview.warningText, preview.note)
+            permissions.append(
+                OptionStrategyPermission(
+                    strategyKey=probe.strategy_key,
+                    label=probe.label,
+                    status=status,
+                    permitted=True if status == "permitted" else False if status == "blocked" else None,
+                    detail=detail,
+                )
+            )
+        return OptionStrategyPermissionsResponse(
+            accountId=resolved_account_id,
+            symbol=chain.symbol,
+            expiry=chain.selectedExpiry,
+            permissions=permissions,
+            source="ibkr-whatif",
+            generatedAt=datetime.now(UTC),
+            isStale=False,
         )
 
     def _submit_option_order_on_thread(self, ib: Any, request: OptionOrderRequest) -> SubmittedOrder:
@@ -2350,6 +2434,292 @@ def _strategy_tag_from_order_ref(order_ref: Any) -> str | None:
     if len(parts) < 8 or not parts[-1].endswith("legs"):
         return None
     return parts[4] or None
+
+
+def _strategy_permission_from_preview(
+    warning_text: str | None,
+    note: str | None,
+) -> tuple[Literal["permitted", "blocked", "unknown"], str]:
+    combined = " ".join(part.strip() for part in [warning_text or "", note or ""] if part and part.strip())
+    lowered = combined.lower()
+    blocked_markers = (
+        "not allowed",
+        "not approved",
+        "not permitted",
+        "no trading permission",
+        "trading permission",
+        "permission",
+        "account is not eligible",
+        "not available for this account",
+    )
+    if any(marker in lowered for marker in blocked_markers):
+        return "blocked", combined or "Blocked by IBKR account permissions."
+    if combined:
+        return "permitted", combined
+    return "permitted", "Permitted by IBKR what-if preview."
+
+
+def _strategy_permission_from_error(detail: str) -> tuple[Literal["permitted", "blocked", "unknown"], str]:
+    lowered = detail.lower()
+    blocked_markers = (
+        "not allowed",
+        "not approved",
+        "not permitted",
+        "no trading permission",
+        "trading permission",
+        "permission",
+        "limited option",
+    )
+    if any(marker in lowered for marker in blocked_markers):
+        return "blocked", detail
+    return "unknown", detail
+
+
+def _build_strategy_permission_probes(
+    chain: OptionChainResponse,
+    *,
+    stock_shares: int,
+) -> list[_StrategyPermissionProbe]:
+    rows = sorted(chain.rows, key=lambda row: row.strike)
+    spot = float(chain.underlying.price) if _is_valid_number(chain.underlying.price) else None
+    call_rows = [row for row in rows if row.callBid is not None or row.callAsk is not None or row.callMid is not None]
+    put_rows = [row for row in rows if row.putBid is not None or row.putAsk is not None or row.putMid is not None]
+    rows_above_spot = [row for row in rows if spot is not None and row.strike > spot]
+    rows_below_spot = [row for row in rows if spot is not None and row.strike < spot]
+    shared_rows = [
+        row
+        for row in rows
+        if (row.callBid is not None or row.callAsk is not None or row.callMid is not None)
+        and (row.putBid is not None or row.putAsk is not None or row.putMid is not None)
+    ]
+    later_expiry = next((candidate for candidate in sorted(chain.expiries) if candidate > chain.selectedExpiry), None)
+
+    def pick_nearest(candidates: list[ChainRow], target: float | None) -> ChainRow | None:
+        if not candidates:
+            return None
+        if target is None:
+            return candidates[0]
+        return min(candidates, key=lambda row: abs(row.strike - target))
+
+    def pick_next_higher(candidates: list[ChainRow], strike: float) -> ChainRow | None:
+        return next((row for row in candidates if row.strike > strike), None)
+
+    def pick_next_lower(candidates: list[ChainRow], strike: float) -> ChainRow | None:
+        lower = [row for row in candidates if row.strike < strike]
+        return lower[-1] if lower else None
+
+    def butterfly_triplet(candidates: list[ChainRow], target: float | None) -> tuple[ChainRow, ChainRow, ChainRow] | None:
+        if len(candidates) < 3:
+            return None
+        middle = pick_nearest(candidates[1:-1], target) if len(candidates) > 2 else None
+        if middle is None:
+            return None
+        lower = pick_next_lower(candidates, middle.strike)
+        upper = pick_next_higher(candidates, middle.strike)
+        if lower is None or upper is None:
+            return None
+        return lower, middle, upper
+
+    def condor_quartet(candidates: list[ChainRow], target: float | None) -> tuple[ChainRow, ChainRow, ChainRow, ChainRow] | None:
+        if len(candidates) < 4:
+            return None
+        anchor = pick_nearest(candidates, target)
+        if anchor is None:
+            return None
+        index = candidates.index(anchor)
+        low_index = max(min(index - 1, len(candidates) - 4), 0)
+        quartet = candidates[low_index : low_index + 4]
+        return tuple(quartet) if len(quartet) == 4 else None
+
+    def leg(row: ChainRow, right: Literal["C", "P"], action: Literal["BUY", "SELL"], *, expiry: str | None = None, ratio: int = 1) -> OptionOrderLegRequest:
+        return OptionOrderLegRequest(
+            expiry=expiry or chain.selectedExpiry,
+            strike=row.strike,
+            right=right,
+            action=action,
+            ratio=ratio,
+        )
+
+    def make_request(
+        label: str,
+        strategy_tag: str,
+        action: Literal["BUY", "SELL"],
+        legs: list[OptionOrderLegRequest] | None,
+        unavailable_detail: str,
+    ) -> _StrategyPermissionProbe:
+        if not legs:
+            return _StrategyPermissionProbe(strategy_key=strategy_tag.replace("-spread", "").replace("-option", "-option"), label=label, request=None, unavailable_detail=unavailable_detail)
+        primary = legs[0]
+        return _StrategyPermissionProbe(
+            strategy_key=_strategy_family_key_for_tag(strategy_tag),
+            label=label,
+            request=OptionOrderRequest(
+                accountId="PENDING",
+                symbol=chain.symbol,
+                expiry=primary.expiry,
+                strike=primary.strike,
+                right=primary.right,
+                action=action,
+                quantity=1,
+                orderType="MKT",
+                tif="DAY",
+                strategyTag=cast(Any, strategy_tag),
+                structureLabel=label,
+                legs=legs,
+            ),
+        )
+
+    atm_row = pick_nearest(shared_rows, spot)
+    long_call = pick_nearest(call_rows, spot)
+    long_put = pick_nearest(put_rows, spot)
+    short_call = pick_nearest(rows_above_spot or call_rows, spot)
+    short_put = pick_nearest(list(reversed(rows_below_spot)) or put_rows, spot)
+    call_spread_long = short_call
+    call_spread_short = pick_next_higher(call_rows, call_spread_long.strike) if call_spread_long is not None else None
+    put_credit_short = short_put
+    put_credit_long = pick_next_lower(put_rows, put_credit_short.strike) if put_credit_short is not None else None
+    call_bfly = butterfly_triplet(call_rows, spot)
+    call_condor = condor_quartet(call_rows, spot)
+    iron_center = atm_row
+    iron_lower = pick_next_lower(put_rows, iron_center.strike) if iron_center is not None else None
+    iron_upper = pick_next_higher(call_rows, iron_center.strike) if iron_center is not None else None
+
+    probes: list[_StrategyPermissionProbe] = [
+        make_request(
+            "Single Option",
+            "long-option",
+            "BUY",
+            [leg(long_call, "C", "BUY")] if long_call is not None else None,
+            "No liquid call was available to test this strategy.",
+        ),
+        make_request(
+            "Covered Option",
+            "cash-secured-put",
+            "SELL",
+            [leg(put_credit_short, "P", "SELL")] if put_credit_short is not None else None,
+            "No liquid put was available to test this strategy.",
+        ),
+        make_request(
+            "Straddle",
+            "straddle",
+            "BUY",
+            [leg(atm_row, "C", "BUY"), leg(atm_row, "P", "BUY")] if atm_row is not None else None,
+            "No at-the-money call/put pair was available to test this strategy.",
+        ),
+        make_request(
+            "Strangle",
+            "strangle",
+            "BUY",
+            [leg(short_put, "P", "BUY"), leg(short_call, "C", "BUY")] if short_put is not None and short_call is not None else None,
+            "No out-of-the-money put/call pair was available to test this strategy.",
+        ),
+        make_request(
+            "Vertical",
+            "call-debit-spread",
+            "BUY",
+            [leg(call_spread_long, "C", "BUY"), leg(call_spread_short, "C", "SELL")]
+            if call_spread_long is not None and call_spread_short is not None
+            else None,
+            "No two call strikes were available to test this strategy.",
+        ),
+        make_request(
+            "Butterfly",
+            "butterfly",
+            "BUY",
+            [leg(call_bfly[0], "C", "BUY"), leg(call_bfly[1], "C", "SELL", ratio=2), leg(call_bfly[2], "C", "BUY")] if call_bfly is not None else None,
+            "No three-strike call butterfly was available to test this strategy.",
+        ),
+        make_request(
+            "Condor",
+            "condor",
+            "BUY",
+            [leg(call_condor[0], "C", "BUY"), leg(call_condor[1], "C", "SELL"), leg(call_condor[2], "C", "SELL"), leg(call_condor[3], "C", "BUY")]
+            if call_condor is not None
+            else None,
+            "No four-strike call condor was available to test this strategy.",
+        ),
+    ]
+
+    if stock_shares >= 100 and short_call is not None and short_put is not None:
+        collar_legs = [leg(short_put, "P", "BUY"), leg(short_call, "C", "SELL")]
+        probes.append(make_request("Collar (with stock)", "collar", "BUY", collar_legs, ""))
+    else:
+        probes.append(
+            _StrategyPermissionProbe(
+                strategy_key="collar",
+                label="Collar (with stock)",
+                request=None,
+                unavailable_detail="No 100-share stock position was available in this symbol to test a collar.",
+            )
+        )
+
+    probes.extend(
+        [
+            make_request(
+                "Iron Butterfly",
+                "iron-butterfly",
+                "SELL",
+                [leg(iron_lower, "P", "BUY"), leg(iron_center, "P", "SELL"), leg(iron_center, "C", "SELL"), leg(iron_upper, "C", "BUY")]
+                if iron_center is not None and iron_lower is not None and iron_upper is not None
+                else None,
+                "No iron butterfly wings were available to test this strategy.",
+            ),
+            make_request(
+                "Iron Condor",
+                "iron-condor",
+                "SELL",
+                [leg(put_credit_long, "P", "BUY"), leg(put_credit_short, "P", "SELL"), leg(short_call, "C", "SELL"), leg(call_spread_short, "C", "BUY")]
+                if put_credit_long is not None and put_credit_short is not None and short_call is not None and call_spread_short is not None
+                else None,
+                "No iron condor structure was available to test this strategy.",
+            ),
+            make_request(
+                "Calendar",
+                "calendar-spread",
+                "BUY",
+                [leg(long_call, "C", "BUY", expiry=later_expiry), leg(long_call, "C", "SELL")]
+                if long_call is not None and later_expiry is not None
+                else None,
+                "No later expiration was available to test this strategy.",
+            ),
+            make_request(
+                "Diagonal",
+                "diagonal-spread",
+                "BUY",
+                [leg(call_spread_long, "C", "BUY", expiry=later_expiry), leg(call_spread_short, "C", "SELL")]
+                if call_spread_long is not None and call_spread_short is not None and later_expiry is not None
+                else None,
+                "No later expiration and strike pair was available to test this strategy.",
+            ),
+            make_request(
+                "Ratio",
+                "ratio-spread",
+                "BUY",
+                [leg(call_spread_long, "C", "SELL"), leg(call_spread_short, "C", "BUY", ratio=2)]
+                if call_spread_long is not None and call_spread_short is not None
+                else None,
+                "No ratio spread pair was available to test this strategy.",
+            ),
+        ]
+    )
+    return probes
+
+
+def _strategy_family_key_for_tag(strategy_tag: str) -> str:
+    mapping = {
+        "long-option": "single-option",
+        "short-option": "single-option",
+        "cash-secured-put": "covered-option",
+        "covered-call": "covered-option",
+        "call-credit-spread": "vertical",
+        "call-debit-spread": "vertical",
+        "put-credit-spread": "vertical",
+        "put-debit-spread": "vertical",
+        "calendar-spread": "calendar",
+        "diagonal-spread": "diagonal",
+        "ratio-spread": "ratio",
+    }
+    return mapping.get(strategy_tag, strategy_tag)
 
 
 def _chain_highlights(rows: list[ChainRow], expiry: str) -> list[ChainHighlight]:
