@@ -222,6 +222,7 @@ export function StockMarketWorkspace({ gatewayPill, onOpenSymbol }: StockMarketW
               <div className="mb-3 text-[11px] uppercase tracking-[0.22em] text-muted">Search</div>
               <input
                 className="w-full rounded-xl border border-line/80 bg-panel px-3 py-3 text-sm text-text outline-none transition focus:border-accent/60"
+                data-testid="market-search-input"
                 onChange={(event) => setMarketSearch(event.target.value.toUpperCase())}
                 placeholder="Symbol or company"
                 spellCheck={false}
@@ -254,6 +255,7 @@ export function StockMarketWorkspace({ gatewayPill, onOpenSymbol }: StockMarketW
             <div className="flex flex-wrap items-center gap-2">
               <button
                 className="rounded-full border border-accent/25 bg-accent/10 px-3 py-1.5 text-xs font-medium text-accent transition hover:border-accent/45 hover:bg-accent/16"
+                data-testid="market-preset-high-beta"
                 onClick={() => applyMarketPreset("high-beta")}
                 type="button"
               >
@@ -261,6 +263,7 @@ export function StockMarketWorkspace({ gatewayPill, onOpenSymbol }: StockMarketW
               </button>
               <button
                 className="rounded-full border border-line/80 bg-panelSoft px-3 py-1.5 text-xs font-medium text-muted transition hover:border-accent/25 hover:text-text"
+                data-testid="market-preset-squeeze-watch"
                 onClick={() => applyMarketPreset("squeeze-watch")}
                 type="button"
               >
@@ -268,6 +271,7 @@ export function StockMarketWorkspace({ gatewayPill, onOpenSymbol }: StockMarketW
               </button>
               <button
                 className="rounded-full border border-line/80 bg-panelSoft px-3 py-1.5 text-xs font-medium text-muted transition hover:border-accent/25 hover:text-text"
+                data-testid="market-preset-liquid-leaders"
                 onClick={() => applyMarketPreset("liquid-leaders")}
                 type="button"
               >
@@ -275,6 +279,7 @@ export function StockMarketWorkspace({ gatewayPill, onOpenSymbol }: StockMarketW
               </button>
               <button
                 className="rounded-full border border-line/80 bg-panelSoft px-3 py-1.5 text-xs font-medium text-muted transition hover:border-accent/25 hover:text-text"
+                data-testid="market-preset-reset"
                 onClick={() => applyMarketPreset("reset")}
                 type="button"
               >
@@ -316,7 +321,7 @@ export function StockMarketWorkspace({ gatewayPill, onOpenSymbol }: StockMarketW
         </Panel>
 
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-          <MetricCard hint="Names matching the current screen." label="Matches" value={fmtWholeNumber(marketScreenRows.length)} />
+            <MetricCard hint="Names matching the current screen." label="Matches" value={fmtWholeNumber(marketScreenRows.length)} />
           <MetricCard hint="Average beta across the visible results." label="Avg beta" value={fmtNumber(averageScreenBeta)} />
           <MetricCard hint="Average daily dollar volume for this filtered set." label="Avg $ volume" value={averageScreenVolume != null ? `$${fmtMillions(averageScreenVolume)}` : "-"} />
           <MetricCard hint="Names with weekly momentum still pointing up." label="Advancers" value={fmtWholeNumber(advancingCount)} />
@@ -356,8 +361,18 @@ export function StockMarketWorkspace({ gatewayPill, onOpenSymbol }: StockMarketW
                     <InlinePill label={`vol $${fmtMillions(row.avgDollarVolumeM)}`} tone="neutral" />
                   </div>
                   <div className="mt-4 flex gap-2">
-                    <OpenSymbolButton label="Open ticker" onClick={() => onOpenSymbol(row.symbol, "ticker")} tone="neutral" />
-                    <OpenSymbolButton label="Open options" onClick={() => onOpenSymbol(row.symbol, "options")} tone="accent" />
+                    <OpenSymbolButton
+                      label="Open ticker"
+                      onClick={() => onOpenSymbol(row.symbol, "ticker")}
+                      testId={`market-candidate-open-ticker-${row.symbol}`}
+                      tone="neutral"
+                    />
+                    <OpenSymbolButton
+                      label="Open options"
+                      onClick={() => onOpenSymbol(row.symbol, "options")}
+                      testId={`market-candidate-open-options-${row.symbol}`}
+                      tone="accent"
+                    />
                   </div>
                 </div>
               ))}
@@ -386,7 +401,7 @@ export function StockMarketWorkspace({ gatewayPill, onOpenSymbol }: StockMarketW
                   </thead>
                   <tbody>
                     {marketTopRows.map((row) => (
-                      <tr key={row.symbol} className="border-b border-line/70 last:border-b-0">
+                      <tr key={row.symbol} className="border-b border-line/70 last:border-b-0" data-testid={`market-result-row-${row.symbol}`}>
                         <td className="px-4 py-3">
                           <div className="font-medium text-text">{row.symbol}</div>
                           <div className="mt-1 text-xs text-muted">{row.name}</div>
@@ -401,8 +416,18 @@ export function StockMarketWorkspace({ gatewayPill, onOpenSymbol }: StockMarketW
                         <td className="px-4 py-3 text-muted">{row.sector}</td>
                         <td className="px-4 py-3">
                           <div className="flex justify-end gap-2">
-                            <OpenSymbolButton label="Ticker" onClick={() => onOpenSymbol(row.symbol, "ticker")} tone="neutral" />
-                            <OpenSymbolButton label="Options" onClick={() => onOpenSymbol(row.symbol, "options")} tone="accent" />
+                            <OpenSymbolButton
+                              label="Ticker"
+                              onClick={() => onOpenSymbol(row.symbol, "ticker")}
+                              testId={`market-open-ticker-${row.symbol}`}
+                              tone="neutral"
+                            />
+                            <OpenSymbolButton
+                              label="Options"
+                              onClick={() => onOpenSymbol(row.symbol, "options")}
+                              testId={`market-open-options-${row.symbol}`}
+                              tone="accent"
+                            />
                           </div>
                         </td>
                       </tr>
@@ -550,7 +575,17 @@ function MarketPulseMetric({ label, value, detail }: { label: string; value: str
   );
 }
 
-function OpenSymbolButton({ label, onClick, tone }: { label: string; onClick: () => void; tone: "neutral" | "accent" }) {
+function OpenSymbolButton({
+  label,
+  onClick,
+  tone,
+  testId,
+}: {
+  label: string;
+  onClick: () => void;
+  tone: "neutral" | "accent";
+  testId?: string;
+}) {
   return (
     <button
       className={
@@ -558,6 +593,7 @@ function OpenSymbolButton({ label, onClick, tone }: { label: string; onClick: ()
           ? "rounded-full border border-accent/25 bg-accent/10 px-3 py-1.5 text-xs font-medium text-accent transition hover:border-accent/45 hover:bg-accent/16"
           : "rounded-full border border-line/80 bg-panelSoft px-3 py-1.5 text-xs font-medium text-muted transition hover:border-accent/25 hover:text-text"
       }
+      data-testid={testId}
       onClick={onClick}
       type="button"
     >

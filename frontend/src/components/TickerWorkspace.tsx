@@ -75,6 +75,7 @@ export function TickerWorkspace({
             <span className="sr-only">Ticker symbol</span>
             <input
               className="h-9 w-full rounded-xl border border-line/80 bg-panelSoft px-3 text-sm text-text outline-none transition focus:border-accent/60"
+              data-testid="ticker-symbol-input"
               onChange={(event) => setSymbolInput(event.target.value.toUpperCase())}
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
@@ -89,6 +90,7 @@ export function TickerWorkspace({
           </label>
           <button
             className="inline-flex h-9 shrink-0 items-center justify-center rounded-xl border border-accent/30 bg-accent/10 px-3 text-sm font-medium text-accent transition hover:border-accent/50 hover:bg-accent/16 disabled:cursor-not-allowed disabled:opacity-50"
+            data-testid="ticker-load-button"
             disabled={!symbolInput.trim() || controlsDisabled}
             onClick={submitTickerInput}
             type="button"
@@ -125,7 +127,7 @@ export function TickerWorkspace({
         title={`${tickerOverview.symbol} Overview`}
         topDivider={false}
       >
-        <div className="overflow-hidden rounded-2xl border border-line/80 bg-panel">
+        <div className="overflow-hidden rounded-2xl border border-line/80 bg-panel" data-testid="ticker-overview-panel">
           <div className="grid divide-y divide-line/70 md:grid-cols-2 md:divide-x md:divide-y-0">
             {[rows.slice(0, Math.ceil(rows.length / 2)), rows.slice(Math.ceil(rows.length / 2))].map((columnRows, columnIndex) => (
               <div key={columnIndex} className="divide-y divide-line/70">

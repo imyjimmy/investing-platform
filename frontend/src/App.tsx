@@ -1403,6 +1403,7 @@ function App() {
                         active={activeWorkspace === "market"}
                         icon={<MarketIcon />}
                         onSelect={() => setActiveWorkspace("market")}
+                        testId="nav-stocks-market"
                         title="Market"
                         tone="live"
                       />
@@ -1411,6 +1412,7 @@ function App() {
                         active={activeWorkspace === "ticker"}
                         icon={<BrokerIcon />}
                         onSelect={() => setActiveWorkspace("ticker")}
+                        testId="nav-stocks-ticker"
                         title="Ticker"
                         tone="live"
                       />
@@ -1421,6 +1423,7 @@ function App() {
                         active={activeWorkspace === "options"}
                         icon={<OptionsIcon />}
                         onSelect={() => setActiveWorkspace("options")}
+                        testId="nav-options-chain"
                         title="Chain"
                         tone="live"
                       />
@@ -1429,6 +1432,7 @@ function App() {
                         active={activeWorkspace === "optionsValuation"}
                         icon={<ValuationIcon />}
                         onSelect={() => setActiveWorkspace("optionsValuation")}
+                        testId="nav-options-valuation"
                         title="Valuation"
                         tone="live"
                       />
@@ -1437,6 +1441,7 @@ function App() {
                         active={activeWorkspace === "optionsBuilder"}
                         icon={<BuilderIcon />}
                         onSelect={() => setActiveWorkspace("optionsBuilder")}
+                        testId="nav-options-builder"
                         title="Builder"
                         tone="live"
                       />
@@ -1445,6 +1450,7 @@ function App() {
                         active={activeWorkspace === "optionsStructures"}
                         icon={<StructuresIcon />}
                         onSelect={() => setActiveWorkspace("optionsStructures")}
+                        testId="nav-options-structures"
                         title="Structures"
                         tone="live"
                       />
@@ -1453,6 +1459,7 @@ function App() {
                         active={activeWorkspace === "optionsVolatility"}
                         icon={<VolatilityIcon />}
                         onSelect={() => setActiveWorkspace("optionsVolatility")}
+                        testId="nav-options-volatility"
                         title="Volatility"
                         tone="live"
                       />
@@ -1461,6 +1468,7 @@ function App() {
                         active={activeWorkspace === "optionsScanner"}
                         icon={<ScannerIcon />}
                         onSelect={() => setActiveWorkspace("optionsScanner")}
+                        testId="nav-options-scanner"
                         title="Scanner"
                         tone="live"
                       />
@@ -1577,7 +1585,7 @@ function ConnectorStatusCard({
 
 function ShellSourceGroup({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <section className="shell-source-group" aria-label={title}>
+    <section aria-label={title} className="shell-source-group" data-testid={`shell-group-${slugifyTestId(title)}`}>
       <div className="shell-source-group-title">{title}</div>
       <div className="shell-source-group-list">{children}</div>
     </section>
@@ -1599,6 +1607,7 @@ function ShellSourceRow({
   active = false,
   children,
   onSelect,
+  testId,
 }: {
   title: string;
   icon?: ReactNode;
@@ -1606,6 +1615,7 @@ function ShellSourceRow({
   active?: boolean;
   children?: ReactNode;
   onSelect?: () => void;
+  testId?: string;
 }) {
   const interactiveProps = onSelect
     ? {
@@ -1624,6 +1634,7 @@ function ShellSourceRow({
   return (
     <section
       className={`shell-source-row ${active ? "is-active" : ""} is-${tone} ${onSelect ? "is-selectable" : ""}`}
+      data-testid={testId}
       {...interactiveProps}
     >
       <div className="shell-source-top">
@@ -1643,6 +1654,10 @@ function ShellSourceRow({
       ) : null}
     </section>
   );
+}
+
+function slugifyTestId(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 }
 
 function SidebarToggleIcon({ open }: { open: boolean }) {

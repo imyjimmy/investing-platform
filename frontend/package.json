@@ -7,6 +7,8 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed --workers=1",
     "self-test:phase1": "node ./scripts/phase1-self-test.mjs",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",

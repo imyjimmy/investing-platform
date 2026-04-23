@@ -58,7 +58,7 @@ export function TickerFinancialsPanel({ financials, isLoading, error }: TickerFi
       eyebrow={financials.isStale ? "IBKR fundamentals stale" : "IBKR fundamentals"}
       title={`${financials.symbol} Financials`}
     >
-      <div className="flex flex-col gap-3 border-b border-line/70 pb-3 lg:flex-row lg:items-center lg:justify-between">
+      <div className="flex flex-col gap-3 border-b border-line/70 pb-3 lg:flex-row lg:items-center lg:justify-between" data-testid="ticker-financials-panel">
         <div className="flex min-w-0 gap-1 overflow-x-auto">
           {FINANCIAL_TABS.map((tab) => (
             <button
@@ -68,6 +68,7 @@ export function TickerFinancialsPanel({ financials, isLoading, error }: TickerFi
                   ? "border-accent/40 bg-accent/10 text-accent"
                   : "border-line/80 bg-panelSoft text-muted hover:border-accent/25 hover:text-text"
               }`}
+              data-testid={`ticker-financials-tab-${tab.key}`}
               onClick={() => setActiveTab(tab.key)}
               type="button"
             >
@@ -112,7 +113,7 @@ export function TickerFinancialsPanel({ financials, isLoading, error }: TickerFi
 
 function FinancialsTable({ table }: { table: FinancialStatementTable }) {
   return (
-    <div className="mt-4 overflow-hidden rounded-2xl border border-line/80 bg-panel">
+    <div className="mt-4 overflow-hidden rounded-2xl border border-line/80 bg-panel" data-testid="ticker-financials-table">
       <div className="flex flex-col gap-1 border-b border-line/70 px-4 py-3 sm:flex-row sm:items-baseline sm:justify-between">
         <div className="font-medium text-text">{table.title}</div>
         <div className="text-xs text-muted">
