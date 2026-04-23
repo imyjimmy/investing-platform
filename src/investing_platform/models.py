@@ -15,7 +15,33 @@ class DashboardModel(BaseModel):
 
 
 RiskLevel = Literal["Low", "Moderate", "Elevated", "High"]
-StrategyTag = Literal["covered-call", "cash-secured-put", "short-option", "long-option", "stock", "other"]
+OptionAnalysisSeverity = Literal["info", "caution", "warning", "critical", "block"]
+OptionAnalysisConfidence = Literal["low", "medium", "high"]
+OptionPrimaryIntent = Literal[
+    "income",
+    "accumulate_shares",
+    "exit_position",
+    "hedge",
+    "speculate_directionally",
+    "volatility_trade",
+    "repair_trade",
+]
+OptionStrategyFamily = Literal["wheel", "covered_call", "cash_secured_put", "spread", "hybrid", "custom"]
+UnderlyingConviction = Literal["low", "medium", "high"]
+IntentRiskProfile = Literal["conservative", "medium", "medium_aggressive", "aggressive"]
+OptionPositionType = Literal["short_call", "short_put", "long_call", "long_put"]
+StrategyTag = Literal[
+    "covered-call",
+    "cash-secured-put",
+    "call-credit-spread",
+    "call-debit-spread",
+    "put-credit-spread",
+    "put-debit-spread",
+    "short-option",
+    "long-option",
+    "stock",
+    "other",
+]
 QuoteSource = Literal["streaming", "historical", "unavailable"]
 ExecutionMode = Literal["disabled", "enabled"]
 RouteKind = Literal["live", "paper", "unknown"]
@@ -409,6 +435,202 @@ class ScenarioResponse(DashboardModel):
     isStale: bool = False
 
 
+class OptionIntentProfile(DashboardModel):
+    primaryIntent: OptionPrimaryIntent = "income"
+    secondaryIntent: OptionPrimaryIntent | None = None
+    strategyFamily: OptionStrategyFamily = "custom"
+    underlyingConviction: UnderlyingConviction = "medium"
+    willingToBeAssigned: bool = True
+    willingToSellShares: bool = True
+    wouldRegretAssignment: bool = False
+    desiredExitPrice: float | None = Field(default=None, ge=0.0)
+    comfortableEntryPrice: float | None = Field(default=None, ge=0.0)
+    maxPctSharesToCap: float = Field(default=0.30, ge=0.0, le=1.0)
+    maxContractsPerUnderlying: int = Field(default=6, ge=1, le=100)
+    minAcceptableReturnOnRisk: float = Field(default=0.02, ge=0.0, le=1.0)
+    maxAcceptableDeltaForIncomeCalls: float = Field(default=0.25, ge=0.01, le=1.0)
+    maxAcceptableDeltaForIncomePuts: float = Field(default=0.30, ge=0.01, le=1.0)
+    avoidEarningsShortOptions: bool = True
+    riskProfile: IntentRiskProfile = "medium_aggressive"
+
+
+class OptionIntelligenceRequest(DashboardModel):
+    accountId: str | None = None
+    symbol: str
+    expiry: str
+    strike: float
+    right: Literal["C", "P"]
+    action: OrderAction = "SELL"
+    quantity: int = Field(default=1, gt=0)
+    entryPrice: float | None = Field(default=None, ge=0.0)
+    intent: OptionIntentProfile = Field(default_factory=OptionIntentProfile)
+
+    @field_validator("accountId")
+    @classmethod
+    def _normalize_account_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip().upper()
+        return normalized or None
+
+    @field_validator("symbol")
+    @classmethod
+    def _normalize_symbol(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if not normalized:
+            raise ValueError("Symbol is required.")
+        return normalized
+
+    @field_validator("expiry")
+    @classmethod
+    def _normalize_expiry(cls, value: str) -> str:
+        normalized = value.strip()
+        if len(normalized) == 8 and normalized.isdigit():
+            return f"{normalized[:4]}-{normalized[4:6]}-{normalized[6:8]}"
+        return normalized
+
+    @field_validator("strike")
+    @classmethod
+    def _normalize_strike(cls, value: float) -> float:
+        return round(float(value), 4)
+
+
+class OptionStateVector(DashboardModel):
+    underlying: str
+    underlyingPrice: float
+    positionType: OptionPositionType
+    strategyLabel: str
+    contracts: int
+    sharesControlled: int
+    sharesOwned: int
+    coveredStatus: Literal["covered", "partially-covered", "uncovered", "n/a"] = "n/a"
+    strike: float
+    expiration: str
+    dte: int
+    dteBucket: str
+    optionMidPrice: float | None = None
+    entryPrice: float | None = None
+    premiumCollected: float | None = None
+    markToMarketPnl: float | None = None
+    effectiveExitPrice: float | None = None
+    effectiveEntryPrice: float | None = None
+    moneyness: str
+    intrinsicValue: float
+    extrinsicValue: float | None = None
+    bid: float | None = None
+    ask: float | None = None
+    mid: float | None = None
+    bidAskSpreadPct: float | None = None
+    spreadPctOfMid: float | None = None
+    openInterest: int | None = None
+    volume: int | None = None
+    liquidityScore: int
+    executionQualityWarning: bool = False
+    delta: float | None = None
+    gamma: float | None = None
+    theta: float | None = None
+    vega: float | None = None
+    rho: float | None = None
+    positionDelta: float | None = None
+    positionGamma: float | None = None
+    positionTheta: float | None = None
+    positionVega: float | None = None
+    netDeltaAfterShares: float | None = None
+    netGammaAfterPosition: float | None = None
+    netThetaAfterPosition: float | None = None
+    netVegaAfterPosition: float | None = None
+    strikeDistanceAbs: float
+    strikeDistancePct: float
+    moneynessBucket: str
+    probabilityItmEstimate: float | None = None
+    probabilityOtmEstimate: float | None = None
+    iv: float | None = None
+    ivRank: float | None = None
+    ivPercentile: float | None = None
+    realizedVol20d: float | None = None
+    realizedVol60d: float | None = None
+    ivVsRvSpread: float | None = None
+    ivTrend5d: str | None = None
+    ivTrend20d: str | None = None
+    termStructure: str | None = None
+    skewType: str | None = None
+    callPutIvSkew: float | None = None
+    thetaEfficiency: float | None = None
+    gammaRiskBucket: str
+    earningsBeforeExpiration: bool = False
+    knownEventBeforeExpiration: bool = False
+    eventType: str | None = None
+    portfolioValue: float | None = None
+    underlyingPositionValue: float | None = None
+    underlyingPctOfPortfolio: float | None = None
+    contractsShortTotalSameUnderlying: int = 0
+    sharesAtRiskTotal: int = 0
+    sharesOwnedTotal: int = 0
+    pctSharesCapped: float = 0.0
+    cashRequiredIfPutsAssigned: float = 0.0
+    availableCash: float | None = None
+    marginRequired: float | None = None
+    assignmentCashImpact: float = 0.0
+    priceTrend5d: str | None = None
+    priceTrend20d: str | None = None
+    priceTrend60d: str | None = None
+    recentDrawdownPct: float | None = None
+    distanceFrom20dHighPct: float | None = None
+    distanceFrom60dHighPct: float | None = None
+    above20dMovingAverage: bool | None = None
+    above50dMovingAverage: bool | None = None
+    above200dMovingAverage: bool | None = None
+    regimeGuess: str | None = None
+    regimeConfidence: float | None = None
+    analysisConfidence: OptionAnalysisConfidence = "medium"
+    missingFields: list[str] = Field(default_factory=list)
+
+
+class OptionIntelligenceRule(DashboardModel):
+    id: str
+    severity: OptionAnalysisSeverity
+    category: str
+    message: str
+    plainEnglish: str
+    suggestedActions: list[str] = Field(default_factory=list)
+
+
+class OptionIntelligenceScorecard(DashboardModel):
+    intentAlignmentScore: int
+    deltaScore: int
+    gammaScore: int
+    ivScore: int
+    regimeScore: int
+    liquidityScore: int
+    sizingScore: int
+    assignmentScore: int
+    overallScore: int
+    band: str
+
+
+class OptionIntelligenceScenarioRow(DashboardModel):
+    label: str
+    underlyingPrice: float | None = None
+    result: str
+
+
+class OptionIntelligenceResponse(DashboardModel):
+    stateVector: OptionStateVector
+    intent: OptionIntentProfile
+    scorecard: OptionIntelligenceScorecard
+    rules: list[OptionIntelligenceRule]
+    summary: str
+    topWarnings: list[str] = Field(default_factory=list)
+    badges: list[str] = Field(default_factory=list)
+    whatYouAreBetting: str
+    whatCanGoWrong: str
+    whatGoesRight: str
+    suggestedAdjustments: list[str] = Field(default_factory=list)
+    scenarioTable: list[OptionIntelligenceScenarioRow] = Field(default_factory=list)
+    generatedAt: datetime
+    isStale: bool = False
+
+
 class UniverseCandidate(DashboardModel):
     symbol: str
     asOfDate: date
@@ -452,6 +674,9 @@ class OptionOrderRequest(DashboardModel):
     limitPrice: float | None = Field(default=None, ge=0.0)
     tif: TimeInForce = "DAY"
     orderRef: str | None = None
+    strategyTag: StrategyTag | None = None
+    structureLabel: str | None = None
+    legs: list["OptionOrderLegRequest"] = Field(default_factory=list)
 
     @field_validator("accountId")
     @classmethod
@@ -492,6 +717,49 @@ class OptionOrderRequest(DashboardModel):
     def _normalize_strike(cls, value: float) -> float:
         return round(float(value), 4)
 
+    @field_validator("structureLabel")
+    @classmethod
+    def _normalize_structure_label(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    def resolved_legs(self) -> list["OptionOrderLegRequest"]:
+        if self.legs:
+            return self.legs
+        return [OptionOrderLegRequest(expiry=self.expiry, strike=self.strike, right=self.right, action=self.action, ratio=1)]
+
+
+class OptionOrderLegRequest(DashboardModel):
+    expiry: str
+    strike: float
+    right: Literal["C", "P"]
+    action: OrderAction
+    ratio: int = Field(default=1, gt=0)
+
+    @field_validator("expiry")
+    @classmethod
+    def _normalize_expiry(cls, value: str) -> str:
+        normalized = value.strip()
+        if len(normalized) == 8 and normalized.isdigit():
+            return f"{normalized[:4]}-{normalized[4:6]}-{normalized[6:8]}"
+        return normalized
+
+    @field_validator("strike")
+    @classmethod
+    def _normalize_strike(cls, value: float) -> float:
+        return round(float(value), 4)
+
+
+class OptionOrderLegPreview(DashboardModel):
+    expiry: str
+    strike: float
+    right: Literal["C", "P"]
+    action: OrderAction
+    ratio: int = 1
+    marketReferencePrice: float | None = None
+
 
 class OptionOrderPreview(DashboardModel):
     accountId: str
@@ -506,12 +774,17 @@ class OptionOrderPreview(DashboardModel):
     tif: TimeInForce
     orderRef: str
     openingOrClosing: Literal["opening", "closing", "unknown"]
+    strategyTag: StrategyTag | None = None
+    structureLabel: str | None = None
+    legs: list[OptionOrderLegPreview] = Field(default_factory=list)
     marketReferencePrice: float | None = None
     estimatedGrossPremium: float | None = None
     conservativeCashImpact: float | None = None
     brokerInitialMarginChange: float | None = None
     brokerMaintenanceMarginChange: float | None = None
     commissionEstimate: float | None = None
+    maxProfit: float | None = None
+    maxLoss: float | None = None
     warningText: str | None = None
     note: str | None = None
     generatedAt: datetime
@@ -524,8 +797,13 @@ class SubmittedOrder(DashboardModel):
     status: str
     filledQuantity: float
     remainingQuantity: float
+    structureLabel: str | None = None
+    legCount: int = 1
     message: str | None = None
     submittedAt: datetime
+
+
+OptionOrderRequest.model_rebuild()
 
 
 class OrderCancelResponse(DashboardModel):

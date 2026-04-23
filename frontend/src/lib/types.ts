@@ -350,6 +350,188 @@ export interface ScenarioResponse {
   isStale: boolean;
 }
 
+export interface OptionIntentProfile {
+  primaryIntent:
+    | "income"
+    | "accumulate_shares"
+    | "exit_position"
+    | "hedge"
+    | "speculate_directionally"
+    | "volatility_trade"
+    | "repair_trade";
+  secondaryIntent:
+    | "income"
+    | "accumulate_shares"
+    | "exit_position"
+    | "hedge"
+    | "speculate_directionally"
+    | "volatility_trade"
+    | "repair_trade"
+    | null;
+  strategyFamily: "wheel" | "covered_call" | "cash_secured_put" | "spread" | "hybrid" | "custom";
+  underlyingConviction: "low" | "medium" | "high";
+  willingToBeAssigned: boolean;
+  willingToSellShares: boolean;
+  wouldRegretAssignment: boolean;
+  desiredExitPrice: number | null;
+  comfortableEntryPrice: number | null;
+  maxPctSharesToCap: number;
+  maxContractsPerUnderlying: number;
+  minAcceptableReturnOnRisk: number;
+  maxAcceptableDeltaForIncomeCalls: number;
+  maxAcceptableDeltaForIncomePuts: number;
+  avoidEarningsShortOptions: boolean;
+  riskProfile: "conservative" | "medium" | "medium_aggressive" | "aggressive";
+}
+
+export interface OptionIntelligenceRequest {
+  accountId: string | null;
+  symbol: string;
+  expiry: string;
+  strike: number;
+  right: "C" | "P";
+  action: "BUY" | "SELL";
+  quantity: number;
+  entryPrice: number | null;
+  intent: OptionIntentProfile;
+}
+
+export interface OptionStateVector {
+  underlying: string;
+  underlyingPrice: number;
+  positionType: "short_call" | "short_put" | "long_call" | "long_put";
+  strategyLabel: string;
+  contracts: number;
+  sharesControlled: number;
+  sharesOwned: number;
+  coveredStatus: "covered" | "partially-covered" | "uncovered" | "n/a";
+  strike: number;
+  expiration: string;
+  dte: number;
+  dteBucket: string;
+  optionMidPrice: number | null;
+  entryPrice: number | null;
+  premiumCollected: number | null;
+  markToMarketPnl: number | null;
+  effectiveExitPrice: number | null;
+  effectiveEntryPrice: number | null;
+  moneyness: string;
+  intrinsicValue: number;
+  extrinsicValue: number | null;
+  bid: number | null;
+  ask: number | null;
+  mid: number | null;
+  bidAskSpreadPct: number | null;
+  spreadPctOfMid: number | null;
+  openInterest: number | null;
+  volume: number | null;
+  liquidityScore: number;
+  executionQualityWarning: boolean;
+  delta: number | null;
+  gamma: number | null;
+  theta: number | null;
+  vega: number | null;
+  rho: number | null;
+  positionDelta: number | null;
+  positionGamma: number | null;
+  positionTheta: number | null;
+  positionVega: number | null;
+  netDeltaAfterShares: number | null;
+  netGammaAfterPosition: number | null;
+  netThetaAfterPosition: number | null;
+  netVegaAfterPosition: number | null;
+  strikeDistanceAbs: number;
+  strikeDistancePct: number;
+  moneynessBucket: string;
+  probabilityItmEstimate: number | null;
+  probabilityOtmEstimate: number | null;
+  iv: number | null;
+  ivRank: number | null;
+  ivPercentile: number | null;
+  realizedVol20d: number | null;
+  realizedVol60d: number | null;
+  ivVsRvSpread: number | null;
+  ivTrend5d: string | null;
+  ivTrend20d: string | null;
+  termStructure: string | null;
+  skewType: string | null;
+  callPutIvSkew: number | null;
+  thetaEfficiency: number | null;
+  gammaRiskBucket: string;
+  earningsBeforeExpiration: boolean;
+  knownEventBeforeExpiration: boolean;
+  eventType: string | null;
+  portfolioValue: number | null;
+  underlyingPositionValue: number | null;
+  underlyingPctOfPortfolio: number | null;
+  contractsShortTotalSameUnderlying: number;
+  sharesAtRiskTotal: number;
+  sharesOwnedTotal: number;
+  pctSharesCapped: number;
+  cashRequiredIfPutsAssigned: number;
+  availableCash: number | null;
+  marginRequired: number | null;
+  assignmentCashImpact: number;
+  priceTrend5d: string | null;
+  priceTrend20d: string | null;
+  priceTrend60d: string | null;
+  recentDrawdownPct: number | null;
+  distanceFrom20dHighPct: number | null;
+  distanceFrom60dHighPct: number | null;
+  above20dMovingAverage: boolean | null;
+  above50dMovingAverage: boolean | null;
+  above200dMovingAverage: boolean | null;
+  regimeGuess: string | null;
+  regimeConfidence: number | null;
+  analysisConfidence: "low" | "medium" | "high";
+  missingFields: string[];
+}
+
+export interface OptionIntelligenceRule {
+  id: string;
+  severity: "info" | "caution" | "warning" | "critical" | "block";
+  category: string;
+  message: string;
+  plainEnglish: string;
+  suggestedActions: string[];
+}
+
+export interface OptionIntelligenceScorecard {
+  intentAlignmentScore: number;
+  deltaScore: number;
+  gammaScore: number;
+  ivScore: number;
+  regimeScore: number;
+  liquidityScore: number;
+  sizingScore: number;
+  assignmentScore: number;
+  overallScore: number;
+  band: string;
+}
+
+export interface OptionIntelligenceScenarioRow {
+  label: string;
+  underlyingPrice: number | null;
+  result: string;
+}
+
+export interface OptionIntelligenceResponse {
+  stateVector: OptionStateVector;
+  intent: OptionIntentProfile;
+  scorecard: OptionIntelligenceScorecard;
+  rules: OptionIntelligenceRule[];
+  summary: string;
+  topWarnings: string[];
+  badges: string[];
+  whatYouAreBetting: string;
+  whatCanGoWrong: string;
+  whatGoesRight: string;
+  suggestedAdjustments: string[];
+  scenarioTable: OptionIntelligenceScenarioRow[];
+  generatedAt: string;
+  isStale: boolean;
+}
+
 export interface UniverseCandidate {
   symbol: string;
   asOfDate: string;
@@ -392,7 +574,27 @@ export interface OptionOrderRequest {
   orderType: "LMT" | "MKT";
   limitPrice: number | null;
   tif: "DAY" | "GTC";
+  strategyTag?: string | null;
+  structureLabel?: string | null;
+  legs?: OptionOrderLegRequest[];
   orderRef?: string | null;
+}
+
+export interface OptionOrderLegRequest {
+  expiry: string;
+  strike: number;
+  right: "C" | "P";
+  action: "BUY" | "SELL";
+  ratio: number;
+}
+
+export interface OptionOrderLegPreview {
+  expiry: string;
+  strike: number;
+  right: "C" | "P";
+  action: "BUY" | "SELL";
+  ratio: number;
+  marketReferencePrice: number | null;
 }
 
 export interface OptionOrderPreview {
@@ -408,12 +610,17 @@ export interface OptionOrderPreview {
   tif: "DAY" | "GTC";
   orderRef: string;
   openingOrClosing: "opening" | "closing" | "unknown";
+  strategyTag: string | null;
+  structureLabel: string | null;
+  legs: OptionOrderLegPreview[];
   marketReferencePrice: number | null;
   estimatedGrossPremium: number | null;
   conservativeCashImpact: number | null;
   brokerInitialMarginChange: number | null;
   brokerMaintenanceMarginChange: number | null;
   commissionEstimate: number | null;
+  maxProfit: number | null;
+  maxLoss: number | null;
   warningText: string | null;
   note: string | null;
   generatedAt: string;
@@ -426,6 +633,8 @@ export interface SubmittedOrder {
   status: string;
   filledQuantity: number;
   remainingQuantity: number;
+  structureLabel: string | null;
+  legCount: number;
   message: string | null;
   submittedAt: string;
 }

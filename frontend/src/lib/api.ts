@@ -17,6 +17,8 @@ import type {
   InvestorPdfSourceStatus,
   OkxSourceStatus,
   OpenOrdersResponse,
+  OptionIntelligenceRequest,
+  OptionIntelligenceResponse,
   OptionOrderPreview,
   OptionOrderRequest,
   OptionChainResponse,
@@ -220,6 +222,8 @@ export const api = {
     fetchJson<ScenarioResponse>(
       withAccountId(`/api/analytics/scenario?movePct=${movePct}&daysForward=${daysForward}&ivShockPct=${ivShockPct}`, accountId),
     ),
+  optionIntelligence: (request: OptionIntelligenceRequest) =>
+    postJson<OptionIntelligenceResponse>("/api/analytics/options-intelligence", request),
   edgarStatus: () => fetchJson<EdgarSourceStatus>("/api/sources/edgar/status"),
   edgarDownload: (request: EdgarDownloadRequest) => postJson<EdgarDownloadResponse>("/api/sources/edgar/download", request),
   edgarLastSync: (request: EdgarDownloadRequest) => postJson<EdgarDownloadResponse | null>("/api/sources/edgar/last-sync", request),

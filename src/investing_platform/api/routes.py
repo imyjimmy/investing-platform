@@ -12,6 +12,7 @@ from investing_platform.models import (
     FilesystemConnectorConfigRequest,
     FinnhubConnectorConfigRequest,
     InvestorPdfDownloadRequest,
+    OptionIntelligenceRequest,
     OptionOrderRequest,
 )
 from investing_platform.services.analytics import (
@@ -22,6 +23,7 @@ from investing_platform.services.analytics import (
     build_risk_summary,
     build_scenario,
 )
+from investing_platform.services.options_intelligence import analyze_option_contract
 from investing_platform.services.app_state import (
     get_broker_service,
     get_coinbase_service,
@@ -318,6 +320,24 @@ def scenario(
 ) -> dict:
     snapshot = _portfolio_snapshot(accountId)
     return build_scenario(snapshot, movePct, daysForward, ivShockPct).model_dump()
+
+
+@router.post("/analytics/options-intelligence")
+def options_intelligence(request: OptionIntelligenceRequest) -> dict:
+    try:
+        snapshot = _portfolio_snapshot(request.accountId)
+        ticker_overview = None
+        try:
+            ticker_overview = _market_data().get_ticker_overview(request.symbol)
+        except Exception:
+            ticker_overview = None
+        return analyze_option_contract(request, _service(), snapshot, ticker_overview=ticker_overview).model_dump()
+    except BrokerUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _portfolio_snapshot(account_id: str | None = None):
