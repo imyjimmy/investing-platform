@@ -3,6 +3,26 @@ import { MetricCard } from "../MetricCard";
 import { Panel } from "../Panel";
 
 type TicketContractSide = "C" | "P";
+type TicketAction = "BUY" | "SELL";
+
+export type OptionStructureLegTemplate = {
+  strike: number;
+  right: TicketContractSide;
+  action: TicketAction;
+  ratio: number;
+  referencePrice: number | null;
+  bid: number | null;
+  ask: number | null;
+  delta: number | null;
+};
+
+export type OptionStructureStageRequest = {
+  title: string;
+  strategyTag: string;
+  defaultAction: TicketAction;
+  summary: string;
+  legs: OptionStructureLegTemplate[];
+};
 
 export type OptionToolSharedProps = {
   chainSymbol: string;
@@ -13,6 +33,7 @@ export type OptionToolSharedProps = {
   tickerOverview?: TickerOverviewResponse;
   optionsDataSourceLabel: string;
   onLoadTicket: (row: ChainRow, right: TicketContractSide) => void;
+  onStageStructure: (structure: OptionStructureStageRequest) => void;
   onOpenChain: () => void;
 };
 
@@ -325,7 +346,7 @@ export function OptionBuilderTool({
   activeDisplayedChain,
   displayedChainRows,
   activeExpiry,
-  onLoadTicket,
+  onStageStructure,
   onOpenChain,
 }: OptionToolSharedProps) {
   const spotPrice = activeDisplayedChain?.underlying.price ?? null;
@@ -336,9 +357,25 @@ export function OptionBuilderTool({
   const callSpreadLong = rowsAboveSpot.find((row) => row.callAsk != null || row.callMid != null) ?? null;
   const callSpreadShort =
     (callSpreadLong && rowsAboveSpot.find((row) => row.strike > callSpreadLong.strike && (row.callBid != null || row.callMid != null))) || null;
+  const callCreditShort = rowsAboveSpot.find((row) => row.callBid != null || row.callMid != null) ?? null;
+  const callCreditLong =
+    (callCreditShort && rowsAboveSpot.find((row) => row.strike > callCreditShort.strike && (row.callAsk != null || row.callMid != null))) || null;
   const putSpreadShort = cashSecuredPut;
   const putSpreadLong =
     (putSpreadShort && rowsBelowSpot.find((row) => row.strike < putSpreadShort.strike && (row.putAsk != null || row.putMid != null))) || null;
+  const makeLeg = (row: ChainRow, right: TicketContractSide, action: TicketAction): OptionStructureLegTemplate => ({
+    strike: row.strike,
+    right,
+    action,
+    ratio: 1,
+    referencePrice:
+      right === "C"
+        ? row.callMid ?? (action === "BUY" ? row.callAsk : row.callBid) ?? row.callBid ?? row.callAsk ?? null
+        : row.putMid ?? (action === "BUY" ? row.putAsk : row.putBid) ?? row.putBid ?? row.putAsk ?? null,
+    bid: right === "C" ? row.callBid : row.putBid,
+    ask: right === "C" ? row.callAsk : row.putAsk,
+    delta: right === "C" ? row.callDelta : row.putDelta,
+  });
   const setupCards = [
     {
       title: "Covered Call",
@@ -346,7 +383,16 @@ export function OptionBuilderTool({
         ? `Sell the ${fmtCurrencySmall(coveredCall.strike)} call for roughly ${fmtCurrencySmall(coveredCall.callMid ?? coveredCall.callBid)}.`
         : "Load a chain with calls above spot to stage a covered call.",
       metric: coveredCall ? fmtNumber(coveredCall.distanceFromSpotPct, "% OTM") : "Waiting",
-      onLoad: coveredCall ? () => onLoadTicket(coveredCall, "C") : null,
+      onStage: coveredCall
+        ? () =>
+            onStageStructure({
+              title: "Covered Call",
+              strategyTag: "covered-call",
+              defaultAction: "SELL",
+              summary: `Sell ${fmtCurrencySmall(coveredCall.strike)} call against shares.`,
+              legs: [makeLeg(coveredCall, "C", "SELL")],
+            })
+        : null,
     },
     {
       title: "Cash-Secured Put",
@@ -354,7 +400,16 @@ export function OptionBuilderTool({
         ? `Sell the ${fmtCurrencySmall(cashSecuredPut.strike)} put with estimated collateral of ${fmtCurrency(cashSecuredPut.conservativePutCollateral)}.`
         : "Load a chain with puts below spot to stage a cash-secured put.",
       metric: cashSecuredPut ? fmtNumber(Math.abs(cashSecuredPut.distanceFromSpotPct), "% OTM") : "Waiting",
-      onLoad: cashSecuredPut ? () => onLoadTicket(cashSecuredPut, "P") : null,
+      onStage: cashSecuredPut
+        ? () =>
+            onStageStructure({
+              title: "Cash-Secured Put",
+              strategyTag: "cash-secured-put",
+              defaultAction: "SELL",
+              summary: `Sell ${fmtCurrencySmall(cashSecuredPut.strike)} put with defined cash reserve.`,
+              legs: [makeLeg(cashSecuredPut, "P", "SELL")],
+            })
+        : null,
     },
     {
       title: "Call Debit Spread",
@@ -363,7 +418,17 @@ export function OptionBuilderTool({
           ? `Buy ${fmtCurrencySmall(callSpreadLong.strike)} / sell ${fmtCurrencySmall(callSpreadShort.strike)} to express upside with defined risk.`
           : "Needs two liquid call strikes above spot.",
       metric: callSpreadLong && callSpreadShort ? `Width ${fmtCurrencySmall(callSpreadShort.strike - callSpreadLong.strike)}` : "Defined risk",
-      onLoad: callSpreadLong ? () => onLoadTicket(callSpreadLong, "C") : null,
+      onStage:
+        callSpreadLong && callSpreadShort
+          ? () =>
+              onStageStructure({
+                title: "Call Debit Spread",
+                strategyTag: "call-debit-spread",
+                defaultAction: "BUY",
+                summary: `Buy ${fmtCurrencySmall(callSpreadLong.strike)} / sell ${fmtCurrencySmall(callSpreadShort.strike)} calls.`,
+                legs: [makeLeg(callSpreadLong, "C", "BUY"), makeLeg(callSpreadShort, "C", "SELL")],
+              })
+          : null,
     },
     {
       title: "Put Credit Spread",
@@ -372,7 +437,36 @@ export function OptionBuilderTool({
           ? `Sell ${fmtCurrencySmall(putSpreadShort.strike)} / buy ${fmtCurrencySmall(putSpreadLong.strike)} to define downside risk.`
           : "Needs two liquid put strikes below spot.",
       metric: putSpreadShort && putSpreadLong ? `Width ${fmtCurrencySmall(putSpreadShort.strike - putSpreadLong.strike)}` : "Defined risk",
-      onLoad: putSpreadShort ? () => onLoadTicket(putSpreadShort, "P") : null,
+      onStage:
+        putSpreadShort && putSpreadLong
+          ? () =>
+              onStageStructure({
+                title: "Put Credit Spread",
+                strategyTag: "put-credit-spread",
+                defaultAction: "SELL",
+                summary: `Sell ${fmtCurrencySmall(putSpreadShort.strike)} / buy ${fmtCurrencySmall(putSpreadLong.strike)} puts.`,
+                legs: [makeLeg(putSpreadShort, "P", "SELL"), makeLeg(putSpreadLong, "P", "BUY")],
+              })
+          : null,
+    },
+    {
+      title: "Call Credit Spread",
+      detail:
+        callCreditShort && callCreditLong
+          ? `Sell ${fmtCurrencySmall(callCreditShort.strike)} / buy ${fmtCurrencySmall(callCreditLong.strike)} to define upside risk.`
+          : "Needs two liquid call strikes above spot.",
+      metric: callCreditShort && callCreditLong ? `Width ${fmtCurrencySmall(callCreditLong.strike - callCreditShort.strike)}` : "Defined risk",
+      onStage:
+        callCreditShort && callCreditLong
+          ? () =>
+              onStageStructure({
+                title: "Call Credit Spread",
+                strategyTag: "call-credit-spread",
+                defaultAction: "SELL",
+                summary: `Sell ${fmtCurrencySmall(callCreditShort.strike)} / buy ${fmtCurrencySmall(callCreditLong.strike)} calls.`,
+                legs: [makeLeg(callCreditShort, "C", "SELL"), makeLeg(callCreditLong, "C", "BUY")],
+              })
+          : null,
     },
   ];
 
@@ -399,11 +493,11 @@ export function OptionBuilderTool({
               <div className="mt-4 flex gap-2">
                 <button
                   className="rounded-full border border-accent/25 bg-accent/10 px-3 py-1.5 text-xs font-medium text-accent transition hover:border-accent/45 hover:bg-accent/16 disabled:cursor-not-allowed disabled:opacity-50"
-                  disabled={!card.onLoad}
-                  onClick={() => card.onLoad?.()}
+                  disabled={!card.onStage}
+                  onClick={() => card.onStage?.()}
                   type="button"
                 >
-                  Load leg
+                  Stage trade
                 </button>
                 <button
                   className="rounded-full border border-line/80 bg-panel px-3 py-1.5 text-xs font-medium text-muted transition hover:border-accent/25 hover:text-text"

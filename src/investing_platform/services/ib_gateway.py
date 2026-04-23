@@ -30,6 +30,8 @@ from investing_platform.models import (
     FundamentalReportStatus,
     OpenOrderExposure,
     OptionChainResponse,
+    OptionOrderLegPreview,
+    OptionOrderLegRequest,
     OptionOrderPreview,
     OptionOrderRequest,
     OptionPosition,
@@ -46,8 +48,9 @@ from investing_platform.services.ibkr_fundamentals import parse_ibkr_fundamental
 
 
 try:
-    from ib_insync import IB, Contract, LimitOrder, MarketOrder, Option, Stock, Ticker
+    from ib_insync import ComboLeg, IB, Contract, LimitOrder, MarketOrder, Option, Stock, Ticker
 except ImportError:  # pragma: no cover - runtime guard
+    ComboLeg = object  # type: ignore[assignment]
     IB = object  # type: ignore[assignment]
     Contract = object  # type: ignore[assignment]
     LimitOrder = object  # type: ignore[assignment]
@@ -68,6 +71,20 @@ FUNDAMENTAL_FINANCIAL_REPORT_TYPES = ("ReportsFinStatements", "ReportRatios", "R
 class _PendingTask:
     callback: Callable[[Any], Any]
     future: Future[Any]
+
+
+@dataclass(slots=True)
+class _ResolvedOptionLeg:
+    request_leg: OptionOrderLegRequest
+    contract: Any
+    market_reference_price: float | None
+
+
+@dataclass(slots=True)
+class _ResolvedOptionOrder:
+    contract: Any
+    market_reference_price: float | None
+    legs: list[_ResolvedOptionLeg]
 
 
 class IBGatewayBrokerService(BrokerService):
@@ -425,17 +442,16 @@ class IBGatewayBrokerService(BrokerService):
         self._ensure_connected(ib)
         account_id = self._resolve_account_id(ib, request.accountId)
         self._ensure_execution_allowed(account_id)
-        contract, market_reference_price = self._resolve_order_contract(ib, request)
+        resolved_order = self._resolve_order_contract(ib, request)
         stock_qty, option_qty = self._position_maps_for_account(ib, account_id)
-        opening_or_closing = _order_open_or_close(contract, request.action, float(request.quantity), stock_qty, option_qty)
+        opening_or_closing = _request_open_or_close(request, resolved_order.legs, stock_qty, option_qty)
         order = self._build_ib_order(request, account_id)
-        order_state = ib.whatIfOrder(contract, order)
+        order_state = ib.whatIfOrder(resolved_order.contract, order)
         return self._build_option_order_preview(
             request=request,
             account_id=account_id,
-            contract=contract,
+            resolved_order=resolved_order,
             order_state=order_state,
-            market_reference_price=market_reference_price,
             opening_or_closing=opening_or_closing,
         )
 
@@ -443,9 +459,9 @@ class IBGatewayBrokerService(BrokerService):
         self._ensure_connected(ib)
         account_id = self._resolve_account_id(ib, request.accountId)
         self._ensure_execution_allowed(account_id)
-        contract, _ = self._resolve_order_contract(ib, request)
+        resolved_order = self._resolve_order_contract(ib, request)
         order = self._build_ib_order(request, account_id)
-        trade = ib.placeOrder(contract, order)
+        trade = ib.placeOrder(resolved_order.contract, order)
         order_status, message = self._await_trade_ack(ib, trade)
         status = str(getattr(order_status, "status", "") or "Submitted")
         if status in {"Cancelled", "ApiCancelled", "Inactive"}:
@@ -458,6 +474,8 @@ class IBGatewayBrokerService(BrokerService):
             status=status,
             filledQuantity=round(float(getattr(order_status, "filled", 0.0) or 0.0), 4),
             remainingQuantity=round(float(getattr(order_status, "remaining", 0.0) or 0.0), 4),
+            structureLabel=request.structureLabel,
+            legCount=len(request.resolved_legs()),
             message=message,
             submittedAt=datetime.now(UTC),
         )
@@ -1190,25 +1208,69 @@ class IBGatewayBrokerService(BrokerService):
             isStale=False,
         )
 
-    def _resolve_order_contract(self, ib: Any, request: OptionOrderRequest) -> tuple[Any, float | None]:
+    def _resolve_order_contract(self, ib: Any, request: OptionOrderRequest) -> _ResolvedOptionOrder:
         underlying_contract = self._qualify_one(ib, Stock(request.symbol, self.settings.ib_underlying_exchange, self.settings.ib_currency))
         definitions = ib.reqSecDefOptParams(request.symbol, "", underlying_contract.secType, underlying_contract.conId)
         if not definitions:
             raise RuntimeError(f"IB Gateway returned no option definitions for {request.symbol}.")
         definition = _select_definition(definitions, self.settings.ib_option_exchange, request.symbol)
+        resolved_legs = [
+            self._resolve_order_leg_contract(ib, request.symbol, definition.tradingClass, leg_request)
+            for leg_request in request.resolved_legs()
+        ]
+        if len(resolved_legs) == 1:
+            resolved_leg = resolved_legs[0]
+            return _ResolvedOptionOrder(
+                contract=resolved_leg.contract,
+                market_reference_price=resolved_leg.market_reference_price,
+                legs=resolved_legs,
+            )
+
+        combo_contract = Contract(
+            symbol=request.symbol,
+            secType="BAG",
+            exchange="SMART",
+            currency=self.settings.ib_currency,
+        )
+        combo_contract.comboLegs = [
+            ComboLeg(
+                conId=int(resolved_leg.contract.conId),
+                ratio=int(resolved_leg.request_leg.ratio),
+                action=resolved_leg.request_leg.action,
+                exchange="SMART",
+            )
+            for resolved_leg in resolved_legs
+        ]
+        return _ResolvedOptionOrder(
+            contract=combo_contract,
+            market_reference_price=_aggregate_leg_reference_price(resolved_legs),
+            legs=resolved_legs,
+        )
+
+    def _resolve_order_leg_contract(
+        self,
+        ib: Any,
+        symbol: str,
+        trading_class: str,
+        leg_request: OptionOrderLegRequest,
+    ) -> _ResolvedOptionLeg:
         contract = self._qualify_one(
             ib,
             Option(
-                request.symbol,
-                request.expiry.replace("-", ""),
-                float(request.strike),
-                request.right,
+                symbol,
+                leg_request.expiry.replace("-", ""),
+                float(leg_request.strike),
+                leg_request.right,
                 self.settings.ib_option_exchange,
                 currency=self.settings.ib_currency,
-                tradingClass=definition.tradingClass,
+                tradingClass=trading_class,
             ),
         )
-        return contract, self._request_option_reference_price(ib, contract)
+        return _ResolvedOptionLeg(
+            request_leg=leg_request,
+            contract=contract,
+            market_reference_price=self._request_option_reference_price(ib, contract),
+        )
 
     def _request_option_reference_price(self, ib: Any, contract: Any) -> float | None:
         for market_data_type in _market_data_type_candidates(self.settings.ib_market_data_type):
@@ -1255,6 +1317,13 @@ class IBGatewayBrokerService(BrokerService):
         return LimitOrder(request.action, request.quantity, float(request.limitPrice or 0.0), **order_kwargs)
 
     def _default_order_ref(self, request: OptionOrderRequest, account_id: str) -> str:
+        resolved_legs = request.resolved_legs()
+        if len(resolved_legs) > 1:
+            strategy_tag = request.strategyTag or "other"
+            return (
+                f"options-dashboard:paper:{account_id}:{request.symbol}:"
+                f"{strategy_tag}:{request.action}:{request.quantity}:{len(resolved_legs)}legs"
+            )
         return (
             f"options-dashboard:paper:{account_id}:{request.symbol}:"
             f"{request.expiry}:{request.right}:{request.strike:.2f}:{request.action}:{request.quantity}"
@@ -1264,24 +1333,36 @@ class IBGatewayBrokerService(BrokerService):
         self,
         request: OptionOrderRequest,
         account_id: str,
-        contract: Any,
+        resolved_order: _ResolvedOptionOrder,
         order_state: Any,
-        market_reference_price: float | None,
         opening_or_closing: str,
     ) -> OptionOrderPreview:
         estimated_gross_premium = None
         if request.orderType == "LMT" and request.limitPrice is not None:
             signed = 1.0 if request.action == "SELL" else -1.0
             estimated_gross_premium = round(float(request.limitPrice) * 100.0 * request.quantity * signed, 2)
-        conservative_cash_impact = _conservative_cash_impact(request, opening_or_closing)
-        note = _option_order_note(request, opening_or_closing, contract)
+        max_profit, max_loss = _strategy_payoff_bounds(request, opening_or_closing)
+        conservative_cash_impact = _conservative_cash_impact(
+            request,
+            opening_or_closing,
+            resolved_order.market_reference_price,
+            max_loss=max_loss,
+        )
+        note = _option_order_note(
+            request,
+            opening_or_closing,
+            resolved_order.contract,
+            max_profit=max_profit,
+            max_loss=max_loss,
+        )
         warning_text = _string_or_none(getattr(order_state, "warningText", None))
+        primary_leg = request.resolved_legs()[0]
         return OptionOrderPreview(
             accountId=account_id,
             symbol=request.symbol,
             expiry=request.expiry,
-            strike=round(float(contract.strike), 2),
-            right=request.right,
+            strike=round(float(primary_leg.strike), 2),
+            right=primary_leg.right,
             action=request.action,
             quantity=request.quantity,
             orderType=request.orderType,
@@ -1289,12 +1370,27 @@ class IBGatewayBrokerService(BrokerService):
             tif=request.tif,
             orderRef=request.orderRef or self._default_order_ref(request, account_id),
             openingOrClosing=opening_or_closing,  # type: ignore[arg-type]
-            marketReferencePrice=market_reference_price,
+            strategyTag=request.strategyTag,
+            structureLabel=request.structureLabel,
+            legs=[
+                OptionOrderLegPreview(
+                    expiry=leg.request_leg.expiry,
+                    strike=leg.request_leg.strike,
+                    right=leg.request_leg.right,
+                    action=leg.request_leg.action,
+                    ratio=leg.request_leg.ratio,
+                    marketReferencePrice=leg.market_reference_price,
+                )
+                for leg in resolved_order.legs
+            ],
+            marketReferencePrice=resolved_order.market_reference_price,
             estimatedGrossPremium=estimated_gross_premium,
             conservativeCashImpact=conservative_cash_impact,
             brokerInitialMarginChange=_optional_float(getattr(order_state, "initMarginChange", None)),
             brokerMaintenanceMarginChange=_optional_float(getattr(order_state, "maintMarginChange", None)),
             commissionEstimate=_optional_float(getattr(order_state, "commission", None)),
+            maxProfit=max_profit,
+            maxLoss=max_loss,
             warningText=warning_text,
             note=note,
             generatedAt=datetime.now(UTC),
@@ -1352,8 +1448,12 @@ class IBGatewayBrokerService(BrokerService):
             status = str(getattr(order_status, "status", "") or "Submitted")
             filled_quantity = float(getattr(order_status, "filled", 0.0) or 0.0)
             remaining_quantity = float(getattr(order_status, "remaining", quantity) or 0.0)
-            opening_or_closing = _order_open_or_close(contract, side, quantity, stock_qty, option_qty)
-            strategy_tag = _strategy_tag(contract.right, -1 if side == "SELL" else 1, 0) if contract.secType == "OPT" else "stock"
+            if contract.secType == "BAG":
+                opening_or_closing = "unknown"
+                strategy_tag = _strategy_tag_from_order_ref(getattr(order, "orderRef", None)) or "other"
+            else:
+                opening_or_closing = _order_open_or_close(contract, side, quantity, stock_qty, option_qty)
+                strategy_tag = _strategy_tag(contract.right, -1 if side == "SELL" else 1, 0) if contract.secType == "OPT" else "stock"
             estimated_credit = 0.0
             estimated_capital = 0.0
             note = None
@@ -1369,6 +1469,11 @@ class IBGatewayBrokerService(BrokerService):
                     note = "Closing premium outlay."
                 else:
                     estimated_capital = max(limit_price or 0.0, 0.0) * multiplier * quantity
+            elif contract.secType == "BAG":
+                estimated_capital = abs(limit_price or 0.0) * 100.0 * quantity
+                if side == "SELL":
+                    estimated_credit = max(limit_price or 0.0, 0.0) * 100.0 * quantity
+                note = "Multi-leg combo order."
             else:
                 estimated_capital = max(limit_price or 0.0, 0.0) * quantity
                 if side == "SELL" and opening_or_closing == "closing":
@@ -1387,7 +1492,7 @@ class IBGatewayBrokerService(BrokerService):
                     limitPrice=round(limit_price, 4) if _is_valid_number(limit_price) else None,
                     estimatedCapitalImpact=round(estimated_capital, 2),
                     estimatedCredit=round(estimated_credit, 2),
-                    openingOrClosing=opening_or_closing,
+                    openingOrClosing=opening_or_closing,  # type: ignore[arg-type]
                     expiry=_normalize_expiry(contract.lastTradeDateOrContractMonth) if contract.secType == "OPT" else None,
                     strike=round(float(contract.strike), 2) if contract.secType == "OPT" else None,
                     right=contract.right if contract.secType == "OPT" else None,
@@ -2164,6 +2269,89 @@ def _order_open_or_close(
     return "opening"
 
 
+def _request_open_or_close(
+    request: OptionOrderRequest,
+    resolved_legs: list[_ResolvedOptionLeg],
+    stock_qty: dict[str, float],
+    option_qty: dict[tuple[str, str, str, float], int],
+) -> Literal["opening", "closing", "unknown"]:
+    if len(resolved_legs) == 1:
+        return cast(Literal["opening", "closing", "unknown"], _order_open_or_close(resolved_legs[0].contract, request.action, float(request.quantity), stock_qty, option_qty))
+    leg_states = {
+        _order_open_or_close(
+            resolved_leg.contract,
+            resolved_leg.request_leg.action,
+            float(request.quantity * resolved_leg.request_leg.ratio),
+            stock_qty,
+            option_qty,
+        )
+        for resolved_leg in resolved_legs
+    }
+    if len(leg_states) == 1:
+        return cast(Literal["opening", "closing", "unknown"], next(iter(leg_states)))
+    return "unknown"
+
+
+def _aggregate_leg_reference_price(resolved_legs: list[_ResolvedOptionLeg]) -> float | None:
+    total = 0.0
+    has_price = False
+    for resolved_leg in resolved_legs:
+        if not _is_valid_number(resolved_leg.market_reference_price):
+            continue
+        leg_sign = 1.0 if resolved_leg.request_leg.action == "SELL" else -1.0
+        total += float(resolved_leg.market_reference_price) * leg_sign * resolved_leg.request_leg.ratio
+        has_price = True
+    if not has_price:
+        return None
+    return round(total, 4)
+
+
+def _strategy_payoff_bounds(
+    request: OptionOrderRequest,
+    opening_or_closing: str,
+) -> tuple[float | None, float | None]:
+    if opening_or_closing != "opening":
+        return None, None
+    metrics = _vertical_spread_metrics(request)
+    if metrics is None:
+        return None, None
+    width_dollars, net_limit_dollars = metrics
+    if request.action == "SELL":
+        max_profit = net_limit_dollars
+        max_loss = max(width_dollars - net_limit_dollars, 0.0)
+        return round(max_profit, 2), round(max_loss, 2)
+    max_profit = max(width_dollars - net_limit_dollars, 0.0)
+    max_loss = max(net_limit_dollars, 0.0)
+    return round(max_profit, 2), round(max_loss, 2)
+
+
+def _vertical_spread_metrics(request: OptionOrderRequest) -> tuple[float, float] | None:
+    resolved_legs = request.resolved_legs()
+    if len(resolved_legs) != 2 or request.limitPrice is None:
+        return None
+    expiries = {leg.expiry for leg in resolved_legs}
+    rights = {leg.right for leg in resolved_legs}
+    actions = {leg.action for leg in resolved_legs}
+    if len(expiries) != 1 or len(rights) != 1 or actions != {"BUY", "SELL"}:
+        return None
+    strikes = sorted(leg.strike for leg in resolved_legs)
+    width = abs(strikes[1] - strikes[0]) * 100.0 * request.quantity
+    net_limit = abs(float(request.limitPrice)) * 100.0 * request.quantity
+    return width, net_limit
+
+
+def _strategy_tag_from_order_ref(order_ref: Any) -> str | None:
+    if order_ref is None:
+        return None
+    raw = str(order_ref).strip()
+    if not raw.startswith("options-dashboard:paper:"):
+        return None
+    parts = raw.split(":")
+    if len(parts) < 8 or not parts[-1].endswith("legs"):
+        return None
+    return parts[4] or None
+
+
 def _chain_highlights(rows: list[ChainRow], expiry: str) -> list[ChainHighlight]:
     highlights: list[ChainHighlight] = []
     put_candidates = [row for row in rows if row.putMid and row.distanceFromSpotPct < 0]
@@ -2350,18 +2538,41 @@ def _latest_trade_message(trade: Any) -> str | None:
     return _string_or_none(getattr(getattr(trade, "advancedError", None), "message", None))
 
 
-def _conservative_cash_impact(request: OptionOrderRequest, opening_or_closing: str) -> float | None:
+def _conservative_cash_impact(
+    request: OptionOrderRequest,
+    opening_or_closing: str,
+    market_reference_price: float | None,
+    *,
+    max_loss: float | None = None,
+) -> float | None:
+    if len(request.resolved_legs()) > 1 and max_loss is not None:
+        return max_loss
     multiplier = 100.0 * request.quantity
     if request.action == "SELL" and request.right == "P" and opening_or_closing == "opening":
         return round(request.strike * multiplier, 2)
     if request.orderType == "LMT" and request.limitPrice is not None and request.action == "BUY":
         return round(float(request.limitPrice) * multiplier, 2)
+    if request.orderType == "MKT" and request.action == "BUY" and market_reference_price is not None:
+        return round(float(market_reference_price) * multiplier, 2)
     if request.action == "SELL" and request.right == "C" and opening_or_closing == "opening":
         return 0.0
     return None
 
 
-def _option_order_note(request: OptionOrderRequest, opening_or_closing: str, contract: Any) -> str | None:
+def _option_order_note(
+    request: OptionOrderRequest,
+    opening_or_closing: str,
+    contract: Any,
+    *,
+    max_profit: float | None = None,
+    max_loss: float | None = None,
+) -> str | None:
+    if len(request.resolved_legs()) > 1:
+        if max_profit is not None and max_loss is not None and opening_or_closing == "opening":
+            return f"Defined-risk structure. Approx. max profit ${max_profit:,.2f}; max loss ${max_loss:,.2f}."
+        if request.orderType == "MKT":
+            return "Market order preview for a multi-leg option structure. Use sparingly on complex options."
+        return "Multi-leg option structure preview."
     if request.action == "SELL" and request.right == "P" and opening_or_closing == "opening":
         reserve = round(request.strike * 100.0 * request.quantity, 2)
         return f"Conservative cash-secured reserve: ${reserve:,.2f}."
