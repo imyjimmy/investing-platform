@@ -29,7 +29,7 @@ export function CryptoMarketWorkspace() {
           </div>
 
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            <MetricCard label="Source" value={cryptoMajorsQuery.data.source} />
+            <MetricCard label="Market feed" value="Global provider" />
             <MetricCard label="Assets" value={`${cryptoMajorsQuery.data.quotes.length} majors`} />
             <MetricCard label="Updated" value={formatTimestamp(cryptoMajorsQuery.data.generatedAt)} />
             <MetricCard label="Account overlay" value="Off" />

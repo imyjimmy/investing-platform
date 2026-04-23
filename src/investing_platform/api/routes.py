@@ -10,6 +10,7 @@ from investing_platform import __version__
 from investing_platform.models import (
     EdgarDownloadRequest,
     FilesystemConnectorConfigRequest,
+    FinnhubConnectorConfigRequest,
     InvestorPdfDownloadRequest,
     OptionOrderRequest,
 )
@@ -26,7 +27,10 @@ from investing_platform.services.app_state import (
     get_coinbase_service,
     get_edgar_service,
     get_filesystem_connector_service,
+    get_finnhub_service,
     get_investor_pdf_service,
+    get_market_data_service,
+    get_okx_service,
     get_settings,
     get_universe_screener_service,
 )
@@ -58,6 +62,18 @@ def _coinbase():
 
 def _filesystem_connectors():
     return get_filesystem_connector_service()
+
+
+def _finnhub():
+    return get_finnhub_service()
+
+
+def _okx():
+    return get_okx_service()
+
+
+def _market_data():
+    return get_market_data_service()
 
 
 def _universe():
@@ -157,24 +173,30 @@ def risk_summary(accountId: str | None = Query(default=None)) -> dict:
 @router.get("/market/underlying/{symbol}")
 def underlying(symbol: str) -> dict:
     try:
-        return _service().get_underlying_quote(symbol).model_dump()
+        return _market_data().get_underlying_quote(symbol).model_dump()
     except BrokerUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.get("/market/ticker/{symbol}")
 def ticker_overview(symbol: str) -> dict:
     try:
-        return _service().get_ticker_overview(symbol).model_dump()
+        return _market_data().get_ticker_overview(symbol).model_dump()
     except BrokerUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.get("/market/ticker/{symbol}/financials")
 def ticker_financials(symbol: str) -> dict:
     try:
-        return _service().get_ticker_financials(symbol).model_dump()
+        return _market_data().get_ticker_financials(symbol).model_dump()
     except BrokerUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
@@ -213,7 +235,7 @@ def market_universe() -> dict:
 @router.get("/market/crypto-majors")
 def crypto_majors() -> dict:
     try:
-        return _coinbase().get_major_market().model_dump()
+        return _okx().get_major_market().model_dump()
     except Exception as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
@@ -343,6 +365,26 @@ def edgar_status() -> dict:
 @router.get("/sources/coinbase/status")
 def coinbase_status() -> dict:
     return _coinbase().source_status().model_dump()
+
+
+@router.get("/sources/finnhub/status")
+def finnhub_status() -> dict:
+    return _finnhub().source_status().model_dump()
+
+
+@router.get("/sources/okx/status")
+def okx_status() -> dict:
+    return _okx().source_status().model_dump()
+
+
+@router.post("/sources/finnhub/configure")
+def finnhub_configure(request: FinnhubConnectorConfigRequest) -> dict:
+    try:
+        return _finnhub().configure(request).model_dump()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.get("/sources/coinbase/portfolio")

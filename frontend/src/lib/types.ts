@@ -448,6 +448,31 @@ export interface CoinbaseSourceStatus {
   lastError: string | null;
 }
 
+export interface FinnhubSourceStatus {
+  available: boolean;
+  configured: boolean;
+  status: "ready" | "degraded";
+  apiBaseUrl: string;
+  detail: string;
+  maskedApiKey: string | null;
+  lastSuccessfulSyncAt: string | null;
+  lastError: string | null;
+}
+
+export interface FinnhubConnectorConfigRequest {
+  apiKey: string | null;
+}
+
+export interface OkxSourceStatus {
+  available: boolean;
+  status: "ready" | "degraded";
+  authMode: "public";
+  apiBaseUrl: string;
+  detail: string;
+  lastSuccessfulSyncAt: string | null;
+  lastError: string | null;
+}
+
 export interface CoinbaseHolding {
   accountId: string;
   accountName: string;

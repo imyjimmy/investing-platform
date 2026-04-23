@@ -14,7 +14,7 @@ export function CryptoLeverageWorkspace() {
           <MetricCard hint="Aggregate BTC and ETH perpetual open interest placeholder until derivatives feeds are connected." label="Open Interest" value="$28.4B" />
           <MetricCard hint="Weighted funding snapshot across major perpetual venues." label="Funding" value="0.018%" />
           <MetricCard hint="Perpetual premium versus spot across the major crypto pair set." label="Basis" value="4.2%" />
-          <MetricCard hint="Directional pressure estimate; not tied to a Coinbase account." label="Crowding" value="Long-heavy" />
+          <MetricCard hint="Directional pressure estimate; not tied to an account connector." label="Crowding" value="Long-heavy" />
         </div>
 
         <Panel eyebrow="Derivatives Context" title="Leverage Map">

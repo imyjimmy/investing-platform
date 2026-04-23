@@ -6,6 +6,8 @@ import type {
   EdgarDownloadRequest,
   EdgarDownloadResponse,
   EdgarSourceStatus,
+  FinnhubConnectorConfigRequest,
+  FinnhubSourceStatus,
   FilesystemConnectorConfigRequest,
   FilesystemDocumentFolderResponse,
   FilesystemConnectorPortfolioResponse,
@@ -13,6 +15,7 @@ import type {
   InvestorPdfDownloadRequest,
   InvestorPdfDownloadResponse,
   InvestorPdfSourceStatus,
+  OkxSourceStatus,
   OpenOrdersResponse,
   OptionOrderPreview,
   OptionOrderRequest,
@@ -143,6 +146,10 @@ export const api = {
   reconnect: () => postJson<ConnectionStatus>("/api/reconnect"),
   coinbaseStatus: () => fetchJson<CoinbaseSourceStatus>("/api/sources/coinbase/status"),
   coinbasePortfolio: () => fetchJson<CoinbasePortfolioResponse>("/api/sources/coinbase/portfolio"),
+  finnhubStatus: () => fetchJson<FinnhubSourceStatus>("/api/sources/finnhub/status"),
+  finnhubConfigure: (request: FinnhubConnectorConfigRequest) =>
+    postJson<FinnhubSourceStatus>("/api/sources/finnhub/configure", request),
+  okxStatus: () => fetchJson<OkxSourceStatus>("/api/sources/okx/status"),
   filesystemConnectorStatuses: (accountKey: string) =>
     fetchJson<FilesystemConnectorStatus[]>(withAccountKey("/api/sources/filesystem/connectors", accountKey)),
   filesystemConnectorConfigure: (

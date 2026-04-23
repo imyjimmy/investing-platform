@@ -546,6 +546,21 @@ class CoinbaseSourceStatus(DashboardModel):
     lastError: str | None = None
 
 
+class FinnhubSourceStatus(DashboardModel):
+    available: bool
+    configured: bool
+    status: Literal["ready", "degraded"]
+    apiBaseUrl: str
+    detail: str
+    maskedApiKey: str | None = None
+    lastSuccessfulSyncAt: datetime | None = None
+    lastError: str | None = None
+
+
+class FinnhubConnectorConfigRequest(DashboardModel):
+    apiKey: str | None = None
+
+
 class CoinbaseHolding(DashboardModel):
     accountId: str
     accountName: str
@@ -668,6 +683,16 @@ class CryptoMarketResponse(DashboardModel):
     generatedAt: datetime
     sourceNotice: str | None = None
     isStale: bool = False
+
+
+class OkxSourceStatus(DashboardModel):
+    available: bool
+    status: Literal["ready", "degraded"]
+    authMode: Literal["public"] = "public"
+    apiBaseUrl: str
+    detail: str
+    lastSuccessfulSyncAt: datetime | None = None
+    lastError: str | None = None
 
 
 class EdgarSourceStatus(DashboardModel):

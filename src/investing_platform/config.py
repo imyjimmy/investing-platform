@@ -111,6 +111,11 @@ class DashboardSettings:
     coinbase_api_key_file: Path | None = None
     coinbase_timeout_seconds: float = 15.0
     coinbase_snapshot_cache_ttl_seconds: float = 30.0
+    okx_api_base_url: str = "https://www.okx.com"
+    okx_timeout_seconds: float = 15.0
+    finnhub_api_base_url: str = "https://finnhub.io/api/v1"
+    finnhub_timeout_seconds: float = 15.0
+    finnhub_connector_state_file: Path = Path("~/.investing-platform/connectors/finnhub.json").expanduser()
     filesystem_connectors_state_file: Path = Path("~/.investing-platform/filesystem-connectors/connectors.json").expanduser()
     backend_host: str = "127.0.0.1"
     backend_port: int = 8000
@@ -254,6 +259,14 @@ class DashboardSettings:
             coinbase_api_key_file=_env_optional_path("COINBASE_API_KEY_FILE"),
             coinbase_timeout_seconds=_env_float("COINBASE_TIMEOUT_SECONDS", default=15.0),
             coinbase_snapshot_cache_ttl_seconds=_env_float("COINBASE_SNAPSHOT_CACHE_TTL_SECONDS", default=30.0),
+            okx_api_base_url=_env_str("OKX_API_BASE_URL", default="https://www.okx.com"),
+            okx_timeout_seconds=_env_float("OKX_TIMEOUT_SECONDS", default=15.0),
+            finnhub_api_base_url=_env_str("FINNHUB_API_BASE_URL", default="https://finnhub.io/api/v1"),
+            finnhub_timeout_seconds=_env_float("FINNHUB_TIMEOUT_SECONDS", default=15.0),
+            finnhub_connector_state_file=_env_path(
+                "INVESTING_PLATFORM_FINNHUB_CONNECTOR_STATE_PATH",
+                default="~/.investing-platform/connectors/finnhub.json",
+            ),
             filesystem_connectors_state_file=_env_path(
                 "INVESTING_PLATFORM_FILESYSTEM_CONNECTORS_STATE_PATH",
                 default="~/.investing-platform/filesystem-connectors/connectors.json",
@@ -282,6 +295,10 @@ class DashboardSettings:
     @property
     def filesystem_connectors_state_path(self) -> Path:
         return self.filesystem_connectors_state_file
+
+    @property
+    def finnhub_connector_state_path(self) -> Path:
+        return self.finnhub_connector_state_file
 
     @property
     def stocks_root(self) -> Path:

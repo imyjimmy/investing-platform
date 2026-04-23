@@ -295,6 +295,7 @@ function App() {
   const [coinbaseConnectorCollapsed, setCoinbaseConnectorCollapsed] = useState(false);
   const [filesystemConnectorCollapsedBySourceId, setFilesystemConnectorCollapsedBySourceId] = useState<Record<string, boolean>>({});
   const [connectorSetupError, setConnectorSetupError] = useState<string | null>(null);
+  const [finnhubApiKeyInput, setFinnhubApiKeyInput] = useState("");
   const [connectorDraftsById, setConnectorDraftsById] = useState<Partial<Record<ConnectorCatalogId, ConnectorDraftState>>>({});
   const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceSurface>("dashboard");
   const [selectedDashboardAccountKey, setSelectedDashboardAccountKey] = useState<DashboardAccountKey>(DEFAULT_DASHBOARD_ACCOUNT_KEY);
@@ -321,6 +322,16 @@ function App() {
     queryKey: ["coinbase-portfolio"],
     queryFn: api.coinbasePortfolio,
     enabled: coinbaseStatusQuery.data?.available ?? false,
+    refetchInterval: 30_000,
+  });
+  const okxStatusQuery = useQuery({
+    queryKey: ["okx-status"],
+    queryFn: api.okxStatus,
+    refetchInterval: 30_000,
+  });
+  const finnhubStatusQuery = useQuery({
+    queryKey: ["finnhub-status"],
+    queryFn: api.finnhubStatus,
     refetchInterval: 30_000,
   });
   const filesystemConnectorStatusesQuery = useQuery({
@@ -382,6 +393,17 @@ function App() {
 
   const connectMutation = useMutation({ mutationFn: api.connect });
   const reconnectMutation = useMutation({ mutationFn: api.reconnect });
+  const finnhubConfigureMutation = useMutation({
+    mutationFn: api.finnhubConfigure,
+    onSuccess: async () => {
+      setFinnhubApiKeyInput("");
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["finnhub-status"] }),
+        queryClient.invalidateQueries({ queryKey: ["ticker-overview"] }),
+        queryClient.invalidateQueries({ queryKey: ["ticker-financials"] }),
+      ]);
+    },
+  });
   const filesystemConnectorConfigureMutation = useMutation({
     mutationFn: ({
       accountKey,
@@ -479,6 +501,9 @@ function App() {
   const sourceError = connectError ?? reconnectError ?? connectionQueryError ?? connectionQuery.data?.lastError ?? null;
   const coinbaseStatusError = coinbaseStatusQuery.error instanceof Error ? coinbaseStatusQuery.error.message : null;
   const coinbasePortfolioError = coinbasePortfolioQuery.error instanceof Error ? coinbasePortfolioQuery.error.message : null;
+  const okxStatusError = okxStatusQuery.error instanceof Error ? okxStatusQuery.error.message : null;
+  const finnhubStatusError = finnhubStatusQuery.error instanceof Error ? finnhubStatusQuery.error.message : null;
+  const finnhubConfigureError = finnhubConfigureMutation.error instanceof Error ? finnhubConfigureMutation.error.message : null;
   const filesystemConnectorStatusesError =
     filesystemConnectorStatusesQuery.error instanceof Error ? filesystemConnectorStatusesQuery.error.message : null;
   const filesystemConnectorStatusBySourceId = Object.fromEntries(
@@ -565,6 +590,34 @@ function App() {
   const dashboardOptionPositions = selectedDashboardOwnsRoute ? optionPositions : [];
   const dashboardOpenOrders = selectedDashboardOwnsRoute ? openOrders : [];
   const globalSourceCards: AccountConnectorCard[] = [
+    {
+      id: "okx",
+      title: "OKX Market Data",
+      status: okxStatusQuery.isLoading ? "Checking" : okxStatusQuery.data?.available ? "Ready" : "Degraded",
+      detail: okxStatusQuery.isLoading
+        ? "Loading public crypto market data source state"
+        : okxStatusError ?? okxStatusQuery.data?.detail ?? "Public crypto market data provider",
+      tone: okxStatusQuery.isLoading ? "caution" : okxStatusQuery.data?.available ? "safe" : "danger",
+      countsTowardHealth: true,
+      icon: <MarketIcon />,
+    },
+    {
+      id: "finnhub",
+      title: "Finnhub",
+      status: finnhubStatusQuery.isLoading
+        ? "Checking"
+        : finnhubConfigureMutation.isPending
+          ? "Saving"
+          : finnhubStatusQuery.data?.available
+            ? "Connected"
+            : "Needs setup",
+      detail: finnhubStatusQuery.isLoading
+        ? "Loading stock data connector state"
+        : finnhubStatusError ?? finnhubStatusQuery.data?.detail ?? "Stock tool data provider",
+      tone: finnhubStatusQuery.isLoading ? "caution" : finnhubStatusQuery.data?.available ? "safe" : "caution",
+      countsTowardHealth: true,
+      icon: <MarketIcon />,
+    },
     {
       id: "edgar",
       title: "EDGAR",
@@ -883,6 +936,118 @@ function App() {
       </div>
     ) : (
       <ErrorState message="Coinbase balances are unavailable." />
+    );
+  }
+
+  async function saveFinnhubConnector() {
+    await finnhubConfigureMutation.mutateAsync({ apiKey: finnhubApiKeyInput.trim() || null });
+  }
+
+  async function clearFinnhubConnector() {
+    await finnhubConfigureMutation.mutateAsync({ apiKey: null });
+  }
+
+  function renderFinnhubSettingsPanel() {
+    return (
+      <Panel eyebrow="Stock data connector" title="Finnhub">
+        <div className="grid gap-6">
+          <div className="grid gap-4 md:grid-cols-3">
+            <MetricCard
+              label="Connector"
+              value={
+                finnhubStatusQuery.isLoading
+                  ? "Checking"
+                  : finnhubStatusQuery.data?.available
+                    ? "Configured"
+                    : "Not configured"
+              }
+            />
+            <MetricCard
+              label="Active key"
+              value={finnhubStatusQuery.data?.maskedApiKey ?? (finnhubStatusQuery.isLoading ? "Loading" : "None")}
+            />
+            <MetricCard label="API base" value={finnhubStatusQuery.data?.apiBaseUrl ?? "https://finnhub.io/api/v1"} />
+          </div>
+          {finnhubStatusError || finnhubConfigureError ? (
+            <ErrorState message={finnhubConfigureError ?? finnhubStatusError ?? "Finnhub connector is unavailable."} />
+          ) : null}
+          <div className="grid gap-3 rounded-2xl border border-line/80 bg-panelSoft px-4 py-4">
+            <label className="grid gap-2">
+              <span className="text-[11px] uppercase tracking-[0.16em] text-muted">API key</span>
+              <input
+                className="w-full rounded-xl border border-line/80 bg-panel px-4 py-3 text-sm text-text outline-none transition focus:border-accent/60"
+                onChange={(event) => setFinnhubApiKeyInput(event.target.value)}
+                placeholder={finnhubStatusQuery.data?.available ? "Paste a replacement Finnhub API key" : "Enter a Finnhub API key"}
+                spellCheck={false}
+                type="password"
+                value={finnhubApiKeyInput}
+              />
+            </label>
+            <div className="text-sm text-muted">
+              {finnhubStatusQuery.data?.available
+                ? "Configured Finnhub credentials are used for basic stock quotes and fundamentals in the Stock tool."
+                : "Add a Finnhub API key to supply basic stock data when the Stock tool cannot rely on the broker session."}
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="text-xs text-muted">
+                {finnhubStatusQuery.data?.lastSuccessfulSyncAt
+                  ? `Last successful check ${formatTimestamp(finnhubStatusQuery.data.lastSuccessfulSyncAt)}`
+                  : "No successful Finnhub check yet."}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {finnhubStatusQuery.data?.configured ? (
+                  <button
+                    className="rounded-full border border-line/80 bg-panel px-3 py-1 text-[11px] font-medium uppercase tracking-[0.16em] text-muted transition hover:border-danger/30 hover:text-danger disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={finnhubConfigureMutation.isPending}
+                    onClick={() => {
+                      void clearFinnhubConnector();
+                    }}
+                    type="button"
+                  >
+                    Disconnect
+                  </button>
+                ) : null}
+                <button
+                  className="rounded-full border border-accent/30 bg-accent/10 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.16em] text-accent transition hover:border-accent/50 hover:bg-accent/16 disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={finnhubConfigureMutation.isPending || !finnhubApiKeyInput.trim()}
+                  onClick={() => {
+                    void saveFinnhubConnector();
+                  }}
+                  type="button"
+                >
+                  {finnhubConfigureMutation.isPending ? "Saving…" : finnhubStatusQuery.data?.available ? "Update Key" : "Save Key"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </Panel>
+    );
+  }
+
+  function renderOkxSettingsPanel() {
+    return (
+      <Panel eyebrow="Crypto market provider" title="OKX Market Data">
+        <div className="grid gap-6">
+          <div className="grid gap-4 md:grid-cols-4">
+            <MetricCard
+              label="Connector"
+              value={okxStatusQuery.isLoading ? "Checking" : okxStatusQuery.data?.available ? "Enabled" : "Unavailable"}
+            />
+            <MetricCard label="Auth mode" value={okxStatusQuery.data?.authMode?.toUpperCase() ?? "PUBLIC"} />
+            <MetricCard label="API base" value={okxStatusQuery.data?.apiBaseUrl ?? "https://www.okx.com"} />
+            <MetricCard
+              label="Last healthy check"
+              value={okxStatusQuery.data?.lastSuccessfulSyncAt ? formatTimestamp(okxStatusQuery.data.lastSuccessfulSyncAt) : "Pending"}
+            />
+          </div>
+          {okxStatusError ? <ErrorState message={okxStatusError} /> : null}
+          <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-4 text-sm text-muted">
+            OKX is configured as a global public crypto market-data provider. No API keys are required right now, and the
+            crypto market workspace can use it without coupling market prices to an account connector.
+          </div>
+        </div>
+      </Panel>
     );
   }
 
@@ -1300,6 +1465,10 @@ function App() {
               ))}
             </div>
           </Panel>
+
+          {renderOkxSettingsPanel()}
+
+          {renderFinnhubSettingsPanel()}
 
           <Panel eyebrow="Shared defaults" title="App Defaults">
             <div className="grid gap-3 sm:grid-cols-2">

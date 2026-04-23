@@ -55,7 +55,7 @@ export function TickerFinancialsPanel({ financials, isLoading, error }: TickerFi
   return (
     <Panel
       action={<div className="text-xs text-muted">{formatTimestamp(financials.generatedAt)}</div>}
-      eyebrow={financials.isStale ? "IBKR fundamentals stale" : "IBKR fundamentals"}
+      eyebrow={financialsEyebrow(financials)}
       title={`${financials.symbol} Financials`}
     >
       <div className="flex flex-col gap-3 border-b border-line/70 pb-3 lg:flex-row lg:items-center lg:justify-between" data-testid="ticker-financials-panel">
@@ -109,6 +109,14 @@ export function TickerFinancialsPanel({ financials, isLoading, error }: TickerFi
       </div>
     </Panel>
   );
+}
+
+function financialsEyebrow(financials: TickerFinancialsResponse) {
+  const joinedNotices = financials.sourceNotices.join(" ").toLowerCase();
+  if (joinedNotices.includes("finnhub")) {
+    return financials.isStale ? "Finnhub fundamentals stale" : "Finnhub fundamentals";
+  }
+  return financials.isStale ? "IBKR fundamentals stale" : "IBKR fundamentals";
 }
 
 function FinancialsTable({ table }: { table: FinancialStatementTable }) {
