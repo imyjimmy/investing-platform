@@ -1,6 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
-import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "./lib/api";
+import { useState, type ReactNode } from "react";
 import {
   formatTimestamp,
   fmtCoverageCount,
@@ -12,13 +10,7 @@ import {
 } from "./lib/formatters";
 import type {
   ConnectionStatus,
-  EdgarDownloadRequest,
-  EdgarDownloadResponse,
-  FilesystemDocumentFolderResponse,
-  FilesystemConnectorPortfolioResponse,
   FilesystemConnectorStatus,
-  InvestorPdfDownloadRequest,
-  InvestorPdfDownloadResponse,
   OpenOrderExposure,
   OptionPosition,
   Position,
@@ -43,12 +35,17 @@ import { InvestorPdfsWorkspace } from "./components/InvestorPdfsWorkspace";
 import { MetricCard } from "./components/MetricCard";
 import { TickerWorkspace } from "./components/TickerWorkspace";
 import { Panel } from "./components/Panel";
+import { AppShell } from "./components/shell/AppShell";
 import { ToolWorkspaceFrame } from "./components/shell/ToolWorkspaceFrame";
 import { WorkspaceStage } from "./components/shell/WorkspaceStage";
+import { WorkspaceRouter, type WorkspaceRoute } from "./components/shell/WorkspaceRouter";
 import { ChromeTabs } from "./components/ui/ChromeTabs";
+import { useAccountData } from "./features/account/useAccountData";
 import { CryptoLeverageWorkspace } from "./features/crypto/CryptoLeverageWorkspace";
 import { CryptoMarketWorkspace } from "./features/crypto/CryptoMarketWorkspace";
 import { OptionsWorkspace, type OptionsWorkspaceSurface } from "./features/options/OptionsWorkspace";
+import { useConnectorSources, type ConnectorDraftState } from "./features/sources/useConnectorSources";
+import { useStockIntelSync } from "./features/stock-intel/useStockIntelSync";
 import { StockMarketWorkspace } from "./features/stocks/market/StockMarketWorkspace";
 
 function pnlTone(value: number | null | undefined) {
@@ -77,17 +74,6 @@ function sumPositionPnl(positions: Position[]) {
 
 function sumOptionPositionPnl(positions: OptionPosition[]) {
   return positions.reduce((total, position) => total + (position.unrealizedPnL ?? 0) + (position.realizedPnL ?? 0), 0);
-}
-
-function isOptionsWorkspace(workspace: WorkspaceSurface) {
-  return (
-    workspace === "options" ||
-    workspace === "optionsValuation" ||
-    workspace === "optionsBuilder" ||
-    workspace === "optionsStructures" ||
-    workspace === "optionsVolatility" ||
-    workspace === "optionsScanner"
-  );
 }
 
 function filesystemConnectorTone(
@@ -179,10 +165,6 @@ function orderRiskLabel(order: OpenOrderExposure) {
   return "Order capital";
 }
 
-function uniqueAccounts(accounts: Array<string | null | undefined>) {
-  return Array.from(new Set(accounts.map((accountId) => accountId?.trim().toUpperCase()).filter(Boolean) as string[]));
-}
-
 function routeKindFromAccountId(accountId: string | null | undefined): "live" | "paper" | "unknown" {
   if (!accountId) {
     return "unknown";
@@ -203,7 +185,6 @@ function routePresentation(routeKind: "live" | "paper" | "unknown") {
 type InlinePillTone = "neutral" | "safe" | "caution" | "danger" | "accent";
 
 type SourceTone = "live" | "off" | "planned";
-type StockIntelTab = "sec" | "companyPdfs";
 type WorkspaceSurface =
   | "dashboard"
   | "market"
@@ -237,12 +218,6 @@ type AccountSourceSummary = AccountConnectorCard & {
   todayPnl: number | null;
   monthlyPnl: number | null;
   netWorth: number | null;
-};
-
-type ConnectorDraftState = {
-  displayName: string;
-  directoryPath: string;
-  detectFooter: boolean;
 };
 
 function gatewaySessionPresentation(status: ConnectionStatus | undefined): { label: string; tone: InlinePillTone } {
@@ -287,213 +262,75 @@ function executionRoutePresentation(
 }
 
 const CSV_FOLDER_CONNECTOR_ID: ConnectorCatalogId = "csvFolder";
-const PDF_FOLDER_CONNECTOR_ID: ConnectorCatalogId = "pdfFolder";
 
 function App() {
-  const queryClient = useQueryClient();
-  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
-  const [connectorPickerOpen, setConnectorPickerOpen] = useState(false);
   const [ibkrConnectorCollapsed, setIbkrConnectorCollapsed] = useState(false);
   const [coinbaseConnectorCollapsed, setCoinbaseConnectorCollapsed] = useState(false);
   const [filesystemConnectorCollapsedBySourceId, setFilesystemConnectorCollapsedBySourceId] = useState<Record<string, boolean>>({});
-  const [connectorSetupError, setConnectorSetupError] = useState<string | null>(null);
-  const [finnhubApiKeyInput, setFinnhubApiKeyInput] = useState("");
-  const [connectorDraftsById, setConnectorDraftsById] = useState<Partial<Record<ConnectorCatalogId, ConnectorDraftState>>>({});
   const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceSurface>("dashboard");
   const [selectedDashboardAccountKey, setSelectedDashboardAccountKey] = useState<DashboardAccountKey>(DEFAULT_DASHBOARD_ACCOUNT_KEY);
   const [selectedStockSymbol, setSelectedStockSymbol] = useState("NVDA");
-  const [selectedAccountId, setSelectedAccountId] = useState<string | undefined>(undefined);
-  const [edgarSyncing, setEdgarSyncing] = useState(false);
-  const [edgarSyncResult, setEdgarSyncResult] = useState<EdgarDownloadResponse | undefined>(undefined);
-  const [edgarSyncError, setEdgarSyncError] = useState<string | null>(null);
-  const [investorPdfSyncing, setInvestorPdfSyncing] = useState(false);
-  const [investorPdfSyncResult, setInvestorPdfSyncResult] = useState<InvestorPdfDownloadResponse | undefined>(undefined);
-  const [investorPdfSyncError, setInvestorPdfSyncError] = useState<string | null>(null);
-  const [activeStockIntelTab, setActiveStockIntelTab] = useState<StockIntelTab>("sec");
 
-  const connectionQuery = useQuery({
-    queryKey: ["connection-status"],
-    queryFn: api.connectionStatus,
-    refetchInterval: 10_000,
-  });
-  const coinbaseStatusQuery = useQuery({
-    queryKey: ["coinbase-status"],
-    queryFn: api.coinbaseStatus,
-    refetchInterval: 30_000,
-  });
-  const coinbasePortfolioQuery = useQuery({
-    queryKey: ["coinbase-portfolio"],
-    queryFn: api.coinbasePortfolio,
-    enabled: coinbaseStatusQuery.data?.available ?? false,
-    refetchInterval: 30_000,
-  });
-  const okxStatusQuery = useQuery({
-    queryKey: ["okx-status"],
-    queryFn: api.okxStatus,
-    refetchInterval: 30_000,
-  });
-  const finnhubStatusQuery = useQuery({
-    queryKey: ["finnhub-status"],
-    queryFn: api.finnhubStatus,
-    refetchInterval: 30_000,
-  });
-  const filesystemConnectorStatusesQuery = useQuery({
-    queryKey: ["filesystem-connector-statuses", selectedDashboardAccountKey],
-    queryFn: () => api.filesystemConnectorStatuses(selectedDashboardAccountKey),
-    refetchInterval: 30_000,
-  });
-  const filesystemConnectorStatuses = filesystemConnectorStatusesQuery.data ?? [];
-  const filesystemCsvConnectorStatuses = filesystemConnectorStatuses.filter((status) => status.connectorId === CSV_FOLDER_CONNECTOR_ID);
-  const filesystemPdfConnectorStatuses = filesystemConnectorStatuses.filter((status) => status.connectorId === PDF_FOLDER_CONNECTOR_ID);
-  const filesystemConnectorPortfolioQueries = useQueries({
-    queries: filesystemCsvConnectorStatuses.map((connectorStatus) => ({
-      queryKey: ["filesystem-connector-portfolio", selectedDashboardAccountKey, connectorStatus.sourceId],
-      queryFn: () => api.filesystemConnectorPortfolio(selectedDashboardAccountKey, connectorStatus.sourceId),
-      enabled: connectorStatus.connected,
-      refetchInterval: 30_000,
-    })),
-  });
-  const filesystemConnectorDocumentQueries = useQueries({
-    queries: filesystemPdfConnectorStatuses.map((connectorStatus) => ({
-      queryKey: ["filesystem-connector-documents", selectedDashboardAccountKey, connectorStatus.sourceId],
-      queryFn: () => api.filesystemConnectorDocuments(selectedDashboardAccountKey, connectorStatus.sourceId),
-      enabled: connectorStatus.connected,
-      refetchInterval: 30_000,
-    })),
-  });
-  const riskSummaryQuery = useQuery({
-    queryKey: ["risk-summary", selectedAccountId],
-    queryFn: () => api.riskSummary(selectedAccountId),
-    refetchInterval: false,
-  });
-
-  const positionsQuery = useQuery({
-    queryKey: ["positions", selectedAccountId],
-    queryFn: () => api.positions(selectedAccountId),
-    refetchInterval: false,
-  });
-
-  const optionPositionsQuery = useQuery({
-    queryKey: ["option-positions", selectedAccountId],
-    queryFn: () => api.optionPositions(selectedAccountId),
-    refetchInterval: false,
-  });
-
-  const openOrdersQuery = useQuery({
-    queryKey: ["open-orders", selectedAccountId],
-    queryFn: () => api.openOrders(selectedAccountId),
-    refetchInterval: false,
-  });
-
-  const edgarStatusQuery = useQuery({
-    queryKey: ["edgar-status"],
-    queryFn: api.edgarStatus,
-  });
-  const investorPdfStatusQuery = useQuery({
-    queryKey: ["investor-pdf-status"],
-    queryFn: api.investorPdfStatus,
-  });
-
-  const connectMutation = useMutation({ mutationFn: api.connect });
-  const reconnectMutation = useMutation({ mutationFn: api.reconnect });
-  const finnhubConfigureMutation = useMutation({
-    mutationFn: api.finnhubConfigure,
-    onSuccess: async () => {
-      setFinnhubApiKeyInput("");
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["finnhub-status"] }),
-        queryClient.invalidateQueries({ queryKey: ["ticker-overview"] }),
-        queryClient.invalidateQueries({ queryKey: ["ticker-financials"] }),
-      ]);
-    },
-  });
-  const filesystemConnectorConfigureMutation = useMutation({
-    mutationFn: ({
-      accountKey,
-      connectorId,
-      displayName,
-      directoryPath,
-      detectFooter,
-      sourceId,
-    }: {
-      accountKey: DashboardAccountKey;
-      connectorId: ConnectorCatalogId;
-      displayName: string;
-      directoryPath: string;
-      detectFooter: boolean;
-      sourceId?: string;
-    }) => api.filesystemConnectorConfigure(accountKey, connectorId, { displayName, directoryPath, detectFooter }, sourceId),
-    onSuccess: async (_data, variables) => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["filesystem-connector-statuses", variables.accountKey] }),
-        queryClient.invalidateQueries({ queryKey: ["filesystem-connector-portfolio", variables.accountKey] }),
-        queryClient.invalidateQueries({ queryKey: ["filesystem-connector-documents", variables.accountKey] }),
-      ]);
-    },
-  });
-  const edgarDownloadMutation = useMutation({
-    mutationFn: api.edgarDownload,
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["edgar-status"] });
-    },
-  });
-  const investorPdfDownloadMutation = useMutation({
-    mutationFn: api.investorPdfDownload,
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["investor-pdf-status"] });
-    },
-  });
-  useEffect(() => {
-    const availableAccounts = uniqueAccounts([
-      ...(connectionQuery.data?.managedAccounts ?? []),
-      connectionQuery.data?.accountId,
-      riskSummaryQuery.data?.account.accountId,
-    ]);
-    if (availableAccounts.length === 0) {
-      return;
-    }
-    if (!selectedAccountId || !availableAccounts.includes(selectedAccountId)) {
-      setSelectedAccountId(availableAccounts[0]);
-    }
-  }, [connectionQuery.data?.accountId, connectionQuery.data?.managedAccounts, riskSummaryQuery.data?.account.accountId, selectedAccountId]);
-
-  useEffect(() => {
-    if (!accountSettingsOpen) {
-      setConnectorPickerOpen(false);
-      setConnectorSetupError(null);
-    }
-  }, [accountSettingsOpen]);
-
-  useEffect(() => {
-    if (!connectorPickerOpen) {
-      return;
-    }
-    setConnectorDraftsById({});
-  }, [connectorPickerOpen]);
-
-  useEffect(() => {
-    if (!sidebarOpen) {
-      return;
-    }
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setSidebarOpen(false);
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [sidebarOpen]);
-
-  const risk = riskSummaryQuery.data;
-  const positions = positionsQuery.data?.positions ?? [];
-  const optionPositions = optionPositionsQuery.data?.positions ?? [];
-  const openOrders = openOrdersQuery.data?.orders ?? [];
-  const accountId = risk?.account.accountId ?? connectionQuery.data?.accountId ?? null;
-  const executionEnabled = connectionQuery.data?.executionMode === "enabled";
-  const selectedAccount = selectedAccountId ?? accountId ?? undefined;
+  const {
+    connectMutation,
+    connectionQuery,
+    executionEnabled,
+    openOrders,
+    optionPositions,
+    positions,
+    reconnectMutation,
+    risk,
+    selectedAccount,
+    setSelectedAccountId,
+  } = useAccountData();
+  const {
+    activeStockIntelTab,
+    edgarStatusError,
+    edgarStatusQuery,
+    edgarSyncError,
+    edgarSyncing,
+    edgarSyncResult,
+    investorPdfStatusError,
+    investorPdfStatusQuery,
+    investorPdfSyncError,
+    investorPdfSyncing,
+    investorPdfSyncResult,
+    runEdgarDownload,
+    runInvestorPdfDownload,
+    setActiveStockIntelTab,
+  } = useStockIntelSync();
+  const {
+    coinbasePortfolioError,
+    coinbasePortfolioQuery,
+    coinbaseStatusError,
+    coinbaseStatusQuery,
+    connectorDraftsById,
+    connectorPickerOpen,
+    connectorSetupError,
+    filesystemConnectorConfigureMutation,
+    filesystemConnectorPortfolioBySourceId,
+    filesystemConnectorPortfolioErrorBySourceId,
+    filesystemConnectorPortfolioLoadingBySourceId,
+    filesystemConnectorStatusBySourceId,
+    filesystemConnectorStatuses,
+    filesystemConnectorStatusesError,
+    filesystemConnectorStatusesQuery,
+    filesystemDocumentFolderBySourceId,
+    filesystemDocumentFolderErrorBySourceId,
+    filesystemDocumentFolderLoadingBySourceId,
+    finnhubApiKeyInput,
+    finnhubConfigureError,
+    finnhubConfigureMutation,
+    finnhubStatusError,
+    finnhubStatusQuery,
+    okxStatusError,
+    okxStatusQuery,
+    setConnectorDraftsById,
+    setConnectorPickerOpen,
+    setConnectorSetupError,
+    setFinnhubApiKeyInput,
+  } = useConnectorSources({ accountSettingsOpen, selectedDashboardAccountKey });
   const activeExecutionRoute = executionRoutePresentation(connectionQuery.data);
   const routedAccount = activeExecutionRoute.accountId;
   const routedAccountPill = { label: activeExecutionRoute.label, tone: activeExecutionRoute.tone };
@@ -503,54 +340,6 @@ function App() {
   const connectionQueryError = connectionQuery.error instanceof Error ? connectionQuery.error.message : null;
   const connectionEndpoint = connectionQuery.data ? `${connectionQuery.data.host}:${connectionQuery.data.port}` : "127.0.0.1:4002";
   const sourceError = connectError ?? reconnectError ?? connectionQueryError ?? connectionQuery.data?.lastError ?? null;
-  const coinbaseStatusError = coinbaseStatusQuery.error instanceof Error ? coinbaseStatusQuery.error.message : null;
-  const coinbasePortfolioError = coinbasePortfolioQuery.error instanceof Error ? coinbasePortfolioQuery.error.message : null;
-  const okxStatusError = okxStatusQuery.error instanceof Error ? okxStatusQuery.error.message : null;
-  const finnhubStatusError = finnhubStatusQuery.error instanceof Error ? finnhubStatusQuery.error.message : null;
-  const finnhubConfigureError = finnhubConfigureMutation.error instanceof Error ? finnhubConfigureMutation.error.message : null;
-  const filesystemConnectorStatusesError =
-    filesystemConnectorStatusesQuery.error instanceof Error ? filesystemConnectorStatusesQuery.error.message : null;
-  const filesystemConnectorStatusBySourceId = Object.fromEntries(
-    filesystemConnectorStatuses.map((status) => [status.sourceId, status]),
-  ) as Record<string, FilesystemConnectorStatus>;
-  const filesystemConnectorPortfolioBySourceId = Object.fromEntries(
-    filesystemConnectorPortfolioQueries.flatMap((query, index) => {
-      const sourceId = filesystemCsvConnectorStatuses[index]?.sourceId;
-      return sourceId && query.data ? [[sourceId, query.data]] : [];
-    }),
-  ) as Record<string, FilesystemConnectorPortfolioResponse>;
-  const filesystemConnectorPortfolioLoadingBySourceId = Object.fromEntries(
-    filesystemConnectorPortfolioQueries.flatMap((query, index) => {
-      const sourceId = filesystemCsvConnectorStatuses[index]?.sourceId;
-      return sourceId ? [[sourceId, query.isLoading]] : [];
-    }),
-  ) as Record<string, boolean>;
-  const filesystemConnectorPortfolioErrorBySourceId = Object.fromEntries(
-    filesystemConnectorPortfolioQueries.flatMap((query, index) => {
-      const sourceId = filesystemCsvConnectorStatuses[index]?.sourceId;
-      const error = query.error instanceof Error ? query.error.message : null;
-      return sourceId ? [[sourceId, error]] : [];
-    }),
-  ) as Record<string, string | null>;
-  const filesystemDocumentFolderBySourceId = Object.fromEntries(
-    filesystemConnectorDocumentQueries.flatMap((query, index) => {
-      const sourceId = filesystemPdfConnectorStatuses[index]?.sourceId;
-      return sourceId && query.data ? [[sourceId, query.data]] : [];
-    }),
-  ) as Record<string, FilesystemDocumentFolderResponse>;
-  const filesystemDocumentFolderLoadingBySourceId = Object.fromEntries(
-    filesystemConnectorDocumentQueries.flatMap((query, index) => {
-      const sourceId = filesystemPdfConnectorStatuses[index]?.sourceId;
-      return sourceId ? [[sourceId, query.isLoading]] : [];
-    }),
-  ) as Record<string, boolean>;
-  const filesystemDocumentFolderErrorBySourceId = Object.fromEntries(
-    filesystemConnectorDocumentQueries.flatMap((query, index) => {
-      const sourceId = filesystemPdfConnectorStatuses[index]?.sourceId;
-      const error = query.error instanceof Error ? query.error.message : null;
-      return sourceId ? [[sourceId, error]] : [];
-    }),
-  ) as Record<string, string | null>;
   const coinbaseConnectorTone: ConnectionHealthTone = coinbaseStatusQuery.isLoading
     ? "caution"
     : coinbaseStatusQuery.data?.available
@@ -580,8 +369,6 @@ function App() {
     isLocalBackendUnavailable(filesystemConnectorStatusesError) ||
     Object.values(filesystemConnectorPortfolioErrorBySourceId).some((message) => isLocalBackendUnavailable(message)) ||
     Object.values(filesystemDocumentFolderErrorBySourceId).some((message) => isLocalBackendUnavailable(message));
-  const edgarStatusError = edgarStatusQuery.error instanceof Error ? edgarStatusQuery.error.message : null;
-  const investorPdfStatusError = investorPdfStatusQuery.error instanceof Error ? investorPdfStatusQuery.error.message : null;
   const dataModeLabel = connectionQuery.data?.mode === "ibkr" ? "IBKR gateway session" : "Mock snapshot";
   const executionModeLabel = executionEnabled ? "Gateway-routed execution" : "Disabled";
   const refreshCadenceLabel = "Conn 10s · Risk 15s · Chain 20s";
@@ -589,8 +376,6 @@ function App() {
   const connectionEndpointLabel = connectionQuery.data?.connected ? `Connected on ${connectionEndpoint}` : connectionEndpoint;
   const selectedDashboardAccount = getDashboardAccountByKey(selectedDashboardAccountKey);
   const selectedDashboardOwnsRoute = dashboardAccountOwnsRoute(selectedDashboardAccount.key, routedAccount);
-  const dashboardRisk = selectedDashboardOwnsRoute ? risk : null;
-  const dashboardPositions = selectedDashboardOwnsRoute ? positions : [];
   const dashboardOptionPositions = selectedDashboardOwnsRoute ? optionPositions : [];
   const dashboardOpenOrders = selectedDashboardOwnsRoute ? openOrders : [];
   const globalSourceCards: AccountConnectorCard[] = [
@@ -807,32 +592,6 @@ function App() {
         detectFooter: patch.detectFooter ?? current[connectorId]?.detectFooter ?? true,
       },
     }));
-  }
-
-  async function runEdgarDownload(request: EdgarDownloadRequest) {
-    setEdgarSyncing(true);
-    setEdgarSyncError(null);
-    try {
-      const result = await edgarDownloadMutation.mutateAsync(request);
-      setEdgarSyncResult(result);
-    } catch (error) {
-      setEdgarSyncError(error instanceof Error ? error.message : "EDGAR sync failed.");
-    } finally {
-      setEdgarSyncing(false);
-    }
-  }
-
-  async function runInvestorPdfDownload(request: InvestorPdfDownloadRequest) {
-    setInvestorPdfSyncing(true);
-    setInvestorPdfSyncError(null);
-    try {
-      const result = await investorPdfDownloadMutation.mutateAsync(request);
-      setInvestorPdfSyncResult(result);
-    } catch (error) {
-      setInvestorPdfSyncError(error instanceof Error ? error.message : "Investor PDF sync failed.");
-    } finally {
-      setInvestorPdfSyncing(false);
-    }
   }
 
   function openSymbolWorkspace(nextSymbol: string, nextWorkspace: "ticker" | "options") {
@@ -1552,194 +1311,173 @@ function App() {
     );
   }
 
-  return (
-    <div className={`app-shell grid-shell min-h-screen text-text ${sidebarOpen ? "is-sidebar-open" : ""}`}>
-      <div className="shell-topbar">
-        <div className="shell-topbar-inner mx-auto w-full max-w-[1880px]">
-          <button
-            aria-expanded={sidebarOpen}
-            aria-label={sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
-            className="shell-toggle"
-            onClick={() => setSidebarOpen((value) => !value)}
-            type="button"
-          >
-            <SidebarToggleIcon open={sidebarOpen} />
-          </button>
-          <button
-            aria-label="Go to dashboard"
-            aria-pressed={activeWorkspace === "dashboard"}
-            className={`shell-toggle shell-home-button ${activeWorkspace === "dashboard" ? "is-active" : ""}`}
-            onClick={() => {
-              setActiveWorkspace("dashboard");
-              setAccountSettingsOpen(false);
-            }}
-            type="button"
-          >
-            <HomeIcon />
-          </button>
-          <div className="shell-topbar-spacer" />
-        </div>
-      </div>
+  function renderOptionsWorkspace() {
+    return (
+      <OptionsWorkspace
+        connectionStatus={connectionQuery.data}
+        controlsDisabled={connectMutation.isPending || reconnectMutation.isPending}
+        executionEnabled={executionEnabled}
+        initialSymbol={selectedStockSymbol}
+        onOpenChain={() => setActiveWorkspace("options")}
+        onSymbolChange={setSelectedStockSymbol}
+        openOrders={openOrders}
+        optionPositions={optionPositions}
+        selectedAccount={selectedAccount}
+        workspace={activeWorkspace as OptionsWorkspaceSurface}
+      />
+    );
+  }
 
-      <div className="mx-auto w-full max-w-[1880px]">
+  const workspaceRoutes: Array<WorkspaceRoute<WorkspaceSurface>> = [
+    { key: "dashboard", render: renderDashboardWorkspace },
+    { key: "market", render: () => <StockMarketWorkspace gatewayPill={marketGatewayPill} onOpenSymbol={openSymbolWorkspace} /> },
+    { key: "ticker", render: renderTickerWorkspace },
+    { key: "options", render: renderOptionsWorkspace },
+    { key: "optionsValuation", render: renderOptionsWorkspace },
+    { key: "optionsBuilder", render: renderOptionsWorkspace },
+    { key: "optionsStructures", render: renderOptionsWorkspace },
+    { key: "optionsVolatility", render: renderOptionsWorkspace },
+    { key: "optionsScanner", render: renderOptionsWorkspace },
+    { key: "crypto", render: () => <CryptoMarketWorkspace /> },
+    { key: "cryptoLeverage", render: () => <CryptoLeverageWorkspace /> },
+    { key: "stockIntel", render: renderStockIntelWorkspace },
+    { key: "globalSettings", render: renderGlobalSettingsWorkspace },
+  ];
 
-        <div className="shell-frame">
-          <div className="shell-sidebar-wrap">
-            <aside aria-label="App shell" className="shell-sidebar">
-              <div className="shell-sidebar-body">
-                <div className="shell-sidebar-scroll">
-                  <div className="shell-source-list">
-                    <ShellSourceGroup title="Stocks">
-                      <ShellSourceRow
-                        active={activeWorkspace === "market"}
-                        icon={<MarketIcon />}
-                        onSelect={() => setActiveWorkspace("market")}
-                        testId="nav-stocks-market"
-                        title="Market"
-                        tone="live"
-                      />
+  const sidebarContent = (
+    <div className="shell-source-list">
+      <ShellSourceGroup title="Stocks">
+        <ShellSourceRow
+          active={activeWorkspace === "market"}
+          icon={<MarketIcon />}
+          onSelect={() => setActiveWorkspace("market")}
+          testId="nav-stocks-market"
+          title="Market"
+          tone="live"
+        />
 
-                      <ShellSourceRow
-                        active={activeWorkspace === "ticker"}
-                        icon={<BrokerIcon />}
-                        onSelect={() => setActiveWorkspace("ticker")}
-                        testId="nav-stocks-ticker"
-                        title="Ticker"
-                        tone="live"
-                      />
+        <ShellSourceRow
+          active={activeWorkspace === "ticker"}
+          icon={<BrokerIcon />}
+          onSelect={() => setActiveWorkspace("ticker")}
+          testId="nav-stocks-ticker"
+          title="Ticker"
+          tone="live"
+        />
 
-                      <ShellSourceRow
-                        active={activeWorkspace === "stockIntel"}
-                        icon={<DocumentIcon />}
-                        onSelect={() => setActiveWorkspace("stockIntel")}
-                        testId="nav-stocks-intel"
-                        title="Stock Intel"
-                        tone="live"
-                      />
+        <ShellSourceRow
+          active={activeWorkspace === "stockIntel"}
+          icon={<DocumentIcon />}
+          onSelect={() => setActiveWorkspace("stockIntel")}
+          testId="nav-stocks-intel"
+          title="Stock Intel"
+          tone="live"
+        />
 
-                      <ShellSourceSubsection title="Options" />
+        <ShellSourceSubsection title="Options" />
 
-                      <ShellSourceRow
-                        active={activeWorkspace === "options"}
-                        icon={<OptionsIcon />}
-                        onSelect={() => setActiveWorkspace("options")}
-                        testId="nav-options-chain"
-                        title="Chain"
-                        tone="live"
-                      />
+        <ShellSourceRow
+          active={activeWorkspace === "options"}
+          icon={<OptionsIcon />}
+          onSelect={() => setActiveWorkspace("options")}
+          testId="nav-options-chain"
+          title="Chain"
+          tone="live"
+        />
 
-                      <ShellSourceRow
-                        active={activeWorkspace === "optionsValuation"}
-                        icon={<ValuationIcon />}
-                        onSelect={() => setActiveWorkspace("optionsValuation")}
-                        testId="nav-options-valuation"
-                        title="Valuation"
-                        tone="live"
-                      />
+        <ShellSourceRow
+          active={activeWorkspace === "optionsValuation"}
+          icon={<ValuationIcon />}
+          onSelect={() => setActiveWorkspace("optionsValuation")}
+          testId="nav-options-valuation"
+          title="Valuation"
+          tone="live"
+        />
 
-                      <ShellSourceRow
-                        active={activeWorkspace === "optionsBuilder"}
-                        icon={<BuilderIcon />}
-                        onSelect={() => setActiveWorkspace("optionsBuilder")}
-                        testId="nav-options-builder"
-                        title="Builder"
-                        tone="live"
-                      />
+        <ShellSourceRow
+          active={activeWorkspace === "optionsBuilder"}
+          icon={<BuilderIcon />}
+          onSelect={() => setActiveWorkspace("optionsBuilder")}
+          testId="nav-options-builder"
+          title="Builder"
+          tone="live"
+        />
 
-                      <ShellSourceRow
-                        active={activeWorkspace === "optionsStructures"}
-                        icon={<StructuresIcon />}
-                        onSelect={() => setActiveWorkspace("optionsStructures")}
-                        testId="nav-options-structures"
-                        title="Structures"
-                        tone="live"
-                      />
+        <ShellSourceRow
+          active={activeWorkspace === "optionsStructures"}
+          icon={<StructuresIcon />}
+          onSelect={() => setActiveWorkspace("optionsStructures")}
+          testId="nav-options-structures"
+          title="Structures"
+          tone="live"
+        />
 
-                      <ShellSourceRow
-                        active={activeWorkspace === "optionsVolatility"}
-                        icon={<VolatilityIcon />}
-                        onSelect={() => setActiveWorkspace("optionsVolatility")}
-                        testId="nav-options-volatility"
-                        title="Volatility"
-                        tone="live"
-                      />
+        <ShellSourceRow
+          active={activeWorkspace === "optionsVolatility"}
+          icon={<VolatilityIcon />}
+          onSelect={() => setActiveWorkspace("optionsVolatility")}
+          testId="nav-options-volatility"
+          title="Volatility"
+          tone="live"
+        />
 
-                      <ShellSourceRow
-                        active={activeWorkspace === "optionsScanner"}
-                        icon={<ScannerIcon />}
-                        onSelect={() => setActiveWorkspace("optionsScanner")}
-                        testId="nav-options-scanner"
-                        title="Scanner"
-                        tone="live"
-                      />
-                    </ShellSourceGroup>
+        <ShellSourceRow
+          active={activeWorkspace === "optionsScanner"}
+          icon={<ScannerIcon />}
+          onSelect={() => setActiveWorkspace("optionsScanner")}
+          testId="nav-options-scanner"
+          title="Scanner"
+          tone="live"
+        />
+      </ShellSourceGroup>
 
-                    <ShellSourceGroup title="Crypto">
-                      <ShellSourceRow
-                        active={activeWorkspace === "crypto"}
-                        icon={<MarketIcon />}
-                        onSelect={() => setActiveWorkspace("crypto")}
-                        title="Market"
-                        tone="live"
-                      />
+      <ShellSourceGroup title="Crypto">
+        <ShellSourceRow
+          active={activeWorkspace === "crypto"}
+          icon={<MarketIcon />}
+          onSelect={() => setActiveWorkspace("crypto")}
+          title="Market"
+          tone="live"
+        />
 
-                      <ShellSourceRow
-                        active={activeWorkspace === "cryptoLeverage"}
-                        icon={<LeverageIcon />}
-                        onSelect={() => setActiveWorkspace("cryptoLeverage")}
-                        title="Leverage"
-                        tone="live"
-                      />
-                    </ShellSourceGroup>
-                  </div>
-                </div>
-
-                <div className="shell-sidebar-footer">
-                  <button
-                    className={`shell-settings-row ${activeWorkspace === "globalSettings" ? "is-active" : ""}`}
-                    onClick={() => setActiveWorkspace("globalSettings")}
-                    type="button"
-                  >
-                    <span className="shell-row-icon">
-                      <GearIcon />
-                    </span>
-                    <span className="shell-settings-label">Global Settings</span>
-                  </button>
-                </div>
-              </div>
-            </aside>
-          </div>
-
-          <div className="shell-stage">
-            <WorkspaceStage>
-              {activeWorkspace === "dashboard" ? renderDashboardWorkspace() : null}
-              {activeWorkspace === "market" ? (
-                <StockMarketWorkspace gatewayPill={marketGatewayPill} onOpenSymbol={openSymbolWorkspace} />
-              ) : null}
-              {activeWorkspace === "ticker" ? renderTickerWorkspace() : null}
-              {isOptionsWorkspace(activeWorkspace) ? (
-                <OptionsWorkspace
-                  connectionStatus={connectionQuery.data}
-                  controlsDisabled={connectMutation.isPending || reconnectMutation.isPending}
-                  executionEnabled={executionEnabled}
-                  initialSymbol={selectedStockSymbol}
-                  onOpenChain={() => setActiveWorkspace("options")}
-                  onSymbolChange={setSelectedStockSymbol}
-                  openOrders={openOrders}
-                  optionPositions={optionPositions}
-                  selectedAccount={selectedAccount}
-                  workspace={activeWorkspace as OptionsWorkspaceSurface}
-                />
-              ) : null}
-              {activeWorkspace === "crypto" ? <CryptoMarketWorkspace /> : null}
-              {activeWorkspace === "cryptoLeverage" ? <CryptoLeverageWorkspace /> : null}
-              {activeWorkspace === "stockIntel" ? renderStockIntelWorkspace() : null}
-              {activeWorkspace === "globalSettings" ? renderGlobalSettingsWorkspace() : null}
-            </WorkspaceStage>
-          </div>
-        </div>
-      </div>
+        <ShellSourceRow
+          active={activeWorkspace === "cryptoLeverage"}
+          icon={<LeverageIcon />}
+          onSelect={() => setActiveWorkspace("cryptoLeverage")}
+          title="Leverage"
+          tone="live"
+        />
+      </ShellSourceGroup>
     </div>
+  );
+
+  const sidebarFooter = (
+    <button
+      className={`shell-settings-row ${activeWorkspace === "globalSettings" ? "is-active" : ""}`}
+      onClick={() => setActiveWorkspace("globalSettings")}
+      type="button"
+    >
+      <span className="shell-row-icon">
+        <GearIcon />
+      </span>
+      <span className="shell-settings-label">Global Settings</span>
+    </button>
+  );
+
+  return (
+    <AppShell
+      activeIsHome={activeWorkspace === "dashboard"}
+      footer={sidebarFooter}
+      onHome={() => {
+        setActiveWorkspace("dashboard");
+        setAccountSettingsOpen(false);
+      }}
+      sidebar={sidebarContent}
+    >
+      <WorkspaceStage>
+        <WorkspaceRouter activeWorkspace={activeWorkspace} routes={workspaceRoutes} />
+      </WorkspaceStage>
+    </AppShell>
   );
 }
 
@@ -1858,18 +1596,6 @@ function ShellSourceRow({
 
 function slugifyTestId(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
-}
-
-function SidebarToggleIcon({ open }: { open: boolean }) {
-  const panelX = open ? 5.15 : 7.35;
-  const panelWidth = open ? 4.15 : 2.1;
-
-  return (
-    <svg aria-hidden="true" fill="none" height="24" viewBox="0 0 24 24" width="24">
-      <rect height="17" rx="4.5" stroke="currentColor" strokeWidth="1.75" width="17" x="3.5" y="3.5" />
-      <rect fill="currentColor" height="13.2" rx="1.2" width={panelWidth} x={panelX} y="5.4" />
-    </svg>
-  );
 }
 
 function BrokerIcon() {
@@ -2022,28 +1748,6 @@ function GearIcon() {
         strokeWidth="1.35"
       />
       <circle cx="10" cy="10" r="2.35" stroke="currentColor" strokeWidth="1.35" />
-    </svg>
-  );
-}
-
-function HomeIcon() {
-  return (
-    <svg aria-hidden="true" fill="none" height="24" viewBox="0 0 24 24" width="24">
-      <path
-        d="M3.9 10.6 12 4.1l8.1 6.5"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth="2"
-      />
-      <path
-        d="M5.55 10v9h12.9v-9"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth="2"
-      />
-      <path d="M9.25 19v-5.3h5.5V19" stroke="currentColor" strokeLinejoin="round" strokeWidth="2" />
     </svg>
   );
 }
