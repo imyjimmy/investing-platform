@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
-import { api } from "../lib/api";
+import { sourceApi } from "../lib/api";
+import { queryKeys } from "../lib/queryKeys";
 import type { InvestorPdfDownloadRequest, InvestorPdfDownloadResponse, InvestorPdfSourceStatus } from "../lib/types";
 import {
   workspaceBodyClassName,
@@ -108,8 +109,8 @@ export function InvestorPdfsWorkspace({
   };
 
   const lastSyncQuery = useQuery({
-    queryKey: ["investor-pdfs-last-sync", request],
-    queryFn: () => api.investorPdfLastSync(request),
+    queryKey: queryKeys.sources.investorPdfLastSync(request),
+    queryFn: () => sourceApi.investorPdfLastSync(request),
     enabled: Boolean(status?.available) && Boolean(identifierValue) && !syncing && stockTemplateValid && !formValidationError,
     staleTime: 30_000,
     retry: false,

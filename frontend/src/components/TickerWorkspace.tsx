@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
-import { api } from "../lib/api";
+import { marketApi } from "../lib/api";
 import {
   formatTimestamp,
   fmtCompactCurrency,
@@ -13,6 +13,7 @@ import {
   fmtSignedPct,
   fmtWholeNumber,
 } from "../lib/formatters";
+import { queryKeys } from "../lib/queryKeys";
 import type {
   ConnectionStatus,
   Position,
@@ -53,8 +54,8 @@ export function TickerWorkspace({
   const [symbolInput, setSymbolInput] = useState(symbol);
   const [stockTradeRailOpen, setStockTradeRailOpen] = useState<boolean>(() => readStockTradeRailOpen());
   const tickerOverviewQuery = useQuery({
-    queryKey: ["ticker-overview", symbol],
-    queryFn: () => api.tickerOverview(symbol),
+    queryKey: queryKeys.market.tickerOverview(symbol),
+    queryFn: () => marketApi.tickerOverview(symbol),
     enabled: Boolean(symbol.trim()),
     refetchInterval: false,
     staleTime: 120_000,
@@ -62,8 +63,8 @@ export function TickerWorkspace({
   const tickerOverview = tickerOverviewQuery.data;
   const tickerOverviewError = tickerOverviewQuery.error instanceof Error ? tickerOverviewQuery.error.message : null;
   const tickerFinancialsQuery = useQuery({
-    queryKey: ["ticker-financials", symbol],
-    queryFn: () => api.tickerFinancials(symbol),
+    queryKey: queryKeys.market.tickerFinancials(symbol),
+    queryFn: () => marketApi.tickerFinancials(symbol),
     enabled: Boolean(symbol.trim()),
     refetchInterval: false,
     staleTime: 120_000,

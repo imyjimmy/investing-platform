@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
-import { api } from "../../lib/api";
+import { executionApi } from "../../lib/api";
 import { fmtCurrencySmall, fmtNumber } from "../../lib/formatters";
+import { queryKeys } from "../../lib/queryKeys";
 import type { ConnectionStatus, StockOrderPreview, StockOrderRequest, SubmittedOrder, TickerOverviewResponse } from "../../lib/types";
 import { ErrorState } from "../ui/ErrorState";
 import { activeTradingAccount, buildTradingAccountOptions } from "./tradingAccounts";
@@ -55,17 +56,17 @@ export function StockTradeTicket({
       : null;
   const ticketRequestKey = ticketRequest ? JSON.stringify(ticketRequest) : null;
   const previewMutation = useMutation({
-    mutationFn: api.previewStockOrder,
+    mutationFn: executionApi.previewStockOrder,
     onSuccess: (_data, variables) => setPreviewRequestKey(JSON.stringify(variables)),
   });
   const submitMutation = useMutation({
-    mutationFn: api.submitStockOrder,
+    mutationFn: executionApi.submitStockOrder,
     onSuccess: async (_data, variables) => {
       setPreviewRequestKey(JSON.stringify(variables));
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["risk-summary", variables.accountId] }),
-        queryClient.invalidateQueries({ queryKey: ["positions", variables.accountId] }),
-        queryClient.invalidateQueries({ queryKey: ["open-orders", variables.accountId] }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.account.riskSummary(variables.accountId) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.account.positions(variables.accountId) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.account.openOrders(variables.accountId) }),
       ]);
     },
   });

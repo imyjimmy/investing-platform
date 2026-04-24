@@ -1,7 +1,8 @@
 import { startTransition, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
-import { api } from "../../lib/api";
+import { marketApi } from "../../lib/api";
+import { queryKeys } from "../../lib/queryKeys";
 import type { ChainRow, OptionChainResponse } from "../../lib/types";
 import type { ChainBandDirection, ChainRowDisplayState } from "./OptionsChainTable";
 
@@ -141,9 +142,9 @@ export function useOptionChain(initialSymbol = "NVDA") {
   const chainRefreshPendingRef = useRef(false);
 
   const chainQuery = useQuery({
-    queryKey: ["chain", chainSymbol, selectedExpiry],
+    queryKey: queryKeys.market.optionChain(chainSymbol, selectedExpiry),
     queryFn: () =>
-      api.chain(
+      marketApi.chain(
         chainSymbol,
         selectedExpiry,
         MAX_CHAIN_STRIKE_LIMIT,
@@ -157,8 +158,8 @@ export function useOptionChain(initialSymbol = "NVDA") {
   });
 
   const tickerOverviewQuery = useQuery({
-    queryKey: ["ticker-overview", chainSymbol],
-    queryFn: () => api.tickerOverview(chainSymbol),
+    queryKey: queryKeys.market.tickerOverview(chainSymbol),
+    queryFn: () => marketApi.tickerOverview(chainSymbol),
     enabled: Boolean(chainSymbol.trim()),
     refetchInterval: false,
     staleTime: 120_000,
@@ -261,7 +262,7 @@ export function useOptionChain(initialSymbol = "NVDA") {
       const requestExpiry = chain.selectedExpiry;
       chainRefreshPendingRef.current = true;
       setRowFreshness(markRowsRefreshing(chain.rows, staleBand));
-      void api
+      void marketApi
         .chain(requestSymbol, requestExpiry, MAX_CHAIN_STRIKE_LIMIT, undefined, undefined, staleBand.min, staleBand.max)
         .then((nextChain) => {
           const latestChain = activeDisplayedChainRef.current;
@@ -338,7 +339,7 @@ export function useOptionChain(initialSymbol = "NVDA") {
     chainWindowDebounceRef.current = window.setTimeout(() => {
       chainWindowDebounceRef.current = null;
       chainBandFetchPendingRef.current = true;
-      void api
+      void marketApi
         .chain(requestSymbol, requestExpiry, MAX_CHAIN_STRIKE_LIMIT, undefined, undefined, nextRange.min, nextRange.max)
         .then((nextChain) => {
           const latestChain = activeDisplayedChainRef.current;

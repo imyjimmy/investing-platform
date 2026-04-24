@@ -1,8 +1,9 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
-import { api } from "../../lib/api";
+import { executionApi } from "../../lib/api";
 import { fmtCurrencySmall, fmtNumber } from "../../lib/formatters";
+import { queryKeys } from "../../lib/queryKeys";
 import type {
   ChainRow,
   ConnectionStatus,
@@ -173,27 +174,27 @@ export function OptionsWorkspace({
   } = useOptionChain(normalizedInitialSymbol);
 
   const previewMutation = useMutation({
-    mutationFn: api.previewOptionOrder,
+    mutationFn: executionApi.previewOptionOrder,
     onSuccess: (_data, variables) => setPreviewRequestKey(JSON.stringify(variables)),
   });
   const submitMutation = useMutation({
-    mutationFn: api.submitOptionOrder,
+    mutationFn: executionApi.submitOptionOrder,
     onSuccess: async (_data, variables) => {
       setPreviewRequestKey(JSON.stringify(variables));
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["risk-summary", selectedAccount] }),
-        queryClient.invalidateQueries({ queryKey: ["option-positions", selectedAccount] }),
-        queryClient.invalidateQueries({ queryKey: ["open-orders", selectedAccount] }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.account.riskSummary(selectedAccount) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.account.optionPositions(selectedAccount) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.account.openOrders(selectedAccount) }),
       ]);
     },
   });
   const cancelMutation = useMutation({
-    mutationFn: ({ orderId, accountId }: { orderId: number; accountId: string }) => api.cancelOrder(orderId, accountId),
+    mutationFn: ({ orderId, accountId }: { orderId: number; accountId: string }) => executionApi.cancelOrder(orderId, accountId),
     onSuccess: async () => {
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["risk-summary", selectedAccount] }),
-        queryClient.invalidateQueries({ queryKey: ["option-positions", selectedAccount] }),
-        queryClient.invalidateQueries({ queryKey: ["open-orders", selectedAccount] }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.account.riskSummary(selectedAccount) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.account.optionPositions(selectedAccount) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.account.openOrders(selectedAccount) }),
       ]);
     },
   });

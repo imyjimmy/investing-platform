@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
-import { api } from "../lib/api";
+import { sourceApi } from "../lib/api";
+import { queryKeys } from "../lib/queryKeys";
 import type { EdgarDownloadRequest, EdgarDownloadResponse, EdgarSourceStatus } from "../lib/types";
 import {
   workspaceBodyClassName,
@@ -114,8 +115,8 @@ export function EdgarWorkspace({
   });
 
   const lastSyncQuery = useQuery({
-    queryKey: ["edgar-last-sync", request],
-    queryFn: () => api.edgarLastSync(request),
+    queryKey: queryKeys.sources.edgarLastSync(request),
+    queryFn: () => sourceApi.edgarLastSync(request),
     enabled: Boolean(status?.available) && Boolean(identifierValue) && !syncing && identifierValue.length >= (lookupMode === "companyName" ? 3 : 1),
     staleTime: 30_000,
     retry: false,

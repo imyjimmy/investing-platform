@@ -1,11 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
 
-import { api } from "../../lib/api";
+import { marketApi } from "../../lib/api";
+import { queryKeys } from "../../lib/queryKeys";
 
 export function useCryptoMajors() {
   return useQuery({
-    queryKey: ["crypto-majors"],
-    queryFn: api.cryptoMajors,
+    queryKey: queryKeys.market.cryptoMajors,
+    queryFn: marketApi.cryptoMajors,
     refetchInterval: 60_000,
     staleTime: 30_000,
   });
