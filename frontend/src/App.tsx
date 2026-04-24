@@ -30,8 +30,6 @@ import { AccountConnectorSection } from "./components/AccountConnectorSection";
 import { CoinbaseAccountSource } from "./components/account-sources/CoinbaseAccountSource";
 import { FilesystemAccountSourceContent } from "./components/account-sources/FilesystemAccountSourceContent";
 import { FilesystemAccountSourceList } from "./components/account-sources/FilesystemAccountSourceList";
-import { EdgarWorkspace } from "./components/EdgarWorkspace";
-import { InvestorPdfsWorkspace } from "./components/InvestorPdfsWorkspace";
 import { MetricCard } from "./components/MetricCard";
 import { TickerWorkspace } from "./components/TickerWorkspace";
 import { Panel } from "./components/Panel";
@@ -39,13 +37,13 @@ import { AppShell } from "./components/shell/AppShell";
 import { ToolWorkspaceFrame } from "./components/shell/ToolWorkspaceFrame";
 import { WorkspaceStage } from "./components/shell/WorkspaceStage";
 import { WorkspaceRouter, type WorkspaceRoute } from "./components/shell/WorkspaceRouter";
-import { ChromeTabs } from "./components/ui/ChromeTabs";
 import { useAccountData } from "./features/account/useAccountData";
 import { CryptoLeverageWorkspace } from "./features/crypto/CryptoLeverageWorkspace";
 import { CryptoMarketWorkspace } from "./features/crypto/CryptoMarketWorkspace";
 import { OptionsWorkspace, type OptionsWorkspaceSurface } from "./features/options/OptionsWorkspace";
 import { useConnectorSources, type ConnectorDraftState } from "./features/sources/useConnectorSources";
-import { useStockIntelSync } from "./features/stock-intel/useStockIntelSync";
+import { StockIntelWorkspace } from "./features/stock-intel/StockIntelWorkspace";
+import { useStockIntelSourceStatus } from "./features/stock-intel/useStockIntelSourceStatus";
 import { StockMarketWorkspace } from "./features/stocks/market/StockMarketWorkspace";
 
 function pnlTone(value: number | null | undefined) {
@@ -285,21 +283,13 @@ function App() {
     setSelectedAccountId,
   } = useAccountData();
   const {
-    activeStockIntelTab,
     edgarStatusError,
     edgarStatusQuery,
-    edgarSyncError,
     edgarSyncing,
-    edgarSyncResult,
     investorPdfStatusError,
     investorPdfStatusQuery,
-    investorPdfSyncError,
     investorPdfSyncing,
-    investorPdfSyncResult,
-    runEdgarDownload,
-    runInvestorPdfDownload,
-    setActiveStockIntelTab,
-  } = useStockIntelSync();
+  } = useStockIntelSourceStatus();
   const {
     coinbasePortfolioError,
     coinbasePortfolioQuery,
@@ -1269,46 +1259,7 @@ function App() {
   }
 
   function renderStockIntelWorkspace() {
-    return (
-      <>
-        <ChromeTabs
-          activeKey={activeStockIntelTab}
-          ariaLabel="Stock Intel tools"
-          onSelect={setActiveStockIntelTab}
-          tabs={[
-            { key: "sec", label: "SEC Tool" },
-            { key: "companyPdfs", label: "Company PDFs" },
-          ]}
-        />
-        {activeStockIntelTab === "sec" ? (
-          <EdgarWorkspace
-            defaultTicker={selectedStockSymbol}
-            onRun={(request) => {
-              void runEdgarDownload(request);
-            }}
-            status={edgarStatusQuery.data}
-            statusLoading={edgarStatusQuery.isLoading}
-            statusError={edgarStatusError}
-            syncError={edgarSyncError}
-            syncResult={edgarSyncResult}
-            syncing={edgarSyncing}
-          />
-        ) : (
-          <InvestorPdfsWorkspace
-            defaultTicker={selectedStockSymbol}
-            onRun={(request) => {
-              void runInvestorPdfDownload(request);
-            }}
-            status={investorPdfStatusQuery.data}
-            statusLoading={investorPdfStatusQuery.isLoading}
-            statusError={investorPdfStatusError}
-            syncError={investorPdfSyncError}
-            syncResult={investorPdfSyncResult}
-            syncing={investorPdfSyncing}
-          />
-        )}
-      </>
-    );
+    return <StockIntelWorkspace defaultTicker={selectedStockSymbol} />;
   }
 
   function renderOptionsWorkspace() {
