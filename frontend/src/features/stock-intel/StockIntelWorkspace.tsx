@@ -1,6 +1,7 @@
 import { EdgarWorkspace } from "../../components/EdgarWorkspace";
 import { InvestorPdfsWorkspace } from "../../components/InvestorPdfsWorkspace";
 import { ChromeTabs } from "../../components/ui/ChromeTabs";
+import { stockIntelTabs } from "./stockIntelTabs";
 import { useStockIntelSync } from "./useStockIntelSync";
 
 type StockIntelWorkspaceProps = {
@@ -31,10 +32,7 @@ export function StockIntelWorkspace({ defaultTicker }: StockIntelWorkspaceProps)
         activeKey={activeStockIntelTab}
         ariaLabel="Stock Intel tools"
         onSelect={setActiveStockIntelTab}
-        tabs={[
-          { key: "sec", label: "SEC Tool" },
-          { key: "companyPdfs", label: "Company PDFs" },
-        ]}
+        tabs={stockIntelTabs}
       />
       {activeStockIntelTab === "sec" ? (
         <EdgarWorkspace

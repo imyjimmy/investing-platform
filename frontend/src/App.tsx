@@ -41,9 +41,9 @@ import { useAccountData } from "./features/account/useAccountData";
 import { CryptoLeverageWorkspace } from "./features/crypto/CryptoLeverageWorkspace";
 import { CryptoMarketWorkspace } from "./features/crypto/CryptoMarketWorkspace";
 import { OptionsWorkspace, type OptionsWorkspaceSurface } from "./features/options/OptionsWorkspace";
+import { useStockIntelOverview } from "./features/stock-intel/useStockIntelOverview";
 import { useConnectorSources, type ConnectorDraftState } from "./features/sources/useConnectorSources";
 import { StockIntelWorkspace } from "./features/stock-intel/StockIntelWorkspace";
-import { useStockIntelSourceStatus } from "./features/stock-intel/useStockIntelSourceStatus";
 import { StockMarketWorkspace } from "./features/stocks/market/StockMarketWorkspace";
 
 function pnlTone(value: number | null | undefined) {
@@ -282,14 +282,7 @@ function App() {
     selectedAccount,
     setSelectedAccountId,
   } = useAccountData();
-  const {
-    edgarStatusError,
-    edgarStatusQuery,
-    edgarSyncing,
-    investorPdfStatusError,
-    investorPdfStatusQuery,
-    investorPdfSyncing,
-  } = useStockIntelSourceStatus();
+  const { researchRootPath, sourceCards: stockIntelSourceCards } = useStockIntelOverview();
   const {
     coinbasePortfolioError,
     coinbasePortfolioQuery,
@@ -397,24 +390,10 @@ function App() {
       countsTowardHealth: true,
       icon: <MarketIcon />,
     },
-    {
-      id: "edgar",
-      title: "EDGAR",
-      status: edgarStatusQuery.isLoading ? "Checking" : edgarSyncing ? "Syncing" : edgarStatusQuery.data?.available ? "Ready" : "Offline",
-      detail: edgarStatusQuery.isLoading ? "Loading SEC filing source state" : edgarStatusError ?? "SEC filing research source",
-      tone: edgarStatusQuery.isLoading ? "caution" : edgarStatusQuery.data?.available ? "safe" : "danger",
-      countsTowardHealth: true,
-      icon: <DocumentIcon />,
-    },
-    {
-      id: "investor-pdfs",
-      title: "Investor PDFs",
-      status: investorPdfStatusQuery.isLoading ? "Checking" : investorPdfSyncing ? "Syncing" : investorPdfStatusQuery.data?.available ? "Ready" : "Offline",
-      detail: investorPdfStatusQuery.isLoading ? "Loading investor PDF source state" : investorPdfStatusError ?? "Annual reports and exhibit PDF library",
-      tone: investorPdfStatusQuery.isLoading ? "caution" : investorPdfStatusQuery.data?.available ? "safe" : "danger",
-      countsTowardHealth: true,
-      icon: <PdfLibraryIcon />,
-    },
+    ...stockIntelSourceCards.map((source) => ({
+      ...source,
+      icon: source.id === "edgar" ? <DocumentIcon /> : <PdfLibraryIcon />,
+    })),
   ];
   function buildIbkrConnectorCard(accountKey: DashboardAccountKey): AccountConnectorCard {
     const ownsRoute = dashboardAccountOwnsRoute(accountKey, routedAccount);
@@ -1233,7 +1212,7 @@ function App() {
               <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-3">
                 <div className="text-[11px] uppercase tracking-[0.18em] text-muted">Research root</div>
                 <div className="mt-2 text-sm font-medium text-text">
-                  {edgarStatusQuery.data ? shortenPath(edgarStatusQuery.data.researchRootPath) : "Loading"}
+                  {researchRootPath ? shortenPath(researchRootPath) : "Loading"}
                 </div>
               </div>
             </div>

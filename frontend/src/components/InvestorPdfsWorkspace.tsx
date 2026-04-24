@@ -5,12 +5,22 @@ import { sourceApi } from "../lib/api";
 import { queryKeys } from "../lib/queryKeys";
 import type { InvestorPdfDownloadRequest, InvestorPdfDownloadResponse, InvestorPdfSourceStatus } from "../lib/types";
 import {
+  matchesInvestorPdfIssuer,
+  stockIntelLookupOptions,
+  type StockIntelLookupMode,
+} from "../features/stock-intel/issuer";
+import {
+  buildInvestorPdfDownloadRequest,
+  deriveOutputRootFromStockTemplate,
+  isStockFolderTemplate,
+  materializeStockFolder,
+} from "../features/stock-intel/requests";
+import {
   workspaceEyebrowClassName,
   workspaceTitleClassName,
 } from "./shell/WorkspaceStage";
 import { WorkspaceFrame } from "./shell/WorkspaceFrame";
 
-type LookupMode = "ticker" | "companyName" | "cik";
 type WindowMode = "rolling" | "exact";
 
 interface InvestorPdfsWorkspaceProps {
@@ -23,12 +33,6 @@ interface InvestorPdfsWorkspaceProps {
   syncResult?: InvestorPdfDownloadResponse;
   syncing: boolean;
 }
-
-const lookupOptions: Array<{ label: string; value: LookupMode }> = [
-  { value: "ticker", label: "Ticker" },
-  { value: "companyName", label: "Company" },
-  { value: "cik", label: "CIK" },
-];
 
 const windowOptions: Array<{ label: string; value: WindowMode }> = [
   { value: "rolling", label: "Rolling window" },
@@ -48,7 +52,7 @@ export function InvestorPdfsWorkspace({
   syncResult,
   syncing,
 }: InvestorPdfsWorkspaceProps) {
-  const [lookupMode, setLookupMode] = useState<LookupMode>("ticker");
+  const [lookupMode, setLookupMode] = useState<StockIntelLookupMode>("ticker");
   const [tickerValue, setTickerValue] = useState(defaultTicker);
   const [companyNameValue, setCompanyNameValue] = useState("");
   const [cikValue, setCikValue] = useState("");
@@ -89,21 +93,22 @@ export function InvestorPdfsWorkspace({
   const dateRangeError = dateRangeValid ? null : "Start date must be on or before end date.";
   const formValidationError = windowMode === "rolling" ? lookbackYearsError : dateRangeError;
 
-  const request: InvestorPdfDownloadRequest = {
-    ticker: lookupMode === "ticker" ? normalizedTicker : undefined,
-    companyName: lookupMode === "companyName" ? normalizedCompanyName : undefined,
-    cik: lookupMode === "cik" ? normalizedCik : undefined,
-    lookbackYears: effectiveLookbackYears,
-    startDate: effectiveStartDate || undefined,
+  const request = buildInvestorPdfDownloadRequest({
+    cik: normalizedCik,
+    companyName: normalizedCompanyName,
     endDate: effectiveEndDate || undefined,
-    outputDir: derivedOutputDir,
     includeAnnualReports: true,
     includeCompanyReports: true,
     includeEarningsDecks: false,
     includeInvestorPresentations: false,
     includeSecExhibits,
+    lookbackYears: effectiveLookbackYears,
+    lookupMode,
+    outputDir: derivedOutputDir,
     resume,
-  };
+    startDate: effectiveStartDate || undefined,
+    ticker: normalizedTicker,
+  });
 
   const lastSyncQuery = useQuery({
     queryKey: queryKeys.sources.investorPdfLastSync(request),
@@ -113,7 +118,7 @@ export function InvestorPdfsWorkspace({
     retry: false,
   });
 
-  const scopedSyncResult = matchesCurrentIssuer(syncResult, {
+  const scopedSyncResult = matchesInvestorPdfIssuer(syncResult, {
     cik: normalizedCik,
     companyName: normalizedCompanyName,
     lookupMode,
@@ -170,7 +175,7 @@ export function InvestorPdfsWorkspace({
               <section className="border-b border-line/70 pb-6">
                 <div className="text-[11px] uppercase tracking-[0.22em] text-muted">Issuer</div>
                 <div className="mt-3 flex gap-6 border-b border-line/70">
-                  {lookupOptions.map((option) => {
+                  {stockIntelLookupOptions.map((option) => {
                     const selected = option.value === lookupMode;
                     return (
                       <button
@@ -403,39 +408,6 @@ export function InvestorPdfsWorkspace({
           </div>
     </WorkspaceFrame>
   );
-}
-
-function matchesCurrentIssuer(
-  response: InvestorPdfDownloadResponse | undefined,
-  current: { cik: string; companyName: string; lookupMode: LookupMode; ticker: string },
-) {
-  if (!response) {
-    return false;
-  }
-  if (current.lookupMode === "ticker") {
-    return response.ticker === current.ticker;
-  }
-  if (current.lookupMode === "companyName") {
-    return response.companyName.toLowerCase() === current.companyName.toLowerCase();
-  }
-  return response.cik === current.cik;
-}
-
-function isStockFolderTemplate(value: string) {
-  const normalized = value.trim().replace(/\/+$/, "");
-  return normalized.endsWith("/stocks/[ticker]");
-}
-
-function deriveOutputRootFromStockTemplate(template: string, fallback: string | undefined) {
-  const normalized = template.trim().replace(/\/+$/, "");
-  if (normalized.endsWith("/stocks/[ticker]")) {
-    return normalized.slice(0, -"/stocks/[ticker]".length) || "/";
-  }
-  return fallback;
-}
-
-function materializeStockFolder(template: string, ticker: string) {
-  return template.replaceAll("[ticker]", ticker);
 }
 
 function describeWindow(result: InvestorPdfDownloadResponse) {

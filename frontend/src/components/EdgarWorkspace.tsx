@@ -5,6 +5,12 @@ import { sourceApi } from "../lib/api";
 import { queryKeys } from "../lib/queryKeys";
 import type { EdgarDownloadRequest, EdgarDownloadResponse, EdgarSourceStatus } from "../lib/types";
 import {
+  matchesEdgarIssuer,
+  stockIntelLookupOptions,
+  type StockIntelLookupMode,
+} from "../features/stock-intel/issuer";
+import { buildEdgarDownloadRequest, parseEdgarFormTypes } from "../features/stock-intel/requests";
+import {
   workspaceBodyClassName,
   workspaceDividedBodyClassName,
   workspaceEyebrowClassName,
@@ -12,7 +18,6 @@ import {
 } from "./shell/WorkspaceStage";
 import { WorkspaceFrame } from "./shell/WorkspaceFrame";
 
-type EdgarLookupMode = "ticker" | "companyName" | "cik";
 type EdgarDownloadMode = NonNullable<EdgarDownloadRequest["downloadMode"]>;
 
 interface EdgarWorkspaceProps {
@@ -25,12 +30,6 @@ interface EdgarWorkspaceProps {
   syncResult?: EdgarDownloadResponse;
   syncing: boolean;
 }
-
-const lookupOptions: Array<{ label: string; value: EdgarLookupMode }> = [
-  { value: "ticker", label: "Ticker" },
-  { value: "companyName", label: "Company" },
-  { value: "cik", label: "CIK" },
-];
 
 const modeOptions: Array<{ label: string; summary: string; value: EdgarDownloadMode }> = [
   {
@@ -70,7 +69,7 @@ export function EdgarWorkspace({
   syncResult,
   syncing,
 }: EdgarWorkspaceProps) {
-  const [lookupMode, setLookupMode] = useState<EdgarLookupMode>("ticker");
+  const [lookupMode, setLookupMode] = useState<StockIntelLookupMode>("ticker");
   const [tickerValue, setTickerValue] = useState(defaultTicker);
   const [companyNameValue, setCompanyNameValue] = useState("");
   const [cikValue, setCikValue] = useState("");
@@ -96,9 +95,9 @@ export function EdgarWorkspace({
   const normalizedCik = cikValue.trim();
   const identifierValue =
     lookupMode === "ticker" ? normalizedTicker : lookupMode === "companyName" ? normalizedCompanyName : normalizedCik;
-  const parsedForms = parseFormTypes(formTypesInput);
+  const parsedForms = parseEdgarFormTypes(formTypesInput);
 
-  const request = buildRequest({
+  const request = buildEdgarDownloadRequest({
     cik: normalizedCik,
     companyName: normalizedCompanyName,
     downloadMode,
@@ -120,7 +119,7 @@ export function EdgarWorkspace({
     retry: false,
   });
 
-  const scopedSyncResult = matchesCurrentIssuer(syncResult, {
+  const scopedSyncResult = matchesEdgarIssuer(syncResult, {
     cik: normalizedCik,
     companyName: normalizedCompanyName,
     lookupMode,
@@ -193,7 +192,7 @@ export function EdgarWorkspace({
                 <div className="mt-3 grid gap-3">
                   <div className="flex items-end justify-between gap-4">
                     <div className="flex gap-6 border-b border-line/70">
-                      {lookupOptions.map((option) => {
+                      {stockIntelLookupOptions.map((option) => {
                         const selected = option.value === lookupMode;
                         return (
                           <button
@@ -585,72 +584,6 @@ function InfoIcon() {
   return <span aria-hidden="true" className="text-[12px] font-semibold leading-none">i</span>;
 }
 
-function parseFormTypes(value: string) {
-  return Array.from(
-    new Set(
-      value
-        .split(/[\n,]+/)
-        .map((item) => item.trim().toUpperCase())
-        .filter(Boolean),
-    ),
-  );
-}
-
-function buildRequest({
-  cik,
-  companyName,
-  downloadMode,
-  endDate,
-  formTypes,
-  includeExhibits,
-  lookupMode,
-  outputDir,
-  resume,
-  startDate,
-  ticker,
-}: {
-  cik: string;
-  companyName: string;
-  downloadMode: EdgarDownloadMode;
-  endDate: string;
-  formTypes: string[];
-  includeExhibits: boolean;
-  lookupMode: EdgarLookupMode;
-  outputDir: string;
-  resume: boolean;
-  startDate: string;
-  ticker: string;
-}): EdgarDownloadRequest {
-  const request: EdgarDownloadRequest = {
-    downloadMode,
-    includeExhibits,
-    resume,
-  };
-
-  if (lookupMode === "ticker" && ticker) {
-    request.ticker = ticker;
-  }
-  if (lookupMode === "companyName" && companyName) {
-    request.companyName = companyName;
-  }
-  if (lookupMode === "cik" && cik) {
-    request.cik = cik;
-  }
-  if (formTypes.length > 0) {
-    request.formTypes = formTypes;
-  }
-  if (startDate) {
-    request.startDate = startDate;
-  }
-  if (endDate) {
-    request.endDate = endDate;
-  }
-  if (outputDir) {
-    request.outputDir = outputDir;
-  }
-  return request;
-}
-
 function formatMode(mode: EdgarDownloadMode) {
   return mode.replace(/-/g, " ");
 }
@@ -684,34 +617,6 @@ function formatTimestamp(value: string) {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(value));
-}
-
-function matchesCurrentIssuer(
-  syncResult: EdgarDownloadResponse | undefined,
-  issuer: { cik: string; companyName: string; lookupMode: EdgarLookupMode; ticker: string },
-) {
-  if (!syncResult) {
-    return false;
-  }
-  if (issuer.lookupMode === "ticker") {
-    return !issuer.ticker || syncResult.ticker === issuer.ticker;
-  }
-  if (issuer.lookupMode === "cik") {
-    const normalizedSyncCik = syncResult.cik.replace(/^0+/, "");
-    const normalizedInputCik = issuer.cik.replace(/^0+/, "");
-    return !normalizedInputCik || normalizedSyncCik === normalizedInputCik;
-  }
-  if (!issuer.companyName) {
-    return true;
-  }
-  return normalizeIssuerName(syncResult.companyName) === normalizeIssuerName(issuer.companyName);
-}
-
-function normalizeIssuerName(value: string) {
-  return value
-    .toUpperCase()
-    .replace(/[^A-Z0-9]+/g, " ")
-    .trim();
 }
 
 function StatItem({ hint, label, value }: { hint: string; label: string; value: string }) {
