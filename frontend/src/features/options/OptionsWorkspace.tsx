@@ -353,10 +353,11 @@ export function OptionsWorkspace({
       <ToolWorkspaceFrame
         compact
         description={description}
+        eyebrow="Options"
         titleEndSlot={
           <button
             aria-label="Options tool settings"
-            className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-line/80 bg-panelSoft text-muted transition hover:border-accent/25 hover:text-text"
+            className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-line/80 bg-panelSoft text-muted transition hover:border-accent/25 hover:text-text"
             data-testid="options-settings-button"
             title="Options settings"
             type="button"
@@ -435,7 +436,7 @@ export function OptionsWorkspace({
 
     return (
       <div className="grid gap-4">
-        {displayedExpiries.length ? (
+        <div className="flex items-start justify-between gap-3">
           <div className="flex flex-wrap gap-2">
             {displayedExpiries.map((expiry) => (
               <button
@@ -454,9 +455,21 @@ export function OptionsWorkspace({
               </button>
             ))}
           </div>
-        ) : null}
+          <button
+            aria-expanded={optionsTradeRailOpen}
+            aria-label={optionsTradeRailOpen ? "Collapse trade ticket rail" : "Expand trade ticket rail"}
+            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-line/80 bg-panelSoft text-muted transition hover:border-accent/25 hover:text-text"
+            data-testid="toggle-trade-rail"
+            onClick={() => setOptionsTradeRailOpen((current) => !current)}
+            type="button"
+          >
+            <SidebarToggleIcon open={optionsTradeRailOpen} />
+          </button>
+        </div>
 
-        <div className={`grid gap-4 ${optionsTradeRailOpen ? "xl:grid-cols-[minmax(0,1fr)_340px]" : "xl:grid-cols-[minmax(0,1fr)_44px]"}`}>
+        <div
+          className={`options-rail-frame grid gap-4 ${optionsTradeRailOpen ? "xl:grid-cols-[minmax(0,1fr)_340px]" : "xl:grid-cols-[minmax(0,1fr)_44px]"}`}
+        >
           <div className="relative overflow-hidden rounded-2xl border border-line/80 bg-panel">
             {chainQuery.isFetching ? (
               <div className="pointer-events-none absolute right-3 top-3 z-10 rounded-full border border-accent/20 bg-shell/90 px-3 py-1 text-xs text-accent">
@@ -556,7 +569,11 @@ export function OptionsWorkspace({
             )}
           </div>
 
-          {optionsTradeRailOpen ? renderTradeRail(selectedContractLabel) : renderCollapsedTradeRail()}
+          {optionsTradeRailOpen ? (
+            <div className="options-rail-pane options-rail-pane-open">{renderTradeRail(selectedContractLabel)}</div>
+          ) : (
+            <div className="options-rail-pane options-rail-pane-closed">{renderCollapsedTradeRail()}</div>
+          )}
         </div>
       </div>
     );
@@ -565,22 +582,10 @@ export function OptionsWorkspace({
   function renderTradeRail(selectedContractLabel: string | null) {
     return (
       <div className="grid content-start gap-4">
-        <div className="rounded-2xl border border-line/80 bg-panel px-4 py-4">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <div className="text-[11px] uppercase tracking-[0.22em] text-muted">Trade Ticket</div>
-              <div className="mt-1 text-lg font-semibold text-text">{selectedContractLabel ?? "Select a contract"}</div>
-            </div>
-            <button
-              aria-expanded={optionsTradeRailOpen}
-              aria-label="Collapse trade ticket rail"
-              className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-line/80 bg-panelSoft text-muted transition hover:border-accent/25 hover:text-text"
-              data-testid="toggle-trade-rail"
-              onClick={() => setOptionsTradeRailOpen(false)}
-              type="button"
-            >
-              <SidebarToggleIcon open={optionsTradeRailOpen} />
-            </button>
+        <div className="rounded-2xl border border-line/80 bg-panel px-3 py-3">
+          <div>
+            <div className="text-[11px] uppercase tracking-[0.22em] text-muted">Trade Ticket</div>
+            <div className="mt-1 text-lg font-semibold text-text">{selectedContractLabel ?? "Select a contract"}</div>
           </div>
 
           {ticketPlan ? renderTradeTicketForm() : (
@@ -590,7 +595,7 @@ export function OptionsWorkspace({
           )}
         </div>
 
-        <div className="rounded-2xl border border-line/80 bg-panel px-4 py-4">
+        <div className="rounded-2xl border border-line/80 bg-panel px-3 py-3">
           <div>
             <div className="text-[11px] uppercase tracking-[0.22em] text-muted">Working Orders</div>
             <div className="mt-1 text-lg font-semibold text-text">{openOptionOrders.length}</div>
@@ -643,7 +648,7 @@ export function OptionsWorkspace({
           </div>
         </div>
 
-        <div className="rounded-2xl border border-line/80 bg-panel px-4 py-4">
+        <div className="rounded-2xl border border-line/80 bg-panel px-3 py-3">
           <div>
             <div className="text-[11px] uppercase tracking-[0.22em] text-muted">Open Option Positions</div>
             <div className="mt-1 text-lg font-semibold text-text">{optionPositions.length}</div>
@@ -871,17 +876,7 @@ export function OptionsWorkspace({
     return (
       <div className="flex h-full min-h-[280px] items-start justify-center">
         <div className="flex h-full min-h-[280px] w-full flex-col items-center rounded-xl border border-line/80 bg-panel py-2">
-          <button
-            aria-expanded={optionsTradeRailOpen}
-            aria-label="Expand trade ticket rail"
-            className="inline-flex h-8 w-full items-center justify-center text-muted transition hover:text-text"
-            data-testid="toggle-trade-rail"
-            onClick={() => setOptionsTradeRailOpen(true)}
-            type="button"
-          >
-            <SidebarToggleIcon open={optionsTradeRailOpen} />
-          </button>
-          <div className="mt-2 flex-1 [writing-mode:vertical-rl] rotate-180 text-center text-[10px] uppercase tracking-[0.16em] text-muted">
+          <div className="flex-1 [writing-mode:vertical-rl] rotate-180 text-center text-[10px] uppercase tracking-[0.16em] text-muted">
             Trade Ticket
           </div>
         </div>
@@ -1209,15 +1204,13 @@ function CancelSummary({ cancelled }: { cancelled: OrderCancelResponse }) {
 }
 
 function SidebarToggleIcon({ open }: { open: boolean }) {
+  const panelWidth = open ? 4.2 : 2.05;
+  const panelX = 17.7 - panelWidth;
+
   return (
-    <svg aria-hidden="true" fill="none" height="16" viewBox="0 0 20 20" width="16">
-      <path
-        d={open ? "M12.5 5 7.5 10l5 5" : "M7.5 5l5 5-5 5"}
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth="1.8"
-      />
+    <svg aria-hidden="true" fill="none" height="16" viewBox="0 0 24 24" width="16">
+      <rect height="17" rx="4.5" stroke="currentColor" strokeWidth="1.75" width="17" x="3.5" y="3.5" />
+      <rect fill="currentColor" height="13.2" rx="1.2" width={panelWidth} x={panelX} y="5.4" />
     </svg>
   );
 }

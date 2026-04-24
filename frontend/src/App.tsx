@@ -1830,14 +1830,13 @@ function slugifyTestId(value: string) {
 }
 
 function SidebarToggleIcon({ open }: { open: boolean }) {
-  const dividerX = open ? 7.8 : 9.45;
-  const dividerY = open ? 5.9 : 3.5;
-  const dividerHeight = open ? 12.2 : 17;
+  const panelX = open ? 5.15 : 7.35;
+  const panelWidth = open ? 4.15 : 2.1;
 
   return (
     <svg aria-hidden="true" fill="none" height="24" viewBox="0 0 24 24" width="24">
       <rect height="17" rx="4.5" stroke="currentColor" strokeWidth="1.75" width="17" x="3.5" y="3.5" />
-      <rect fill="currentColor" height={dividerHeight} rx="0.8" width="1.55" x={dividerX} y={dividerY} />
+      <rect fill="currentColor" height="13.2" rx="1.2" width={panelWidth} x={panelX} y="5.4" />
     </svg>
   );
 }
