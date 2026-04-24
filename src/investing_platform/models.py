@@ -330,6 +330,21 @@ class OptionChainResponse(DashboardModel):
     isStale: bool = False
 
 
+class OptionContractQuoteResponse(DashboardModel):
+    symbol: str
+    expiry: str
+    strike: float
+    right: Literal["C", "P"]
+    bid: float | None = None
+    ask: float | None = None
+    mid: float | None = None
+    iv: float | None = None
+    delta: float | None = None
+    theta: float | None = None
+    generatedAt: datetime
+    isStale: bool = False
+
+
 class PositionsResponse(DashboardModel):
     positions: list[Position]
     generatedAt: datetime
