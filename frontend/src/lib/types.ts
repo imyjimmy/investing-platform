@@ -556,6 +556,8 @@ export interface UniverseCandidate {
   symbol: string;
   asOfDate: string;
   lastClose: number | null;
+  priceReturn20d: number | null;
+  priceReturn60d: number | null;
   betaQqq60d: number | null;
   betaQqq120d: number | null;
   betaSpy120d: number | null;
@@ -567,6 +569,11 @@ export interface UniverseCandidate {
   avgDailyDollarVolume20d: number | null;
   totalOptionVolume: number | null;
   totalOptionOpenInterest: number | null;
+  sector: string | null;
+  industry: string | null;
+  themeCluster: string | null;
+  marketCap: number | null;
+  tradabilityBalance: number | null;
   compositeScore: number | null;
   betaComponent: number | null;
   impliedVolComponent: number | null;

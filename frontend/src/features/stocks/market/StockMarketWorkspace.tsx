@@ -14,35 +14,30 @@ import { Panel } from "../../../components/Panel";
 import { ToolWorkspaceFrame } from "../../../components/shell/ToolWorkspaceFrame";
 import { InlinePill, type InlinePillTone } from "../../../components/ui/InlinePill";
 import { fmtBillions, fmtCurrencySmall, fmtMillions, fmtNumber, fmtWholeNumber } from "../../../lib/formatters";
+import type { UniverseCandidate } from "../../../lib/types";
+import { useMarketUniverse } from "./useMarketUniverse";
 
-type MarketSector =
-  | "Consumer"
-  | "Energy"
-  | "Financials"
-  | "Healthcare"
-  | "Materials"
-  | "Semiconductors"
-  | "Software"
-  | "Space"
-  | "Technology";
+type MarketSector = string;
 
-type MarketSortKey = "beta" | "avgDollarVolumeM" | "weekChangePct" | "monthChangePct" | "shortInterestPct";
-type MarketPreset = "high-beta" | "squeeze-watch" | "liquid-leaders" | "reset";
+type MarketSortKey = "beta" | "avgDollarVolumeM" | "return20dPct" | "return60dPct" | "compositeScore" | "ivToHv20";
+type MarketPreset = "high-beta" | "iv-watch" | "liquid-leaders" | "reset";
 type MarketTargetWorkspace = "ticker" | "options";
 
 type MarketRow = {
   symbol: string;
   name: string;
   sector: MarketSector;
-  price: number;
-  beta: number;
-  weekChangePct: number;
-  monthChangePct: number;
-  avgDollarVolumeM: number;
-  marketCapB: number;
-  shortInterestPct: number;
-  optionsable: boolean;
-  shortable: boolean;
+  price: number | null;
+  beta: number | null;
+  return20dPct: number | null;
+  return60dPct: number | null;
+  avgDollarVolumeM: number | null;
+  marketCapB: number | null;
+  ivToHv20: number | null;
+  optionVolume: number | null;
+  compositeScore: number | null;
+  eligible: boolean;
+  whyItRanked: string | null;
 };
 
 type StockMarketWorkspaceProps = {
@@ -53,89 +48,72 @@ type StockMarketWorkspaceProps = {
 const MARKET_SORT_OPTIONS: Array<{ key: MarketSortKey; label: string }> = [
   { key: "beta", label: "Highest beta" },
   { key: "avgDollarVolumeM", label: "Most liquid" },
-  { key: "weekChangePct", label: "Strongest 1W move" },
-  { key: "monthChangePct", label: "Strongest 1M move" },
-  { key: "shortInterestPct", label: "Highest short interest" },
+  { key: "return20dPct", label: "Strongest 20D move" },
+  { key: "return60dPct", label: "Strongest 60D move" },
+  { key: "compositeScore", label: "Highest score" },
+  { key: "ivToHv20", label: "Highest IV/HV" },
 ];
-
-const MARKET_SCREEN_ROWS: MarketRow[] = [
-  { symbol: "SMCI", name: "Super Micro Computer", sector: "Technology", price: 84.2, beta: 2.63, weekChangePct: 9.1, monthChangePct: 18.6, avgDollarVolumeM: 1880, marketCapB: 49.1, shortInterestPct: 9.4, optionsable: true, shortable: true },
-  { symbol: "MSTR", name: "Strategy", sector: "Technology", price: 1712.5, beta: 2.58, weekChangePct: 7.3, monthChangePct: 24.8, avgDollarVolumeM: 2140, marketCapB: 115.4, shortInterestPct: 7.2, optionsable: true, shortable: true },
-  { symbol: "UPST", name: "Upstart Holdings", sector: "Financials", price: 41.8, beta: 2.52, weekChangePct: 11.2, monthChangePct: 16.5, avgDollarVolumeM: 402, marketCapB: 4.1, shortInterestPct: 14.6, optionsable: true, shortable: true },
-  { symbol: "COIN", name: "Coinbase Global", sector: "Financials", price: 238.7, beta: 2.34, weekChangePct: 5.7, monthChangePct: 14.9, avgDollarVolumeM: 1675, marketCapB: 58.8, shortInterestPct: 5.9, optionsable: true, shortable: true },
-  { symbol: "APP", name: "AppLovin", sector: "Software", price: 79.4, beta: 2.29, weekChangePct: 8.8, monthChangePct: 19.2, avgDollarVolumeM: 923, marketCapB: 27.4, shortInterestPct: 6.1, optionsable: true, shortable: true },
-  { symbol: "AFRM", name: "Affirm Holdings", sector: "Financials", price: 48.9, beta: 2.23, weekChangePct: 4.4, monthChangePct: 10.1, avgDollarVolumeM: 611, marketCapB: 15.2, shortInterestPct: 8.3, optionsable: true, shortable: true },
-  { symbol: "SOUN", name: "SoundHound AI", sector: "Software", price: 6.3, beta: 2.21, weekChangePct: 14.6, monthChangePct: 27.3, avgDollarVolumeM: 278, marketCapB: 2.5, shortInterestPct: 15.8, optionsable: true, shortable: true },
-  { symbol: "RKLB", name: "Rocket Lab", sector: "Space", price: 10.4, beta: 2.16, weekChangePct: 6.5, monthChangePct: 12.6, avgDollarVolumeM: 246, marketCapB: 5.1, shortInterestPct: 9.8, optionsable: true, shortable: true },
-  { symbol: "IONQ", name: "IonQ", sector: "Technology", price: 13.9, beta: 2.09, weekChangePct: 3.2, monthChangePct: 9.4, avgDollarVolumeM: 190, marketCapB: 3.0, shortInterestPct: 12.2, optionsable: true, shortable: true },
-  { symbol: "ASTS", name: "AST SpaceMobile", sector: "Space", price: 5.9, beta: 2.04, weekChangePct: 12.4, monthChangePct: 31.8, avgDollarVolumeM: 162, marketCapB: 1.8, shortInterestPct: 24.7, optionsable: true, shortable: true },
-  { symbol: "PLTR", name: "Palantir Technologies", sector: "Software", price: 31.6, beta: 1.91, weekChangePct: 2.7, monthChangePct: 8.2, avgDollarVolumeM: 1540, marketCapB: 72.6, shortInterestPct: 4.6, optionsable: true, shortable: true },
-  { symbol: "NVDA", name: "NVIDIA", sector: "Semiconductors", price: 201.0, beta: 1.88, weekChangePct: 5.5, monthChangePct: 13.7, avgDollarVolumeM: 9320, marketCapB: 4930.0, shortInterestPct: 1.1, optionsable: true, shortable: true },
-  { symbol: "CELH", name: "Celsius Holdings", sector: "Consumer", price: 63.5, beta: 1.82, weekChangePct: -1.9, monthChangePct: 6.3, avgDollarVolumeM: 294, marketCapB: 14.8, shortInterestPct: 11.4, optionsable: true, shortable: true },
-  { symbol: "CRWD", name: "CrowdStrike", sector: "Software", price: 388.1, beta: 1.74, weekChangePct: 3.9, monthChangePct: 7.8, avgDollarVolumeM: 1234, marketCapB: 95.1, shortInterestPct: 2.0, optionsable: true, shortable: true },
-  { symbol: "HIMS", name: "Hims & Hers Health", sector: "Healthcare", price: 18.4, beta: 1.72, weekChangePct: 10.9, monthChangePct: 22.6, avgDollarVolumeM: 211, marketCapB: 4.2, shortInterestPct: 13.2, optionsable: true, shortable: true },
-  { symbol: "HOOD", name: "Robinhood Markets", sector: "Financials", price: 22.8, beta: 1.67, weekChangePct: 4.8, monthChangePct: 11.7, avgDollarVolumeM: 708, marketCapB: 20.3, shortInterestPct: 6.9, optionsable: true, shortable: true },
-  { symbol: "XOM", name: "Exxon Mobil", sector: "Energy", price: 119.7, beta: 1.58, weekChangePct: 1.2, monthChangePct: 4.6, avgDollarVolumeM: 1410, marketCapB: 475.0, shortInterestPct: 0.8, optionsable: true, shortable: true },
-  { symbol: "FCX", name: "Freeport-McMoRan", sector: "Materials", price: 46.1, beta: 1.55, weekChangePct: 2.3, monthChangePct: 5.4, avgDollarVolumeM: 497, marketCapB: 66.0, shortInterestPct: 1.9, optionsable: true, shortable: true },
-];
-
-const MARKET_SECTORS = Array.from(new Set(MARKET_SCREEN_ROWS.map((row) => row.sector)));
 
 export function StockMarketWorkspace({ gatewayPill, onOpenSymbol }: StockMarketWorkspaceProps) {
+  const marketUniverseQuery = useMarketUniverse();
   const [marketMinBeta, setMarketMinBeta] = useState(1.7);
   const [marketMinPrice, setMarketMinPrice] = useState(10);
   const [marketMinDollarVolumeM, setMarketMinDollarVolumeM] = useState(200);
-  const [marketMinShortInterestPct, setMarketMinShortInterestPct] = useState(0);
+  const [marketMinIvToHv20, setMarketMinIvToHv20] = useState(0);
   const [marketSearch, setMarketSearch] = useState("");
   const [marketSectorFilter, setMarketSectorFilter] = useState<MarketSector | "All">("All");
   const [marketSortKey, setMarketSortKey] = useState<MarketSortKey>("beta");
-  const [marketOptionableOnly, setMarketOptionableOnly] = useState(true);
-  const [marketShortableOnly, setMarketShortableOnly] = useState(false);
+  const [marketEligibleOnly, setMarketEligibleOnly] = useState(true);
+
+  const marketRows = useMemo(() => (marketUniverseQuery.data?.rows ?? []).map(toMarketRow), [marketUniverseQuery.data?.rows]);
+  const marketSectors = useMemo(
+    () => Array.from(new Set(marketRows.map((row) => row.sector).filter(Boolean))).sort(),
+    [marketRows],
+  );
 
   const marketScreenRows = useMemo(() => {
     const marketSearchNeedle = marketSearch.trim().toLowerCase();
-    return MARKET_SCREEN_ROWS
+    return marketRows
       .filter((row) => !marketSearchNeedle || row.symbol.toLowerCase().includes(marketSearchNeedle) || row.name.toLowerCase().includes(marketSearchNeedle))
-      .filter((row) => row.beta >= marketMinBeta)
-      .filter((row) => row.price >= marketMinPrice)
-      .filter((row) => row.avgDollarVolumeM >= marketMinDollarVolumeM)
-      .filter((row) => row.shortInterestPct >= marketMinShortInterestPct)
+      .filter((row) => (row.beta ?? 0) >= marketMinBeta)
+      .filter((row) => (row.price ?? 0) >= marketMinPrice)
+      .filter((row) => (row.avgDollarVolumeM ?? 0) >= marketMinDollarVolumeM)
+      .filter((row) => (row.ivToHv20 ?? 0) >= marketMinIvToHv20)
       .filter((row) => marketSectorFilter === "All" || row.sector === marketSectorFilter)
-      .filter((row) => !marketOptionableOnly || row.optionsable)
-      .filter((row) => !marketShortableOnly || row.shortable)
+      .filter((row) => !marketEligibleOnly || row.eligible)
       .slice()
       .sort((left, right) => {
-        const delta = right[marketSortKey] - left[marketSortKey];
+        const delta = sortableMarketValue(right, marketSortKey) - sortableMarketValue(left, marketSortKey);
         if (Math.abs(delta) > 0.0001) {
           return delta;
         }
-        return right.beta - left.beta;
+        return (right.beta ?? 0) - (left.beta ?? 0);
       });
   }, [
+    marketEligibleOnly,
     marketMinBeta,
     marketMinDollarVolumeM,
+    marketMinIvToHv20,
     marketMinPrice,
-    marketMinShortInterestPct,
-    marketOptionableOnly,
+    marketRows,
     marketSearch,
     marketSectorFilter,
-    marketShortableOnly,
     marketSortKey,
   ]);
   const marketTopRows = marketScreenRows.slice(0, 12);
-  const marketChartRows = marketScreenRows.slice(0, 8).map((row) => ({
+  const marketChartRows = marketScreenRows.filter((row) => row.beta != null).slice(0, 8).map((row) => ({
     symbol: row.symbol,
-    beta: row.beta,
+    beta: row.beta ?? 0,
   }));
   const averageScreenBeta =
-    marketScreenRows.length > 0 ? marketScreenRows.reduce((sum, row) => sum + row.beta, 0) / marketScreenRows.length : null;
+    averageNullable(marketScreenRows.map((row) => row.beta));
   const averageScreenVolume =
-    marketScreenRows.length > 0 ? marketScreenRows.reduce((sum, row) => sum + row.avgDollarVolumeM, 0) / marketScreenRows.length : null;
-  const highVelocityCount = marketScreenRows.filter((row) => row.beta >= 2).length;
+    averageNullable(marketScreenRows.map((row) => row.avgDollarVolumeM));
+  const highVelocityCount = marketScreenRows.filter((row) => (row.beta ?? 0) >= 2).length;
   const topScreenSymbol = marketScreenRows[0] ?? null;
-  const advancingCount = marketScreenRows.filter((row) => row.weekChangePct > 0).length;
-  const decliningCount = marketScreenRows.filter((row) => row.weekChangePct < 0).length;
-  const crowdedCount = marketScreenRows.filter((row) => row.shortInterestPct >= 10).length;
+  const advancingCount = marketScreenRows.filter((row) => (row.return20dPct ?? 0) > 0).length;
+  const decliningCount = marketScreenRows.filter((row) => (row.return20dPct ?? 0) < 0).length;
+  const elevatedIvCount = marketScreenRows.filter((row) => (row.ivToHv20 ?? 0) >= 1.2).length;
   const marketSectorMix = Array.from(
     marketScreenRows.reduce((accumulator, row) => {
       accumulator.set(row.sector, (accumulator.get(row.sector) ?? 0) + 1);
@@ -147,8 +125,8 @@ export function StockMarketWorkspace({ gatewayPill, onOpenSymbol }: StockMarketW
   const marketCandidateRows = marketScreenRows
     .slice()
     .sort((left, right) => {
-      const scoreLeft = left.beta * 28 + left.shortInterestPct * 1.8 + left.weekChangePct * 3 + Math.min(left.avgDollarVolumeM / 40, 32);
-      const scoreRight = right.beta * 28 + right.shortInterestPct * 1.8 + right.weekChangePct * 3 + Math.min(right.avgDollarVolumeM / 40, 32);
+      const scoreLeft = candidateScore(left);
+      const scoreRight = candidateScore(right);
       return scoreRight - scoreLeft;
     })
     .slice(0, 5);
@@ -160,23 +138,21 @@ export function StockMarketWorkspace({ gatewayPill, onOpenSymbol }: StockMarketW
         setMarketMinBeta(1.9);
         setMarketMinPrice(10);
         setMarketMinDollarVolumeM(200);
-        setMarketMinShortInterestPct(0);
+        setMarketMinIvToHv20(0);
         setMarketSectorFilter("All");
         setMarketSortKey("beta");
-        setMarketOptionableOnly(true);
-        setMarketShortableOnly(false);
+        setMarketEligibleOnly(true);
         return;
       }
-      if (preset === "squeeze-watch") {
+      if (preset === "iv-watch") {
         setMarketSearch("");
-        setMarketMinBeta(1.6);
+        setMarketMinBeta(1.3);
         setMarketMinPrice(5);
         setMarketMinDollarVolumeM(150);
-        setMarketMinShortInterestPct(10);
+        setMarketMinIvToHv20(1.2);
         setMarketSectorFilter("All");
-        setMarketSortKey("shortInterestPct");
-        setMarketOptionableOnly(true);
-        setMarketShortableOnly(true);
+        setMarketSortKey("ivToHv20");
+        setMarketEligibleOnly(true);
         return;
       }
       if (preset === "liquid-leaders") {
@@ -184,22 +160,20 @@ export function StockMarketWorkspace({ gatewayPill, onOpenSymbol }: StockMarketW
         setMarketMinBeta(1.3);
         setMarketMinPrice(20);
         setMarketMinDollarVolumeM(800);
-        setMarketMinShortInterestPct(0);
+        setMarketMinIvToHv20(0);
         setMarketSectorFilter("All");
         setMarketSortKey("avgDollarVolumeM");
-        setMarketOptionableOnly(true);
-        setMarketShortableOnly(false);
+        setMarketEligibleOnly(true);
         return;
       }
       setMarketSearch("");
       setMarketMinBeta(1.7);
       setMarketMinPrice(10);
       setMarketMinDollarVolumeM(200);
-      setMarketMinShortInterestPct(0);
+      setMarketMinIvToHv20(0);
       setMarketSectorFilter("All");
       setMarketSortKey("beta");
-      setMarketOptionableOnly(true);
-      setMarketShortableOnly(false);
+      setMarketEligibleOnly(true);
     });
   }
 
@@ -210,7 +184,16 @@ export function StockMarketWorkspace({ gatewayPill, onOpenSymbol }: StockMarketW
       headerSlot={
         <div className="mt-5 flex flex-wrap items-center gap-2 text-xs text-muted">
           <InlinePill label={`Gateway session · ${gatewayPill.label.toLowerCase()}`} tone={gatewayPill.tone} />
-          <InlinePill label="Data source · US stock L1 feeds planned" tone="caution" />
+          <InlinePill
+            label={
+              marketUniverseQuery.isLoading
+                ? "Universe · loading"
+                : marketUniverseQuery.data
+                  ? `Universe · ${marketUniverseQuery.data.snapshotDate}`
+                  : "Universe · unavailable"
+            }
+            tone={marketUniverseQuery.data?.isStale ? "caution" : marketUniverseQuery.error ? "danger" : "neutral"}
+          />
           <InlinePill label="Overlay account · off" tone="neutral" />
         </div>
       }
@@ -243,14 +226,23 @@ export function StockMarketWorkspace({ gatewayPill, onOpenSymbol }: StockMarketW
               value={marketMinDollarVolumeM}
             />
             <RangeField
-              label="Min short %"
-              max={25}
+              label="Min IV/HV"
+              max={3}
               min={0}
-              onChange={setMarketMinShortInterestPct}
-              step={1}
-              value={marketMinShortInterestPct}
+              onChange={setMarketMinIvToHv20}
+              step={0.05}
+              value={marketMinIvToHv20}
             />
           </div>
+          {marketUniverseQuery.error ? (
+            <div className="mt-4 rounded-2xl border border-danger/25 bg-danger/10 px-4 py-3 text-sm text-danger">
+              {marketUniverseQuery.error instanceof Error ? marketUniverseQuery.error.message : "Could not load the market universe."}
+            </div>
+          ) : marketUniverseQuery.data?.sourceNotice ? (
+            <div className="mt-4 rounded-2xl border border-line/80 bg-panelSoft px-4 py-3 text-sm text-muted">
+              {marketUniverseQuery.data.sourceNotice}
+            </div>
+          ) : null}
 
           <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
             <div className="flex flex-wrap items-center gap-2">
@@ -264,11 +256,11 @@ export function StockMarketWorkspace({ gatewayPill, onOpenSymbol }: StockMarketW
               </button>
               <button
                 className="rounded-full border border-line/80 bg-panelSoft px-3 py-1.5 text-xs font-medium text-muted transition hover:border-accent/25 hover:text-text"
-                data-testid="market-preset-squeeze-watch"
-                onClick={() => applyMarketPreset("squeeze-watch")}
+                data-testid="market-preset-iv-watch"
+                onClick={() => applyMarketPreset("iv-watch")}
                 type="button"
               >
-                Squeeze watch
+                IV watch
               </button>
               <button
                 className="rounded-full border border-line/80 bg-panelSoft px-3 py-1.5 text-xs font-medium text-muted transition hover:border-accent/25 hover:text-text"
@@ -286,8 +278,7 @@ export function StockMarketWorkspace({ gatewayPill, onOpenSymbol }: StockMarketW
               >
                 Reset screen
               </button>
-              <ToggleChip checked={marketOptionableOnly} label="Options-ready only" onToggle={() => setMarketOptionableOnly((value) => !value)} />
-              <ToggleChip checked={marketShortableOnly} label="Shortable only" onToggle={() => setMarketShortableOnly((value) => !value)} />
+              <ToggleChip checked={marketEligibleOnly} label="Eligible only" onToggle={() => setMarketEligibleOnly((value) => !value)} />
             </div>
 
             <div className="panel-soft rounded-2xl p-4">
@@ -298,7 +289,7 @@ export function StockMarketWorkspace({ gatewayPill, onOpenSymbol }: StockMarketW
                 value={marketSectorFilter}
               >
                 <option value="All">All sectors</option>
-                {MARKET_SECTORS.map((sector) => (
+                {marketSectors.map((sector) => (
                   <option key={sector} value={sector}>
                     {sector}
                   </option>
@@ -337,8 +328,8 @@ export function StockMarketWorkspace({ gatewayPill, onOpenSymbol }: StockMarketW
           <Panel eyebrow="Pulse" title="Market Posture">
             <div className="grid gap-4 md:grid-cols-3">
               <MarketPulseMetric label="High-beta pocket" value={fmtWholeNumber(highVelocityCount)} detail="Names at beta 2.0+ inside the current screen." />
-              <MarketPulseMetric label="Crowded pocket" value={fmtWholeNumber(crowdedCount)} detail="Names with double-digit short interest still surviving the filter." />
-              <MarketPulseMetric label="Weekly breadth" value={`${fmtWholeNumber(advancingCount)} / ${fmtWholeNumber(decliningCount)}`} detail="Advancers versus decliners in the visible result set." />
+              <MarketPulseMetric label="Elevated IV/HV" value={fmtWholeNumber(elevatedIvCount)} detail="Names with front volatility running above recent realized movement." />
+              <MarketPulseMetric label="20D breadth" value={`${fmtWholeNumber(advancingCount)} / ${fmtWholeNumber(decliningCount)}`} detail="Advancers versus decliners in the visible result set." />
             </div>
           </Panel>
 
@@ -357,8 +348,8 @@ export function StockMarketWorkspace({ gatewayPill, onOpenSymbol }: StockMarketW
                     </div>
                   </div>
                   <div className="mt-4 flex flex-wrap gap-2 text-xs text-muted">
-                    <InlinePill label={`1w ${fmtNumber(row.weekChangePct, "%")}`} tone={row.weekChangePct >= 0 ? "safe" : "danger"} />
-                    <InlinePill label={`short ${fmtNumber(row.shortInterestPct, "%")}`} tone={row.shortInterestPct >= 10 ? "caution" : "neutral"} />
+                    <InlinePill label={`20d ${fmtNumber(row.return20dPct, "%")}`} tone={(row.return20dPct ?? 0) >= 0 ? "safe" : "danger"} />
+                    <InlinePill label={`iv/hv ${fmtNumber(row.ivToHv20)}`} tone={(row.ivToHv20 ?? 0) >= 1.2 ? "caution" : "neutral"} />
                     <InlinePill label={`vol $${fmtMillions(row.avgDollarVolumeM)}`} tone="neutral" />
                   </div>
                   <div className="mt-4 flex gap-2">
@@ -391,11 +382,11 @@ export function StockMarketWorkspace({ gatewayPill, onOpenSymbol }: StockMarketW
                       <th className="px-4 py-3">Symbol</th>
                       <th className="px-4 py-3">Beta</th>
                       <th className="px-4 py-3">Price</th>
-                      <th className="px-4 py-3">1W</th>
-                      <th className="px-4 py-3">1M</th>
+                      <th className="px-4 py-3">20D</th>
+                      <th className="px-4 py-3">60D</th>
                       <th className="px-4 py-3">Avg $ Vol</th>
                       <th className="px-4 py-3">Mkt Cap</th>
-                      <th className="px-4 py-3">Short %</th>
+                      <th className="px-4 py-3">IV/HV</th>
                       <th className="px-4 py-3">Sector</th>
                       <th className="px-4 py-3 text-right">Open</th>
                     </tr>
@@ -409,11 +400,11 @@ export function StockMarketWorkspace({ gatewayPill, onOpenSymbol }: StockMarketW
                         </td>
                         <td className="px-4 py-3 text-text">{fmtNumber(row.beta)}</td>
                         <td className="px-4 py-3 text-text">{fmtCurrencySmall(row.price)}</td>
-                        <td className={`px-4 py-3 ${pnlTone(row.weekChangePct)}`}>{fmtNumber(row.weekChangePct, "%")}</td>
-                        <td className={`px-4 py-3 ${pnlTone(row.monthChangePct)}`}>{fmtNumber(row.monthChangePct, "%")}</td>
+                        <td className={`px-4 py-3 ${pnlTone(row.return20dPct)}`}>{fmtNumber(row.return20dPct, "%")}</td>
+                        <td className={`px-4 py-3 ${pnlTone(row.return60dPct)}`}>{fmtNumber(row.return60dPct, "%")}</td>
                         <td className="px-4 py-3 text-text">${fmtMillions(row.avgDollarVolumeM)}</td>
                         <td className="px-4 py-3 text-text">${fmtBillions(row.marketCapB)}</td>
-                        <td className="px-4 py-3 text-text">{fmtNumber(row.shortInterestPct, "%")}</td>
+                        <td className="px-4 py-3 text-text">{fmtNumber(row.ivToHv20)}</td>
                         <td className="px-4 py-3 text-muted">{row.sector}</td>
                         <td className="px-4 py-3">
                           <div className="flex justify-end gap-2">
@@ -503,7 +494,7 @@ export function StockMarketWorkspace({ gatewayPill, onOpenSymbol }: StockMarketW
                 <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-4">
                   <div className="text-[11px] uppercase tracking-[0.18em] text-muted">What this prototype assumes</div>
                   <div className="mt-2 text-sm text-muted">
-                    The upcoming `Network A`, `Network B`, and `Network C` subscriptions will back live US stock screening, while the current rows are fixture data that let us shape the workflow now.
+                    This view reads the backend universe snapshot from <span className="mono">/api/market/universe</span>; the scanner service owns the ranked rows and the UI only filters them.
                   </div>
                 </div>
                 <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-4 text-sm text-muted">
@@ -614,4 +605,66 @@ function pnlTone(value: number | null | undefined) {
     return "text-danger";
   }
   return "text-text";
+}
+
+function toMarketRow(candidate: UniverseCandidate): MarketRow {
+  return {
+    symbol: candidate.symbol,
+    name: candidate.industry ?? candidate.themeCluster ?? candidate.sector ?? "Universe candidate",
+    sector: candidate.sector ?? candidate.themeCluster ?? "Other",
+    price: candidate.lastClose,
+    beta: candidate.betaQqq60d ?? candidate.betaQqq120d ?? candidate.betaSpy120d,
+    return20dPct: toPercent(candidate.priceReturn20d),
+    return60dPct: toPercent(candidate.priceReturn60d),
+    avgDollarVolumeM: candidate.avgDailyDollarVolume20d != null ? candidate.avgDailyDollarVolume20d / 1_000_000 : null,
+    marketCapB: candidate.marketCap != null ? candidate.marketCap / 1_000_000_000 : null,
+    ivToHv20: candidate.ivToHv20,
+    optionVolume: candidate.totalOptionVolume,
+    compositeScore: candidate.compositeScore,
+    eligible: candidate.eligible,
+    whyItRanked: candidate.whyItRanked,
+  };
+}
+
+function sortableMarketValue(row: MarketRow, key: MarketSortKey) {
+  if (key === "beta") {
+    return row.beta ?? 0;
+  }
+  if (key === "avgDollarVolumeM") {
+    return row.avgDollarVolumeM ?? 0;
+  }
+  if (key === "return20dPct") {
+    return row.return20dPct ?? 0;
+  }
+  if (key === "return60dPct") {
+    return row.return60dPct ?? 0;
+  }
+  if (key === "compositeScore") {
+    return row.compositeScore ?? 0;
+  }
+  return row.ivToHv20 ?? 0;
+}
+
+function averageNullable(values: Array<number | null | undefined>) {
+  const presentValues = values.filter((value): value is number => value != null && !Number.isNaN(value));
+  if (!presentValues.length) {
+    return null;
+  }
+  return presentValues.reduce((total, value) => total + value, 0) / presentValues.length;
+}
+
+function candidateScore(row: MarketRow) {
+  return (
+    (row.compositeScore ?? 0) * 100
+    + (row.beta ?? 0) * 10
+    + (row.ivToHv20 ?? 0) * 5
+    + (row.avgDollarVolumeM ?? 0) / 100
+  );
+}
+
+function toPercent(value: number | null | undefined) {
+  if (value == null || Number.isNaN(value)) {
+    return null;
+  }
+  return value * 100;
 }

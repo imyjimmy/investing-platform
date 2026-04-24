@@ -664,6 +664,8 @@ class UniverseCandidate(DashboardModel):
     symbol: str
     asOfDate: date
     lastClose: float | None = None
+    priceReturn20d: float | None = None
+    priceReturn60d: float | None = None
     betaQqq60d: float | None = None
     betaQqq120d: float | None = None
     betaSpy120d: float | None = None
@@ -675,6 +677,11 @@ class UniverseCandidate(DashboardModel):
     avgDailyDollarVolume20d: float | None = None
     totalOptionVolume: int | None = None
     totalOptionOpenInterest: int | None = None
+    sector: str | None = None
+    industry: str | None = None
+    themeCluster: str | None = None
+    marketCap: float | None = None
+    tradabilityBalance: float | None = None
     compositeScore: float | None = None
     betaComponent: float | None = None
     impliedVolComponent: float | None = None
