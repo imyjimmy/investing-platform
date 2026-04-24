@@ -44,6 +44,7 @@ import { MetricCard } from "./components/MetricCard";
 import { TickerWorkspace } from "./components/TickerWorkspace";
 import { Panel } from "./components/Panel";
 import { ToolWorkspaceFrame } from "./components/shell/ToolWorkspaceFrame";
+import { WorkspaceStage } from "./components/shell/WorkspaceStage";
 import { ChromeTabs } from "./components/ui/ChromeTabs";
 import { CryptoLeverageWorkspace } from "./features/crypto/CryptoLeverageWorkspace";
 import { CryptoMarketWorkspace } from "./features/crypto/CryptoMarketWorkspace";
@@ -1444,6 +1445,7 @@ function App() {
     return (
       <ToolWorkspaceFrame
         description="Configure app-wide behavior and the product-wide data sources that sit behind the tools."
+        eyebrow="Settings"
         title="Global Settings"
       >
         <div className="grid gap-6">
@@ -1509,7 +1511,7 @@ function App() {
 
   function renderStockIntelWorkspace() {
     return (
-      <div className="chrome-header-frame">
+      <>
         <ChromeTabs
           activeKey={activeStockIntelTab}
           ariaLabel="Stock Intel tools"
@@ -1546,7 +1548,7 @@ function App() {
             syncing={investorPdfSyncing}
           />
         )}
-      </div>
+      </>
     );
   }
 
@@ -1709,7 +1711,7 @@ function App() {
           </div>
 
           <div className="shell-stage">
-            <div className={`mx-auto w-full ${isOptionsWorkspace(activeWorkspace) ? "max-w-[1840px]" : "max-w-[1600px]"}`}>
+            <WorkspaceStage>
               {activeWorkspace === "dashboard" ? renderDashboardWorkspace() : null}
               {activeWorkspace === "market" ? (
                 <StockMarketWorkspace gatewayPill={marketGatewayPill} onOpenSymbol={openSymbolWorkspace} />
@@ -1733,7 +1735,7 @@ function App() {
               {activeWorkspace === "cryptoLeverage" ? <CryptoLeverageWorkspace /> : null}
               {activeWorkspace === "stockIntel" ? renderStockIntelWorkspace() : null}
               {activeWorkspace === "globalSettings" ? renderGlobalSettingsWorkspace() : null}
-            </div>
+            </WorkspaceStage>
           </div>
         </div>
       </div>

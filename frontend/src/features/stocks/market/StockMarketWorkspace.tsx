@@ -206,6 +206,7 @@ export function StockMarketWorkspace({ gatewayPill, onOpenSymbol }: StockMarketW
   return (
     <ToolWorkspaceFrame
       description="Screen the US stock universe by beta, crowding, and liquidity, then push the names that matter into `Ticker` or `Options` without detouring through the dashboard."
+      eyebrow="Stocks"
       headerSlot={
         <div className="mt-5 flex flex-wrap items-center gap-2 text-xs text-muted">
           <InlinePill label={`Gateway session · ${gatewayPill.label.toLowerCase()}`} tone={gatewayPill.tone} />

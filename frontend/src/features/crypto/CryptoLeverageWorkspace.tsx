@@ -7,6 +7,7 @@ export function CryptoLeverageWorkspace() {
   return (
     <ToolWorkspaceFrame
       description="Watch derivatives-led pressure, crowding, and forced-unwind risk without opening directly into exchange account balances."
+      eyebrow="Crypto"
       title="Crypto Leverage"
     >
       <div className="grid gap-6">

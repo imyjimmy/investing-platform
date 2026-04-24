@@ -9,11 +9,12 @@ type ChromeTabsProps<T extends string> = {
   ariaLabel?: string;
   onSelect: (key: T) => void;
   tabs: Array<ChromeTabItem<T>>;
+  variant?: "attached" | "inline";
 };
 
-export function ChromeTabs<T extends string>({ activeKey, ariaLabel, onSelect, tabs }: ChromeTabsProps<T>) {
+export function ChromeTabs<T extends string>({ activeKey, ariaLabel, onSelect, tabs, variant = "attached" }: ChromeTabsProps<T>) {
   return (
-    <div className="chrome-tabs-shell">
+    <div className={`chrome-tabs-shell ${variant === "inline" ? "is-inline" : ""}`}>
       <div aria-label={ariaLabel} className="chrome-tab-strip" role="tablist">
         {tabs.map((tab) => {
           const active = tab.key === activeKey;

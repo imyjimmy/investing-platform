@@ -3,6 +3,15 @@ import { useQuery } from "@tanstack/react-query";
 
 import { api } from "../lib/api";
 import type { EdgarDownloadRequest, EdgarDownloadResponse, EdgarSourceStatus } from "../lib/types";
+import {
+  workspaceBodyClassName,
+  workspaceDividedBodyClassName,
+  workspaceEyebrowClassName,
+  workspaceFrameClassName,
+  workspaceHeaderClassName,
+  workspacePanelClassName,
+  workspaceTitleClassName,
+} from "./shell/WorkspaceStage";
 
 type EdgarLookupMode = "ticker" | "companyName" | "cik";
 type EdgarDownloadMode = NonNullable<EdgarDownloadRequest["downloadMode"]>;
@@ -140,14 +149,14 @@ export function EdgarWorkspace({
   }
 
   return (
-    <div className="chrome-header-frame">
-      <div className="account-workspace panel overflow-hidden rounded-[16px]">
-        <header className="border-b border-line/70 px-10 py-7 lg:px-12">
+    <div className={workspaceFrameClassName}>
+      <div className={workspacePanelClassName}>
+        <header className={workspaceHeaderClassName}>
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div>
-              <div className="mb-2 text-[11px] uppercase tracking-[0.32em] text-accent">Stock Intel</div>
+              <div className={workspaceEyebrowClassName}>Stocks</div>
               <div className="flex flex-wrap items-center gap-3">
-                <h1 className="text-3xl font-semibold tracking-tight text-text">SEC Source Files</h1>
+                <h1 className={workspaceTitleClassName}>SEC Source Files</h1>
                 <div className="inline-flex items-center rounded-full border border-line bg-panelSoft px-4 py-1 text-sm font-medium text-text">
                   {status?.available ? "Ready" : statusLoading ? "Checking" : "Needs config"}
                 </div>
@@ -174,7 +183,7 @@ export function EdgarWorkspace({
           </div>
         </header>
 
-        <section className="px-10 py-8 lg:px-12">
+        <section className={workspaceBodyClassName}>
           <div className="mb-4">
             <div className="text-[11px] uppercase tracking-[0.22em] text-muted">SEC filings</div>
             <h2 className="mt-1 text-xl font-semibold text-text">Download Filings</h2>
@@ -449,7 +458,7 @@ export function EdgarWorkspace({
           {syncError ? <InlineMessage tone="danger" message={syncError} /> : null}
         </section>
 
-        <section className="border-t border-line/70 px-10 py-8 lg:px-12">
+        <section className={workspaceDividedBodyClassName}>
           <div className="mb-4">
             <div className="text-[11px] uppercase tracking-[0.22em] text-muted">Saved state</div>
             <h2 className="mt-1 text-xl font-semibold text-text">Last Sync</h2>

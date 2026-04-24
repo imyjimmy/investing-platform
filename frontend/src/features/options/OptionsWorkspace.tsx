@@ -352,7 +352,6 @@ export function OptionsWorkspace({
   function renderOptionsToolFrame(title: string, children: ReactNode, description?: string) {
     return (
       <ToolWorkspaceFrame
-        compact
         description={description}
         eyebrow="Options"
         titleEndSlot={

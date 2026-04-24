@@ -3,6 +3,14 @@ import { useQuery } from "@tanstack/react-query";
 
 import { api } from "../lib/api";
 import type { InvestorPdfDownloadRequest, InvestorPdfDownloadResponse, InvestorPdfSourceStatus } from "../lib/types";
+import {
+  workspaceBodyClassName,
+  workspaceEyebrowClassName,
+  workspaceFrameClassName,
+  workspaceHeaderClassName,
+  workspacePanelClassName,
+  workspaceTitleClassName,
+} from "./shell/WorkspaceStage";
 
 type LookupMode = "ticker" | "companyName" | "cik";
 type WindowMode = "rolling" | "exact";
@@ -131,14 +139,14 @@ export function InvestorPdfsWorkspace({
   }
 
   return (
-    <div className="chrome-header-frame">
-      <div className="account-workspace panel overflow-hidden rounded-[16px]">
-        <header className="border-b border-line/70 px-10 py-7 lg:px-12">
+    <div className={workspaceFrameClassName}>
+      <div className={workspacePanelClassName}>
+        <header className={workspaceHeaderClassName}>
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div>
-              <div className="mb-2 text-[11px] uppercase tracking-[0.32em] text-accent">Stock Intel</div>
+              <div className={workspaceEyebrowClassName}>Stocks</div>
               <div className="flex flex-wrap items-center gap-3">
-                <h1 className="text-3xl font-semibold tracking-tight text-text">Company PDFs</h1>
+                <h1 className={workspaceTitleClassName}>Company PDFs</h1>
                 <div className="inline-flex items-center rounded-full border border-line bg-panelSoft px-4 py-1 text-sm font-medium text-text">
                   {status?.available ? "Ready" : statusLoading ? "Checking" : "Needs config"}
                 </div>
@@ -160,7 +168,7 @@ export function InvestorPdfsWorkspace({
           </div>
         </header>
 
-        <section className="px-10 py-8 lg:px-12">
+        <section className={workspaceBodyClassName}>
           <div className="grid items-start gap-8 xl:grid-cols-[1.08fr,0.92fr]">
             <div className="grid gap-7">
               <section className="border-b border-line/70 pb-6">

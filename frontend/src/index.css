@@ -501,6 +501,19 @@ body {
   min-width: 0;
 }
 
+.workspace-stage-inner {
+  max-width: 1840px;
+  --workspace-frame-line: rgba(27, 51, 57, 0.7);
+  --workspace-stage-x: 1rem;
+  --workspace-stage-y: 1.5rem;
+}
+
+@media (min-width: 1024px) {
+  .workspace-stage-inner {
+    --workspace-stage-x: 1.25rem;
+  }
+}
+
 .app-shell:not(.is-sidebar-open) .shell-sidebar {
   opacity: 0;
   pointer-events: none;
@@ -596,6 +609,35 @@ body {
   border-bottom: 1px solid rgba(95, 144, 146, 0.14);
 }
 
+.workspace-frame-header {
+  border-bottom: 1px solid var(--workspace-frame-line);
+  padding: var(--workspace-stage-y) var(--workspace-stage-x);
+}
+
+.workspace-frame-body {
+  padding: var(--workspace-stage-y) var(--workspace-stage-x);
+}
+
+.workspace-frame-body--divided {
+  border-top: 1px solid var(--workspace-frame-line);
+}
+
+.workspace-frame-eyebrow {
+  margin-bottom: 0.25rem;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+}
+
+.workspace-frame-title {
+  color: var(--text);
+  font-size: 1.875rem;
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 2.25rem;
+}
+
 .workspace-section {
   padding-top: 1.5rem;
   border-top: 1px solid rgba(95, 144, 146, 0.1);
@@ -609,8 +651,18 @@ body {
 .chrome-tabs-shell {
   position: relative;
   z-index: 3;
-  margin: 0 1.5rem -1px;
+  margin: 0 var(--workspace-stage-x) -1px;
   padding: 0;
+}
+
+.chrome-tabs-shell.is-inline {
+  margin: 0;
+}
+
+@media (min-width: 1024px) {
+  .chrome-tabs-shell.is-inline {
+    margin-inline: 0;
+  }
 }
 
 .chrome-tab-strip {

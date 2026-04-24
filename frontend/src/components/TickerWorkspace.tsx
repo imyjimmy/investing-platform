@@ -85,7 +85,7 @@ export function TickerWorkspace({
   }, [stockTradeRailOpen]);
 
   return (
-    <ToolWorkspaceFrame compact titleRowSlot={renderTickerQueryBar()} title="Ticker">
+    <ToolWorkspaceFrame eyebrow="Stocks" titleRowSlot={renderTickerQueryBar()} title="Ticker">
       <div className="grid gap-4">
         <div className="flex items-start justify-between gap-3">
           <div className="flex flex-wrap gap-2">

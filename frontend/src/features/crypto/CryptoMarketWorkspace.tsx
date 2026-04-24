@@ -10,6 +10,7 @@ export function CryptoMarketWorkspace() {
   return (
     <ToolWorkspaceFrame
       description="Track the crypto market without jumping directly into one account's holdings. Account-owned balances stay on the dashboard."
+      eyebrow="Crypto"
       title="Crypto Market"
     >
       {cryptoMajorsQuery.isLoading ? (
