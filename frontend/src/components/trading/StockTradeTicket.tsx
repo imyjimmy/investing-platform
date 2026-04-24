@@ -6,6 +6,7 @@ import { fmtCurrencySmall, fmtNumber } from "../../lib/formatters";
 import { queryKeys } from "../../lib/queryKeys";
 import type { ConnectionStatus, StockOrderPreview, StockOrderRequest, SubmittedOrder, TickerOverviewResponse } from "../../lib/types";
 import { ErrorState } from "../ui/ErrorState";
+import { TradeTicketFrame } from "./TradeTicketFrame";
 import { activeTradingAccount, buildTradingAccountOptions } from "./tradingAccounts";
 
 type StockTradeTicketProps = {
@@ -86,12 +87,9 @@ export function StockTradeTicket({
   }, [symbol, overview?.generatedAt]);
 
   return (
-    <div className="rounded-2xl border border-line/80 bg-panel px-3 py-3">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <div className="text-[11px] uppercase tracking-[0.22em] text-muted">Trade Ticket</div>
-          <div className="mt-1 text-lg font-semibold text-text">{symbol} Stock</div>
-        </div>
+    <TradeTicketFrame
+      title={`${symbol} Stock`}
+      titleEndSlot={
         <label className="relative shrink-0">
           <span className="sr-only">Trading account</span>
           <select
@@ -119,8 +117,8 @@ export function StockTradeTicket({
           </select>
           <DownChevronIcon />
         </label>
-      </div>
-
+      }
+    >
       <div className="mt-4 grid gap-4">
         <div className="grid grid-cols-2 gap-2">
           <button
@@ -270,7 +268,7 @@ export function StockTradeTicket({
           </button>
         </div>
       </div>
-    </div>
+    </TradeTicketFrame>
   );
 
   function resetTicketFeedback() {

@@ -5,6 +5,7 @@ import {
   getDashboardAccountByKey,
   type DashboardAccountKey,
 } from "../config/dashboardAccounts";
+import { WorkspaceFrame } from "./shell/WorkspaceFrame";
 import { ChromeTabs } from "./ui/ChromeTabs";
 
 interface AccountDashboardViewProps {
@@ -34,66 +35,71 @@ export function AccountDashboardView({
 }: AccountDashboardViewProps) {
   const selectedAccount = getDashboardAccountByKey(selectedAccountKey);
 
-  return (
-    <div className="chrome-header-frame">
-      <ChromeTabs
-        activeKey={selectedAccount.key}
-        ariaLabel="Dashboard accounts"
-        onSelect={onSelectAccount}
-        tabs={DASHBOARD_ACCOUNTS.map((account) => ({ key: account.key, label: account.name }))}
-      />
+  const tabsSlot = (
+    <ChromeTabs
+      activeKey={selectedAccount.key}
+      ariaLabel="Dashboard accounts"
+      onSelect={onSelectAccount}
+      tabs={DASHBOARD_ACCOUNTS.map((account) => ({ key: account.key, label: account.name }))}
+    />
+  );
+  const header = (
+    <>
+      <button
+        aria-expanded={accountSettingsOpen}
+        aria-label={accountSettingsOpen ? "Return to account page" : "Open account settings"}
+        className={`absolute right-10 top-3 inline-flex h-8 w-8 items-center justify-center transition ${
+          accountSettingsOpen ? "rounded-md bg-accent/10 text-accent" : "rounded-md text-muted hover:text-text"
+        }`}
+        onClick={onToggleSettings}
+        type="button"
+      >
+        <GearIcon />
+      </button>
 
-      <div className="account-workspace panel rounded-[16px]">
-        <header className="chrome-header-body relative px-10 py-5 lg:px-12">
-          <button
-            aria-expanded={accountSettingsOpen}
-            aria-label={accountSettingsOpen ? "Return to account page" : "Open account settings"}
-            className={`absolute right-10 top-3 inline-flex h-8 w-8 items-center justify-center transition ${
-              accountSettingsOpen ? "rounded-md bg-accent/10 text-accent" : "rounded-md text-muted hover:text-text"
-            }`}
-            onClick={onToggleSettings}
-            type="button"
-          >
-            <GearIcon />
-          </button>
-
-          <div className="flex flex-col gap-4 pr-12">
-            <div>
-              <div className="mb-2 text-[11px] uppercase tracking-[0.32em] text-accent">{selectedAccount.headerEyebrow}</div>
-              <div className="flex flex-wrap items-center gap-3">
-                <h1 className="text-3xl font-semibold tracking-tight text-text">
-                  {accountSettingsOpen ? `${selectedAccount.name} Settings` : selectedAccount.name}
-                </h1>
-              </div>
-              {accountSettingsOpen ? (
-                <p className="mt-2 max-w-3xl text-sm text-muted">
-                  {`Manage the account-bound connectors and defaults for ${selectedAccount.name}.`}
-                </p>
-              ) : (
-                <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-muted">
-                  <div className="inline-flex items-center gap-2">
-                    <span className={`h-2.5 w-2.5 rounded-full ${headerStatusIndicatorClassName}`} />
-                    <span>{headerStatusLabel}</span>
-                  </div>
-                  <div>{headerRouteLabel}</div>
-                </div>
-              )}
-            </div>
+      <div className="flex flex-col gap-4 pr-12">
+        <div>
+          <div className="mb-2 text-[11px] uppercase tracking-[0.32em] text-accent">{selectedAccount.headerEyebrow}</div>
+          <div className="flex flex-wrap items-center gap-3">
+            <h1 className="text-3xl font-semibold tracking-tight text-text">
+              {accountSettingsOpen ? `${selectedAccount.name} Settings` : selectedAccount.name}
+            </h1>
           </div>
-
-          {!accountSettingsOpen ? (
-            <div className="mt-6">
-              <h2 className="text-2xl font-semibold tracking-tight text-text">Account Summary</h2>
-              <div className="mt-4">{summaryContent}</div>
+          {accountSettingsOpen ? (
+            <p className="mt-2 max-w-3xl text-sm text-muted">
+              {`Manage the account-bound connectors and defaults for ${selectedAccount.name}.`}
+            </p>
+          ) : (
+            <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-muted">
+              <div className="inline-flex items-center gap-2">
+                <span className={`h-2.5 w-2.5 rounded-full ${headerStatusIndicatorClassName}`} />
+                <span>{headerStatusLabel}</span>
+              </div>
+              <div>{headerRouteLabel}</div>
             </div>
-          ) : null}
-        </header>
-
-        <div className="account-workspace-body flex flex-col gap-6 px-10 pt-6 pb-6 lg:px-12">
-          {accountSettingsOpen ? settingsContent : bodyContent}
+          )}
         </div>
       </div>
-    </div>
+
+      {!accountSettingsOpen ? (
+        <div className="mt-6">
+          <h2 className="text-2xl font-semibold tracking-tight text-text">Account Summary</h2>
+          <div className="mt-4">{summaryContent}</div>
+        </div>
+      ) : null}
+    </>
+  );
+
+  return (
+    <WorkspaceFrame
+      bodyClassName="account-workspace-body flex flex-col gap-6 px-10 pt-6 pb-6 lg:px-12"
+      header={header}
+      headerClassName="chrome-header-body relative px-10 py-5 lg:px-12"
+      panelClassName="account-workspace panel rounded-[16px]"
+      tabsSlot={tabsSlot}
+    >
+      {accountSettingsOpen ? settingsContent : bodyContent}
+    </WorkspaceFrame>
   );
 }
 

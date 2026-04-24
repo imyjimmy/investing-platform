@@ -1320,7 +1320,6 @@ function App() {
         initialSymbol={selectedStockSymbol}
         onOpenChain={() => setActiveWorkspace("options")}
         onSymbolChange={setSelectedStockSymbol}
-        openOrders={openOrders}
         optionPositions={optionPositions}
         selectedAccount={selectedAccount}
         workspace={activeWorkspace as OptionsWorkspaceSurface}

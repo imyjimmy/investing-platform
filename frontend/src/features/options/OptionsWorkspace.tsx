@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { executionApi } from "../../lib/api";
@@ -7,11 +7,9 @@ import { queryKeys } from "../../lib/queryKeys";
 import type {
   ChainRow,
   ConnectionStatus,
-  OpenOrderExposure,
   OptionOrderPreview,
   OptionOrderRequest,
   OptionPosition,
-  OrderCancelResponse,
   SubmittedOrder,
 } from "../../lib/types";
 import {
@@ -31,6 +29,7 @@ import {
 } from "../../components/options/OptionsChainTable";
 import { useOptionChain } from "../../components/options/useOptionChain";
 import { ToolWorkspaceFrame } from "../../components/shell/ToolWorkspaceFrame";
+import { TradeTicketFrame } from "../../components/trading/TradeTicketFrame";
 import { ErrorState } from "../../components/ui/ErrorState";
 import { TradeRailToggleIcon } from "../../components/ui/TradeRailToggleIcon";
 
@@ -76,7 +75,6 @@ type OptionsWorkspaceProps = {
   controlsDisabled: boolean;
   executionEnabled: boolean;
   optionPositions: OptionPosition[];
-  openOrders: OpenOrderExposure[];
   onOpenChain: () => void;
   onSymbolChange: (symbol: string) => void;
 };
@@ -133,7 +131,6 @@ export function OptionsWorkspace({
   controlsDisabled,
   executionEnabled,
   optionPositions,
-  openOrders,
   onOpenChain,
   onSymbolChange,
 }: OptionsWorkspaceProps) {
@@ -169,7 +166,6 @@ export function OptionsWorkspace({
     rowDisplayStates,
     selectedExpiry,
     setChainSymbolInput,
-    submitChainSymbolInput,
     tickerOverviewQuery,
   } = useOptionChain(normalizedInitialSymbol);
 
@@ -188,27 +184,16 @@ export function OptionsWorkspace({
       ]);
     },
   });
-  const cancelMutation = useMutation({
-    mutationFn: ({ orderId, accountId }: { orderId: number; accountId: string }) => executionApi.cancelOrder(orderId, accountId),
-    onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.account.riskSummary(selectedAccount) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.account.optionPositions(selectedAccount) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.account.openOrders(selectedAccount) }),
-      ]);
-    },
-  });
+  const lastExternalSymbolRef = useRef(normalizedInitialSymbol);
 
   useEffect(() => {
-    if (normalizedInitialSymbol !== chainSymbol) {
-      setChainSymbolInput(normalizedInitialSymbol);
-      handleChainSymbolSelection(normalizedInitialSymbol);
+    if (normalizedInitialSymbol === lastExternalSymbolRef.current) {
+      return;
     }
-  }, [chainSymbol, handleChainSymbolSelection, normalizedInitialSymbol, setChainSymbolInput]);
-
-  useEffect(() => {
-    onSymbolChange(chainSymbol);
-  }, [chainSymbol, onSymbolChange]);
+    lastExternalSymbolRef.current = normalizedInitialSymbol;
+    setChainSymbolInput(normalizedInitialSymbol);
+    handleChainSymbolSelection(normalizedInitialSymbol);
+  }, [handleChainSymbolSelection, normalizedInitialSymbol, setChainSymbolInput]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -258,7 +243,6 @@ export function OptionsWorkspace({
   const effectiveTicketLegs = ticketPlan ? deriveEffectiveTicketLegs(ticketPlan, ticketAction) : [];
   const selectedTicketLeg = effectiveTicketLegs[0] ?? null;
   const ticketNetReferencePrice = computeTicketNetReferencePrice(effectiveTicketLegs);
-  const openOptionOrders = openOrders.filter((order) => order.secType === "OPT" || order.secType === "BAG");
   const optionsDataSourcePill = optionDataSourcePresentation(activeDisplayedChain, connectionStatus, chainHasBidAsk, chainHasOptionMarks);
   const parsedLimitPrice = ticketOrderType === "LMT" ? Number(ticketLimitPrice) : null;
   const validLimitPrice =
@@ -292,7 +276,6 @@ export function OptionsWorkspace({
   const submitIsCurrent = Boolean(submitMutation.data && previewRequestKey && ticketRequestKey === previewRequestKey);
   const previewError = previewMutation.error instanceof Error ? previewMutation.error.message : null;
   const submitError = submitMutation.error instanceof Error ? submitMutation.error.message : null;
-  const cancelError = cancelMutation.error instanceof Error ? cancelMutation.error.message : null;
   const canPreviewTicket = executionEnabled && Boolean(ticketRequest);
   const canSubmitTicket = canPreviewTicket && previewIsCurrent;
   const tickerOverview = tickerOverviewQuery.data;
@@ -393,7 +376,7 @@ export function OptionsWorkspace({
               onChange={(event) => setChainSymbolInput(event.target.value.toUpperCase())}
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
-                  submitChainSymbolInput();
+                  submitSelectedChainSymbol();
                 }
               }}
               placeholder="Enter ticker"
@@ -406,7 +389,7 @@ export function OptionsWorkspace({
             className="inline-flex h-9 shrink-0 items-center justify-center rounded-xl border border-accent/30 bg-accent/10 px-3 text-sm font-medium text-accent transition hover:border-accent/50 hover:bg-accent/16 disabled:cursor-not-allowed disabled:opacity-50"
             data-testid="chain-load-button"
             disabled={!chainSymbolInput.trim() || controlsDisabled}
-            onClick={submitChainSymbolInput}
+            onClick={submitSelectedChainSymbol}
             type="button"
           >
             {chainLoadLabel}
@@ -415,6 +398,16 @@ export function OptionsWorkspace({
         <div className="shrink-0 text-[11px] text-muted lg:text-right">{requestedSymbolPriceLabel}</div>
       </div>
     );
+  }
+
+  function submitSelectedChainSymbol() {
+    const normalizedSymbol = chainSymbolInput.trim().toUpperCase();
+    if (!normalizedSymbol) {
+      return;
+    }
+    setChainSymbolInput(normalizedSymbol);
+    handleChainSymbolSelection(normalizedSymbol);
+    onSymbolChange(normalizedSymbol);
   }
 
   function renderIbkrOptionsSurface() {
@@ -583,97 +576,13 @@ export function OptionsWorkspace({
   function renderTradeRail(selectedContractLabel: string | null) {
     return (
       <div className="grid content-start gap-4">
-        <div className="rounded-2xl border border-line/80 bg-panel px-3 py-3">
-          <div>
-            <div className="text-[11px] uppercase tracking-[0.22em] text-muted">Trade Ticket</div>
-            <div className="mt-1 text-lg font-semibold text-text">{selectedContractLabel ?? "Select a contract"}</div>
-          </div>
-
+        <TradeTicketFrame title={selectedContractLabel ?? "Select a contract"}>
           {ticketPlan ? renderTradeTicketForm() : (
             <div className="mt-4 rounded-xl border border-line/80 bg-panelSoft px-3 py-4 text-sm text-muted">
               Load any call or put from the chain, or stage a spread from the Builder workspace.
             </div>
           )}
-        </div>
-
-        <div className="rounded-2xl border border-line/80 bg-panel px-3 py-3">
-          <div>
-            <div className="text-[11px] uppercase tracking-[0.22em] text-muted">Working Orders</div>
-            <div className="mt-1 text-lg font-semibold text-text">{openOptionOrders.length}</div>
-          </div>
-          <div className="mt-4 grid gap-3">
-            {cancelMutation.data ? <CancelSummary cancelled={cancelMutation.data} /> : null}
-            {openOptionOrders.length ? (
-              openOptionOrders.map((order) => (
-                <div
-                  key={order.orderId}
-                  className="rounded-xl border border-line/80 bg-panelSoft px-3 py-3"
-                  data-testid={`open-order-${order.orderId}`}
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <div className="font-medium text-text">{formatOpenOrderLabel(order)}</div>
-                      <div className="mt-1 text-xs text-muted">
-                        {order.orderType}
-                        {order.limitPrice != null ? ` ${fmtCurrencySmall(order.limitPrice)}` : ""}
-                        {" - "}
-                        {order.status}
-                        {" - filled "}
-                        {fmtNumber(order.filledQuantity)}
-                        {" / remaining "}
-                        {fmtNumber(order.remainingQuantity)}
-                      </div>
-                      {order.note ? <div className="mt-1 text-xs text-muted">{order.note}</div> : null}
-                    </div>
-                    <button
-                      className="rounded-full border border-danger/30 bg-danger/10 px-3 py-1.5 text-xs font-medium text-danger transition hover:border-danger/50 hover:bg-danger/16 disabled:cursor-not-allowed disabled:opacity-50"
-                      data-testid={`cancel-order-${order.orderId}`}
-                      disabled={!selectedAccount || cancelMutation.isPending}
-                      onClick={() => {
-                        if (selectedAccount) {
-                          void cancelMutation.mutateAsync({ orderId: order.orderId, accountId: selectedAccount });
-                        }
-                      }}
-                      type="button"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              ))
-            ) : (
-              <div className="rounded-xl border border-line/80 bg-panelSoft px-3 py-4 text-sm text-muted">
-                No working option orders in the selected routed account.
-              </div>
-            )}
-          </div>
-        </div>
-
-        <div className="rounded-2xl border border-line/80 bg-panel px-3 py-3">
-          <div>
-            <div className="text-[11px] uppercase tracking-[0.22em] text-muted">Open Option Positions</div>
-            <div className="mt-1 text-lg font-semibold text-text">{optionPositions.length}</div>
-          </div>
-          <div className="mt-4 grid gap-3">
-            {optionPositions.length ? (
-              optionPositions.slice(0, 6).map((position) => (
-                <div key={`${position.symbol}-${position.expiry}-${position.strike}-${position.right}`} className="rounded-xl border border-line/80 bg-panelSoft px-3 py-3">
-                  <div className="font-medium text-text">
-                    {position.symbol} {position.expiry} {fmtNumber(position.strike)}
-                    {position.right}
-                  </div>
-                  <div className="mt-1 text-xs text-muted">
-                    {position.shortOrLong} {fmtNumber(position.quantity)} - mid {fmtCurrencySmall(position.currentMid)} - delta {fmtNumber(position.delta)}
-                  </div>
-                </div>
-              ))
-            ) : (
-              <div className="rounded-xl border border-line/80 bg-panelSoft px-3 py-4 text-sm text-muted">
-                No option positions yet. The trade flow above comes first.
-              </div>
-            )}
-          </div>
-        </div>
+        </TradeTicketFrame>
       </div>
     );
   }
@@ -838,7 +747,6 @@ export function OptionsWorkspace({
         {previewIsCurrent && previewMutation.data ? <PreviewSummary preview={previewMutation.data} /> : null}
         {previewError ? <ErrorState message={previewError} /> : null}
         {submitError ? <ErrorState message={submitError} /> : null}
-        {cancelError ? <ErrorState message={cancelError} /> : null}
         {submitIsCurrent && submitMutation.data ? <SubmitSummary submitted={submitMutation.data} /> : null}
 
         <div className="grid gap-2 sm:grid-cols-2">
@@ -948,14 +856,6 @@ export function OptionsWorkspace({
     resetTicketFeedback();
   }
 
-  function formatOpenOrderLabel(order: OpenOrderExposure) {
-    if (order.secType === "BAG") {
-      const structure = order.strategyTag ? titleCaseLabel(order.strategyTag) : "Multi-Leg Structure";
-      return `${order.side} ${fmtNumber(order.quantity)} ${order.symbol} ${structure}`;
-    }
-    return `${order.side} ${fmtNumber(order.quantity)} ${order.symbol} ${order.expiry} ${fmtNumber(order.strike)}${order.right ?? ""}`;
-  }
-
   function computeTicketAnalytics(
     plan: TicketPlan,
     legs: Array<TicketLegTemplate & { action: "BUY" | "SELL" }>,
@@ -1009,21 +909,12 @@ export function OptionsWorkspace({
   function resetTicketFeedback() {
     previewMutation.reset();
     submitMutation.reset();
-    cancelMutation.reset();
     setPreviewRequestKey(null);
   }
 }
 
 function invertAction(action: "BUY" | "SELL") {
   return action === "BUY" ? "SELL" : "BUY";
-}
-
-function titleCaseLabel(value: string) {
-  return value
-    .split(/[-_\s]+/)
-    .filter(Boolean)
-    .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
-    .join(" ");
 }
 
 function optionDataSourcePresentation(
@@ -1191,15 +1082,6 @@ function SubmitSummary({ submitted }: { submitted: SubmittedOrder }) {
       {submitted.structureLabel ? ` ${submitted.structureLabel}.` : ""}
       {!submitted.structureLabel && submitted.legCount > 1 ? ` ${submitted.legCount} legs.` : ""}
       {submitted.message ? ` ${submitted.message}` : ""}
-    </div>
-  );
-}
-
-function CancelSummary({ cancelled }: { cancelled: OrderCancelResponse }) {
-  return (
-    <div className="rounded-xl border border-danger/25 bg-danger/10 px-3 py-3 text-sm text-danger" data-testid="cancel-banner">
-      Order {cancelled.orderId} cancel request returned status {cancelled.status}.
-      {cancelled.message ? ` ${cancelled.message}` : ""}
     </div>
   );
 }

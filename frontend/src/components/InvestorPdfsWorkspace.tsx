@@ -5,13 +5,10 @@ import { sourceApi } from "../lib/api";
 import { queryKeys } from "../lib/queryKeys";
 import type { InvestorPdfDownloadRequest, InvestorPdfDownloadResponse, InvestorPdfSourceStatus } from "../lib/types";
 import {
-  workspaceBodyClassName,
   workspaceEyebrowClassName,
-  workspaceFrameClassName,
-  workspaceHeaderClassName,
-  workspacePanelClassName,
   workspaceTitleClassName,
 } from "./shell/WorkspaceStage";
+import { WorkspaceFrame } from "./shell/WorkspaceFrame";
 
 type LookupMode = "ticker" | "companyName" | "cik";
 type WindowMode = "rolling" | "exact";
@@ -139,37 +136,35 @@ export function InvestorPdfsWorkspace({
     onRun(request);
   }
 
-  return (
-    <div className={workspaceFrameClassName}>
-      <div className={workspacePanelClassName}>
-        <header className={workspaceHeaderClassName}>
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-            <div>
-              <div className={workspaceEyebrowClassName}>Stocks</div>
-              <div className="flex flex-wrap items-center gap-3">
-                <h1 className={workspaceTitleClassName}>Company PDFs</h1>
-                <div className="inline-flex items-center rounded-full border border-line bg-panelSoft px-4 py-1 text-sm font-medium text-text">
-                  {status?.available ? "Ready" : statusLoading ? "Checking" : "Needs config"}
-                </div>
-              </div>
-              <p className="mt-2 max-w-3xl text-sm text-muted">
-                Pull public investor PDFs into the visible stock folder. This finds annual reports, company reports, and SEC PDF exhibits; it does not generate PDFs.
-              </p>
-            </div>
-            <div className="flex flex-col items-start gap-3 lg:items-end">
-              <button
-                className="rounded-full border border-accent/35 bg-accent/10 px-4 py-2 text-sm font-medium text-accent transition hover:border-accent/50 hover:text-white disabled:cursor-default disabled:opacity-45"
-                disabled={!canRun}
-                onClick={handleRun}
-                type="button"
-              >
-                {syncing ? "Finding PDFs..." : "Run PDF sync"}
-              </button>
-            </div>
+  const header = (
+    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+      <div>
+        <div className={workspaceEyebrowClassName}>Stocks</div>
+        <div className="flex flex-wrap items-center gap-3">
+          <h1 className={workspaceTitleClassName}>Company PDFs</h1>
+          <div className="inline-flex items-center rounded-full border border-line bg-panelSoft px-4 py-1 text-sm font-medium text-text">
+            {status?.available ? "Ready" : statusLoading ? "Checking" : "Needs config"}
           </div>
-        </header>
+        </div>
+        <p className="mt-2 max-w-3xl text-sm text-muted">
+          Pull public investor PDFs into the visible stock folder. This finds annual reports, company reports, and SEC PDF exhibits; it does not generate PDFs.
+        </p>
+      </div>
+      <div className="flex flex-col items-start gap-3 lg:items-end">
+        <button
+          className="rounded-full border border-accent/35 bg-accent/10 px-4 py-2 text-sm font-medium text-accent transition hover:border-accent/50 hover:text-white disabled:cursor-default disabled:opacity-45"
+          disabled={!canRun}
+          onClick={handleRun}
+          type="button"
+        >
+          {syncing ? "Finding PDFs..." : "Run PDF sync"}
+        </button>
+      </div>
+    </div>
+  );
 
-        <section className={workspaceBodyClassName}>
+  return (
+    <WorkspaceFrame header={header}>
           <div className="grid items-start gap-8 xl:grid-cols-[1.08fr,0.92fr]">
             <div className="grid gap-7">
               <section className="border-b border-line/70 pb-6">
@@ -406,9 +401,7 @@ export function InvestorPdfsWorkspace({
               ) : null}
             </div>
           </div>
-        </section>
-      </div>
-    </div>
+    </WorkspaceFrame>
   );
 }
 

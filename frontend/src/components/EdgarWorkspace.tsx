@@ -8,11 +8,9 @@ import {
   workspaceBodyClassName,
   workspaceDividedBodyClassName,
   workspaceEyebrowClassName,
-  workspaceFrameClassName,
-  workspaceHeaderClassName,
-  workspacePanelClassName,
   workspaceTitleClassName,
 } from "./shell/WorkspaceStage";
+import { WorkspaceFrame } from "./shell/WorkspaceFrame";
 
 type EdgarLookupMode = "ticker" | "companyName" | "cik";
 type EdgarDownloadMode = NonNullable<EdgarDownloadRequest["downloadMode"]>;
@@ -149,41 +147,40 @@ export function EdgarWorkspace({
     onRun(request);
   }
 
-  return (
-    <div className={workspaceFrameClassName}>
-      <div className={workspacePanelClassName}>
-        <header className={workspaceHeaderClassName}>
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-            <div>
-              <div className={workspaceEyebrowClassName}>Stocks</div>
-              <div className="flex flex-wrap items-center gap-3">
-                <h1 className={workspaceTitleClassName}>SEC Source Files</h1>
-                <div className="inline-flex items-center rounded-full border border-line bg-panelSoft px-4 py-1 text-sm font-medium text-text">
-                  {status?.available ? "Ready" : statusLoading ? "Checking" : "Needs config"}
-                </div>
-              </div>
-              <p className="mt-2 max-w-3xl text-sm text-muted">
-                Search EDGAR by ticker, company, or CIK. This saves SEC source files exactly as published.
-              </p>
-            </div>
-            <div className="flex flex-col items-start gap-3 lg:items-end">
-              <button
-                className="rounded-full border border-accent/35 bg-accent/10 px-4 py-2 text-sm font-medium text-accent transition hover:border-accent/50 hover:text-white disabled:cursor-default disabled:opacity-45"
-                disabled={!canRun}
-                onClick={handleRun}
-                type="button"
-              >
-                {syncing ? "Syncing filings..." : "Run sync"}
-              </button>
-              {!status?.available ? (
-                <div className="max-w-md rounded-[20px] border border-caution/25 bg-caution/10 px-4 py-3 text-sm text-caution">
-                  Add a descriptive SEC <span className="mono">User-Agent</span> to enable downloads.
-                </div>
-              ) : null}
-            </div>
+  const header = (
+    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+      <div>
+        <div className={workspaceEyebrowClassName}>Stocks</div>
+        <div className="flex flex-wrap items-center gap-3">
+          <h1 className={workspaceTitleClassName}>SEC Source Files</h1>
+          <div className="inline-flex items-center rounded-full border border-line bg-panelSoft px-4 py-1 text-sm font-medium text-text">
+            {status?.available ? "Ready" : statusLoading ? "Checking" : "Needs config"}
           </div>
-        </header>
+        </div>
+        <p className="mt-2 max-w-3xl text-sm text-muted">
+          Search EDGAR by ticker, company, or CIK. This saves SEC source files exactly as published.
+        </p>
+      </div>
+      <div className="flex flex-col items-start gap-3 lg:items-end">
+        <button
+          className="rounded-full border border-accent/35 bg-accent/10 px-4 py-2 text-sm font-medium text-accent transition hover:border-accent/50 hover:text-white disabled:cursor-default disabled:opacity-45"
+          disabled={!canRun}
+          onClick={handleRun}
+          type="button"
+        >
+          {syncing ? "Syncing filings..." : "Run sync"}
+        </button>
+        {!status?.available ? (
+          <div className="max-w-md rounded-[20px] border border-caution/25 bg-caution/10 px-4 py-3 text-sm text-caution">
+            Add a descriptive SEC <span className="mono">User-Agent</span> to enable downloads.
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
 
+  return (
+    <WorkspaceFrame bodyClassName={null} header={header}>
         <section className={workspaceBodyClassName}>
           <div className="mb-4">
             <div className="text-[11px] uppercase tracking-[0.22em] text-muted">SEC filings</div>
@@ -529,8 +526,7 @@ export function EdgarWorkspace({
             </div>
           )}
         </section>
-      </div>
-    </div>
+    </WorkspaceFrame>
   );
 }
 
