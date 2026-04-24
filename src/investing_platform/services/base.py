@@ -17,6 +17,8 @@ from investing_platform.models import (
     OptionPosition,
     OrderCancelResponse,
     Position,
+    StockOrderPreview,
+    StockOrderRequest,
     SubmittedOrder,
     TickerOverviewResponse,
     TickerFinancialsResponse,
@@ -99,6 +101,12 @@ class BrokerService:
         raise NotImplementedError
 
     def submit_option_order(self, request: OptionOrderRequest) -> SubmittedOrder:
+        raise NotImplementedError
+
+    def preview_stock_order(self, request: StockOrderRequest) -> StockOrderPreview:
+        raise NotImplementedError
+
+    def submit_stock_order(self, request: StockOrderRequest) -> SubmittedOrder:
         raise NotImplementedError
 
     def cancel_order(self, account_id: str, order_id: int) -> OrderCancelResponse:

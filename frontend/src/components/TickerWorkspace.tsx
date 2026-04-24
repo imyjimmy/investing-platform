@@ -13,25 +13,45 @@ import {
   fmtSignedPct,
   fmtWholeNumber,
 } from "../lib/formatters";
-import type { TickerOverviewResponse } from "../lib/types";
+import type {
+  ConnectionStatus,
+  Position,
+  TickerOverviewResponse,
+} from "../lib/types";
 import { Panel } from "./Panel";
 import { ToolWorkspaceFrame } from "./shell/ToolWorkspaceFrame";
 import { TickerFinancialsPanel } from "./TickerFinancialsPanel";
+import { StockTradeTicket } from "./trading/StockTradeTicket";
+import { activeTradingAccount, buildTradingAccountOptions } from "./trading/tradingAccounts";
 import { ErrorState } from "./ui/ErrorState";
+import { TradeRailToggleIcon } from "./ui/TradeRailToggleIcon";
 
 type TickerWorkspaceProps = {
   selectedSymbol: string;
   onSymbolChange: (symbol: string) => void;
   controlsDisabled: boolean;
+  selectedAccount?: string;
+  onSelectedAccountChange: (accountId: string) => void;
+  connectionStatus?: ConnectionStatus;
+  executionEnabled: boolean;
+  positions: Position[];
 };
+
+const STOCK_TRADE_RAIL_STORAGE_KEY = "stocks-ticker-trade-rail-open";
 
 export function TickerWorkspace({
   selectedSymbol,
   onSymbolChange,
   controlsDisabled,
+  selectedAccount,
+  onSelectedAccountChange,
+  connectionStatus,
+  executionEnabled,
+  positions,
 }: TickerWorkspaceProps) {
   const symbol = selectedSymbol.trim().toUpperCase() || "NVDA";
   const [symbolInput, setSymbolInput] = useState(symbol);
+  const [stockTradeRailOpen, setStockTradeRailOpen] = useState<boolean>(() => readStockTradeRailOpen());
   const tickerOverviewQuery = useQuery({
     queryKey: ["ticker-overview", symbol],
     queryFn: () => api.tickerOverview(symbol),
@@ -49,20 +69,60 @@ export function TickerWorkspace({
     staleTime: 120_000,
   });
   const tickerFinancialsError = tickerFinancialsQuery.error instanceof Error ? tickerFinancialsQuery.error.message : null;
+  const stockPositions = positions.filter((position) => (position.secType === "STK" || position.secType === "ETF") && position.symbol === symbol);
+  const netShares = stockPositions.reduce((total, position) => total + position.quantity, 0);
+  const activeTicketAccount = activeTradingAccount(buildTradingAccountOptions(connectionStatus, selectedAccount), selectedAccount);
 
   useEffect(() => {
     setSymbolInput(symbol);
   }, [symbol]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem(STOCK_TRADE_RAIL_STORAGE_KEY, String(stockTradeRailOpen));
+  }, [stockTradeRailOpen]);
+
   return (
     <ToolWorkspaceFrame compact titleRowSlot={renderTickerQueryBar()} title="Ticker">
-      <div className="grid gap-6">
-        {renderTickerOverview()}
-        <TickerFinancialsPanel
-          error={tickerFinancialsError}
-          financials={tickerFinancialsQuery.data}
-          isLoading={tickerFinancialsQuery.isLoading || tickerFinancialsQuery.isFetching}
-        />
+      <div className="grid gap-4">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex flex-wrap gap-2">
+            <InlinePill label={activeTicketAccount ? activeTicketAccount.label : "No routed account"} tone={executionEnabled && activeTicketAccount ? "safe" : "caution"} />
+            <InlinePill label={connectionStatus?.connected ? connectionStatus.marketDataMode : "Gateway offline"} tone={connectionStatus?.connected ? "neutral" : "danger"} />
+            <InlinePill label={`${fmtNumber(netShares)} shares`} tone={netShares === 0 ? "neutral" : netShares > 0 ? "safe" : "caution"} />
+          </div>
+          <button
+            aria-expanded={stockTradeRailOpen}
+            aria-label={stockTradeRailOpen ? "Collapse trade ticket rail" : "Expand trade ticket rail"}
+            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-line/80 bg-panelSoft text-muted transition hover:border-accent/25 hover:text-text"
+            data-testid="toggle-stock-trade-rail"
+            onClick={() => setStockTradeRailOpen((current) => !current)}
+            type="button"
+          >
+            <TradeRailToggleIcon open={stockTradeRailOpen} />
+          </button>
+        </div>
+
+        <div
+          className={`options-rail-frame grid gap-4 ${stockTradeRailOpen ? "xl:grid-cols-[minmax(0,1fr)_340px]" : "xl:grid-cols-[minmax(0,1fr)_44px]"}`}
+        >
+          <div className="grid gap-6">
+            {renderTickerOverview()}
+            <TickerFinancialsPanel
+              error={tickerFinancialsError}
+              financials={tickerFinancialsQuery.data}
+              isLoading={tickerFinancialsQuery.isLoading || tickerFinancialsQuery.isFetching}
+            />
+          </div>
+
+          {stockTradeRailOpen ? (
+            <div className="options-rail-pane options-rail-pane-open">{renderTradeRail()}</div>
+          ) : (
+            <div className="options-rail-pane options-rail-pane-closed">{renderCollapsedTradeRail()}</div>
+          )}
+        </div>
       </div>
     </ToolWorkspaceFrame>
   );
@@ -154,6 +214,34 @@ export function TickerWorkspace({
     }
     onSymbolChange(normalizedSymbol);
   }
+
+  function renderTradeRail() {
+    return (
+      <div className="grid content-start gap-4">
+        <StockTradeTicket
+          connectionStatus={connectionStatus}
+          executionEnabled={executionEnabled}
+          netShares={netShares}
+          onSelectedAccountChange={onSelectedAccountChange}
+          overview={tickerOverview}
+          selectedAccount={selectedAccount}
+          symbol={symbol}
+        />
+      </div>
+    );
+  }
+
+  function renderCollapsedTradeRail() {
+    return (
+      <div className="flex h-full min-h-[280px] items-start justify-center">
+        <div className="flex h-full min-h-[280px] w-full flex-col items-center rounded-xl border border-line/80 bg-panel py-2">
+          <div className="flex-1 [writing-mode:vertical-rl] rotate-180 text-center text-[10px] uppercase tracking-[0.16em] text-muted">
+            Trade Ticket
+          </div>
+        </div>
+      </div>
+    );
+  }
 }
 
 function tickerOverviewRows(overview: TickerOverviewResponse) {
@@ -210,4 +298,31 @@ function renderTickerOverviewValue(value: string, change?: string | null) {
       {change ? <span className={change.startsWith("-") ? "text-danger" : "text-safe"}>{change}</span> : null}
     </div>
   );
+}
+
+function readStockTradeRailOpen(): boolean {
+  if (typeof window === "undefined") {
+    return true;
+  }
+  try {
+    const raw = window.localStorage.getItem(STOCK_TRADE_RAIL_STORAGE_KEY);
+    if (raw == null) {
+      return true;
+    }
+    return raw === "true";
+  } catch {
+    return true;
+  }
+}
+
+function InlinePill({ label, tone }: { label: string; tone: "neutral" | "safe" | "caution" | "danger" }) {
+  const toneClass =
+    tone === "safe"
+      ? "border-safe/25 bg-safe/10 text-safe"
+      : tone === "caution"
+        ? "border-caution/25 bg-caution/10 text-caution"
+        : tone === "danger"
+          ? "border-danger/25 bg-danger/10 text-danger"
+          : "border-line/80 bg-panelSoft text-muted";
+  return <span className={`rounded-full border px-3 py-1.5 text-xs font-medium ${toneClass}`}>{label}</span>;
 }

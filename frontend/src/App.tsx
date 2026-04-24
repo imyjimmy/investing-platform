@@ -44,6 +44,7 @@ import { MetricCard } from "./components/MetricCard";
 import { TickerWorkspace } from "./components/TickerWorkspace";
 import { Panel } from "./components/Panel";
 import { ToolWorkspaceFrame } from "./components/shell/ToolWorkspaceFrame";
+import { ChromeTabs } from "./components/ui/ChromeTabs";
 import { CryptoLeverageWorkspace } from "./features/crypto/CryptoLeverageWorkspace";
 import { CryptoMarketWorkspace } from "./features/crypto/CryptoMarketWorkspace";
 import { OptionsWorkspace, type OptionsWorkspaceSurface } from "./features/options/OptionsWorkspace";
@@ -201,6 +202,7 @@ function routePresentation(routeKind: "live" | "paper" | "unknown") {
 type InlinePillTone = "neutral" | "safe" | "caution" | "danger" | "accent";
 
 type SourceTone = "live" | "off" | "planned";
+type StockIntelTab = "sec" | "companyPdfs";
 type WorkspaceSurface =
   | "dashboard"
   | "market"
@@ -213,7 +215,7 @@ type WorkspaceSurface =
   | "optionsScanner"
   | "crypto"
   | "cryptoLeverage"
-  | "research"
+  | "stockIntel"
   | "globalSettings";
 type ConnectionHealthTone = "safe" | "caution" | "danger" | "planned";
 
@@ -307,6 +309,7 @@ function App() {
   const [investorPdfSyncing, setInvestorPdfSyncing] = useState(false);
   const [investorPdfSyncResult, setInvestorPdfSyncResult] = useState<InvestorPdfDownloadResponse | undefined>(undefined);
   const [investorPdfSyncError, setInvestorPdfSyncError] = useState<string | null>(null);
+  const [activeStockIntelTab, setActiveStockIntelTab] = useState<StockIntelTab>("sec");
 
   const connectionQuery = useQuery({
     queryKey: ["connection-status"],
@@ -1492,40 +1495,57 @@ function App() {
   function renderTickerWorkspace() {
     return (
       <TickerWorkspace
+        connectionStatus={connectionQuery.data}
         controlsDisabled={connectMutation.isPending || reconnectMutation.isPending}
+        executionEnabled={executionEnabled}
+        onSelectedAccountChange={setSelectedAccountId}
         onSymbolChange={setSelectedStockSymbol}
+        positions={positions}
         selectedSymbol={selectedStockSymbol}
+        selectedAccount={selectedAccount}
       />
     );
   }
 
-  function renderResearchWorkspace() {
+  function renderStockIntelWorkspace() {
     return (
-      <div className="grid gap-6">
-        <EdgarWorkspace
-          defaultTicker={selectedStockSymbol}
-          onRun={(request) => {
-            void runEdgarDownload(request);
-          }}
-          status={edgarStatusQuery.data}
-          statusLoading={edgarStatusQuery.isLoading}
-          statusError={edgarStatusError}
-          syncError={edgarSyncError}
-          syncResult={edgarSyncResult}
-          syncing={edgarSyncing}
+      <div className="chrome-header-frame">
+        <ChromeTabs
+          activeKey={activeStockIntelTab}
+          ariaLabel="Stock Intel tools"
+          onSelect={setActiveStockIntelTab}
+          tabs={[
+            { key: "sec", label: "SEC Tool" },
+            { key: "companyPdfs", label: "Company PDFs" },
+          ]}
         />
-        <InvestorPdfsWorkspace
-          defaultTicker={selectedStockSymbol}
-          onRun={(request) => {
-            void runInvestorPdfDownload(request);
-          }}
-          status={investorPdfStatusQuery.data}
-          statusLoading={investorPdfStatusQuery.isLoading}
-          statusError={investorPdfStatusError}
-          syncError={investorPdfSyncError}
-          syncResult={investorPdfSyncResult}
-          syncing={investorPdfSyncing}
-        />
+        {activeStockIntelTab === "sec" ? (
+          <EdgarWorkspace
+            defaultTicker={selectedStockSymbol}
+            onRun={(request) => {
+              void runEdgarDownload(request);
+            }}
+            status={edgarStatusQuery.data}
+            statusLoading={edgarStatusQuery.isLoading}
+            statusError={edgarStatusError}
+            syncError={edgarSyncError}
+            syncResult={edgarSyncResult}
+            syncing={edgarSyncing}
+          />
+        ) : (
+          <InvestorPdfsWorkspace
+            defaultTicker={selectedStockSymbol}
+            onRun={(request) => {
+              void runInvestorPdfDownload(request);
+            }}
+            status={investorPdfStatusQuery.data}
+            statusLoading={investorPdfStatusQuery.isLoading}
+            statusError={investorPdfStatusError}
+            syncError={investorPdfSyncError}
+            syncResult={investorPdfSyncResult}
+            syncing={investorPdfSyncing}
+          />
+        )}
       </div>
     );
   }
@@ -1583,6 +1603,15 @@ function App() {
                         onSelect={() => setActiveWorkspace("ticker")}
                         testId="nav-stocks-ticker"
                         title="Ticker"
+                        tone="live"
+                      />
+
+                      <ShellSourceRow
+                        active={activeWorkspace === "stockIntel"}
+                        icon={<DocumentIcon />}
+                        onSelect={() => setActiveWorkspace("stockIntel")}
+                        testId="nav-stocks-intel"
+                        title="Stock Intel"
                         tone="live"
                       />
 
@@ -1702,7 +1731,7 @@ function App() {
               ) : null}
               {activeWorkspace === "crypto" ? <CryptoMarketWorkspace /> : null}
               {activeWorkspace === "cryptoLeverage" ? <CryptoLeverageWorkspace /> : null}
-              {activeWorkspace === "research" ? renderResearchWorkspace() : null}
+              {activeWorkspace === "stockIntel" ? renderStockIntelWorkspace() : null}
               {activeWorkspace === "globalSettings" ? renderGlobalSettingsWorkspace() : null}
             </div>
           </div>

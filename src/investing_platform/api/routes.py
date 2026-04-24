@@ -14,6 +14,7 @@ from investing_platform.models import (
     InvestorPdfDownloadRequest,
     OptionIntelligenceRequest,
     OptionOrderRequest,
+    StockOrderRequest,
 )
 from investing_platform.services.analytics import (
     build_collateral_summary,
@@ -371,6 +372,26 @@ def preview_option_order(request: OptionOrderRequest) -> dict:
 def submit_option_order(request: OptionOrderRequest) -> dict:
     try:
         return _service().submit_option_order(request).model_dump()
+    except BrokerUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/execution/stocks/preview")
+def preview_stock_order(request: StockOrderRequest) -> dict:
+    try:
+        return _service().preview_stock_order(request).model_dump()
+    except BrokerUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/execution/stocks/submit", status_code=201)
+def submit_stock_order(request: StockOrderRequest) -> dict:
+    try:
+        return _service().submit_stock_order(request).model_dump()
     except BrokerUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:

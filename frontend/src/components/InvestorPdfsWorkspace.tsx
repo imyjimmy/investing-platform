@@ -136,15 +136,15 @@ export function InvestorPdfsWorkspace({
         <header className="border-b border-line/70 px-10 py-7 lg:px-12">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div>
-              <div className="mb-2 text-[11px] uppercase tracking-[0.32em] text-accent">Research tool</div>
+              <div className="mb-2 text-[11px] uppercase tracking-[0.32em] text-accent">Stock Intel</div>
               <div className="flex flex-wrap items-center gap-3">
-                <h1 className="text-3xl font-semibold tracking-tight text-text">Research</h1>
+                <h1 className="text-3xl font-semibold tracking-tight text-text">Company PDFs</h1>
                 <div className="inline-flex items-center rounded-full border border-line bg-panelSoft px-4 py-1 text-sm font-medium text-text">
                   {status?.available ? "Ready" : statusLoading ? "Checking" : "Needs config"}
                 </div>
               </div>
               <p className="mt-2 max-w-3xl text-sm text-muted">
-                Pull real PDFs into the visible stock folder. This workspace currently harvests annual reports plus any SEC PDF exhibits it finds in the time window. It does not generate PDFs.
+                Pull public investor PDFs into the visible stock folder. This finds annual reports, company reports, and SEC PDF exhibits; it does not generate PDFs.
               </p>
             </div>
             <div className="flex flex-col items-start gap-3 lg:items-end">

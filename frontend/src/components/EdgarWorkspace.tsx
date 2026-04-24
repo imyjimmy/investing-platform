@@ -6,7 +6,6 @@ import type { EdgarDownloadRequest, EdgarDownloadResponse, EdgarSourceStatus } f
 
 type EdgarLookupMode = "ticker" | "companyName" | "cik";
 type EdgarDownloadMode = NonNullable<EdgarDownloadRequest["downloadMode"]>;
-type EdgarPdfLayout = NonNullable<EdgarDownloadRequest["pdfLayout"]>;
 
 interface EdgarWorkspaceProps {
   defaultTicker: string;
@@ -19,17 +18,6 @@ interface EdgarWorkspaceProps {
   syncing: boolean;
 }
 
-const DEFAULT_PDF_FOLDER_FORMAT = "pdfs/[date]_[filing-type]_[sequence]";
-const PDF_FORMAT_TOKENS = [
-  { token: "[date]", sample: "2026-01-28", meaning: "filing date" },
-  { token: "[filing-type]", sample: "10-Q", meaning: "SEC form type" },
-  { token: "[sequence]", sample: "000119312526027207", meaning: "stable filing accession id" },
-  { token: "[accession]", sample: "000119312526027207", meaning: "same value as sequence" },
-  { token: "[ticker]", sample: "MSFT", meaning: "resolved ticker" },
-  { token: "[filename]", sample: "primary-document", meaning: "source file stem" },
-  { token: "[filing]", sample: "2026-01-28_10-Q_000119312526027207", meaning: "whole filing folder name" },
-] as const;
-
 const lookupOptions: Array<{ label: string; value: EdgarLookupMode }> = [
   { value: "ticker", label: "Ticker" },
   { value: "companyName", label: "Company" },
@@ -39,41 +27,23 @@ const lookupOptions: Array<{ label: string; value: EdgarLookupMode }> = [
 const modeOptions: Array<{ label: string; summary: string; value: EdgarDownloadMode }> = [
   {
     value: "all-attachments",
-    label: "All filing files + readable PDFs",
-    summary: "Every filing file is saved. HTML or TXT filing files are also rendered into readable PDFs.",
+    label: "All filing files",
+    summary: "Every SEC filing file is saved exactly as EDGAR serves it.",
   },
   {
     value: "full-filing-bundle",
-    label: "All filing files + SEC internals + readable PDFs",
-    summary: "Every filing file is saved, SEC index artifacts are included, and HTML or TXT filing files are rendered into readable PDFs.",
+    label: "All filing files + SEC internals",
+    summary: "Every filing file is saved, plus SEC index artifacts such as index JSON and HTML.",
   },
   {
     value: "primary-document",
-    label: "Primary filing file + readable PDF",
-    summary: "One main filing file is saved for each match. HTML or TXT filings also get a readable PDF copy.",
+    label: "Primary filing file",
+    summary: "One primary EDGAR document is saved for each matched filing.",
   },
   {
     value: "metadata-only",
     label: "Metadata only",
-    summary: "Only the SEC metadata exports are saved. No filing files or PDFs are created.",
-  },
-];
-
-const pdfLayoutOptions: Array<{ description: string; label: string; value: EdgarPdfLayout }> = [
-  {
-    value: "both",
-    label: "Both",
-    description: "Keep readable PDFs beside the filing files and also mirror them into a PDF library.",
-  },
-  {
-    value: "by-filing",
-    label: "PDF library only",
-    description: "Write readable PDFs only into your configured PDF library path.",
-  },
-  {
-    value: "nested",
-    label: "Beside filings only",
-    description: "Keep readable PDFs only beside the original filing files.",
+    summary: "Only SEC metadata exports are saved. No filing documents are downloaded.",
   },
 ];
 
@@ -98,14 +68,10 @@ export function EdgarWorkspace({
   const [cikValue, setCikValue] = useState("");
   const [showLookupHelp, setShowLookupHelp] = useState(false);
   const [showPreviewHelp, setShowPreviewHelp] = useState(false);
-  const [showFormatHelp, setShowFormatHelp] = useState(false);
   const [formTypesInput, setFormTypesInput] = useState("8-K, 10-K, 10-Q");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [downloadMode, setDownloadMode] = useState<EdgarDownloadMode>("all-attachments");
-  const [pdfLayout, setPdfLayout] = useState<EdgarPdfLayout>("both");
-  const [pdfFolderFormat, setPdfFolderFormat] = useState(DEFAULT_PDF_FOLDER_FORMAT);
-  const [pdfFolderFormatTouched, setPdfFolderFormatTouched] = useState(false);
   const [outputDir, setOutputDir] = useState("");
   const [includeExhibits, setIncludeExhibits] = useState(true);
   const [resume, setResume] = useState(true);
@@ -133,8 +99,6 @@ export function EdgarWorkspace({
     includeExhibits,
     lookupMode,
     outputDir: outputDir.trim(),
-    pdfFolderFormat,
-    pdfLayout,
     resume,
     startDate,
     ticker: normalizedTicker,
@@ -158,34 +122,15 @@ export function EdgarWorkspace({
     : undefined;
   const activeSyncResult = scopedSyncResult ?? lastSyncQuery.data ?? undefined;
 
-  useEffect(() => {
-    if (pdfFolderFormatTouched || !activeSyncResult?.pdfFolderFormat) {
-      return;
-    }
-    setPdfFolderFormat(activeSyncResult.pdfFolderFormat);
-  }, [activeSyncResult?.pdfFolderFormat, pdfFolderFormatTouched]);
-
   const sameDayRange = Boolean(startDate) && Boolean(endDate) && startDate === endDate;
   const selectedMode = modeOptions.find((option) => option.value === downloadMode) ?? modeOptions[0];
-  const selectedPdfLayout = pdfLayoutOptions.find((option) => option.value === pdfLayout) ?? pdfLayoutOptions[0];
   const canRun = Boolean(status?.available) && Boolean(identifierValue) && !syncing;
-  const pdfControlsDisabled = downloadMode === "metadata-only";
 
   const effectiveOutputRoot = outputDir.trim() || status?.researchRootPath || "[research-root]";
   const resolvedTicker = normalizedTicker || activeSyncResult?.ticker || "[resolved-ticker]";
   const stockRoot = `${effectiveOutputRoot}/stocks/${resolvedTicker}`;
-  const effectivePdfFolderFormat = pdfFolderFormat.trim() || DEFAULT_PDF_FOLDER_FORMAT;
   const predictedEdgarPath =
     lookupMode === "ticker" ? `${stockRoot}/.edgar` : activeSyncResult?.edgarPath || `${effectiveOutputRoot}/stocks/[resolved-ticker]/.edgar`;
-  const predictedPdfsTemplate =
-    pdfLayout === "nested" ? stockRoot : `${stockRoot}/${effectivePdfFolderFormat}`;
-  const visiblePdfsPath = activeSyncResult?.pdfsPath || predictedPdfsTemplate;
-  const formatterExamplePath = `${stockRoot}/${renderPdfFolderFormatExample(effectivePdfFolderFormat, resolvedTicker)}`;
-
-  function appendPdfToken(token: string) {
-    setPdfFolderFormat((current) => `${current}${token}`);
-    setPdfFolderFormatTouched(true);
-  }
 
   function handleRun() {
     if (!canRun) {
@@ -200,15 +145,15 @@ export function EdgarWorkspace({
         <header className="border-b border-line/70 px-10 py-7 lg:px-12">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div>
-              <div className="mb-2 text-[11px] uppercase tracking-[0.32em] text-accent">Filings tool</div>
+              <div className="mb-2 text-[11px] uppercase tracking-[0.32em] text-accent">Stock Intel</div>
               <div className="flex flex-wrap items-center gap-3">
-                <h1 className="text-3xl font-semibold tracking-tight text-text">Filings</h1>
+                <h1 className="text-3xl font-semibold tracking-tight text-text">SEC Source Files</h1>
                 <div className="inline-flex items-center rounded-full border border-line bg-panelSoft px-4 py-1 text-sm font-medium text-text">
                   {status?.available ? "Ready" : statusLoading ? "Checking" : "Needs config"}
                 </div>
               </div>
               <p className="mt-2 max-w-3xl text-sm text-muted">
-                Search EDGAR by ticker, company, or CIK. Filing folders stay in the stock directory. Metadata and manifests stay hidden in <span className="mono text-text">.edgar</span>.
+                Search EDGAR by ticker, company, or CIK. This saves SEC source files exactly as published.
               </p>
             </div>
             <div className="flex flex-col items-start gap-3 lg:items-end">
@@ -363,7 +308,7 @@ export function EdgarWorkspace({
                   </button>
                 </div>
 
-                <div className="mt-4 grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
+                <div className="mt-4 grid gap-4 lg:grid-cols-2">
                   <label className="grid gap-2">
                     <span className="text-xs uppercase tracking-[0.18em] text-muted">Form types</span>
                     <input
@@ -388,24 +333,9 @@ export function EdgarWorkspace({
                       ))}
                     </select>
                   </label>
-                  <label className="grid gap-2">
-                    <span className="text-xs uppercase tracking-[0.18em] text-muted">PDF destination</span>
-                    <select
-                      className={inputClassName}
-                      disabled={pdfControlsDisabled}
-                      onChange={(event) => setPdfLayout(event.target.value as EdgarPdfLayout)}
-                      value={pdfLayout}
-                    >
-                      {pdfLayoutOptions.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
                 </div>
                 <div className="mt-4 text-sm leading-6 text-muted">
-                  {selectedMode.summary} {selectedPdfLayout.description}
+                  {selectedMode.summary} Company-site PDFs are collected by the Company PDFs sync below.
                 </div>
                 {sameDayRange ? (
                   <div className="mt-3 rounded-[14px] border border-caution/25 bg-caution/10 px-3 py-2 text-xs leading-5 text-caution">
@@ -463,79 +393,6 @@ export function EdgarWorkspace({
             </div>
 
           <div className="grid content-start gap-6 self-start border-t border-line/70 pt-6 xl:border-l xl:border-t-0 xl:pl-8 xl:pt-0">
-            <section className="relative border-b border-line/70 pb-6">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <div className="text-[11px] uppercase tracking-[0.22em] text-muted">PDF formatter</div>
-                  <h3 className="mt-1 text-base font-semibold text-text">Define where readable PDFs land.</h3>
-                </div>
-                <button
-                  aria-expanded={showFormatHelp}
-                  aria-label="PDF formatter help"
-                  className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-line bg-[rgba(255,255,255,0.02)] text-muted transition hover:border-accent/25 hover:text-text"
-                  onClick={() => setShowFormatHelp((value) => !value)}
-                  type="button"
-                >
-                  <InfoIcon />
-                </button>
-              </div>
-              {showFormatHelp ? (
-                <div className="absolute right-0 top-0 z-20 mt-10 w-[340px] rounded-[14px] border border-line bg-[#091214] px-4 py-4 text-sm text-muted shadow-[0_18px_50px_rgba(0,0,0,0.35)]">
-                  <div className="text-sm font-medium text-text">PDF formatter help</div>
-                  <div className="mt-3 grid gap-2 leading-6">
-                    {pdfControlsDisabled ? (
-                      <div>Metadata-only mode does not create readable PDFs.</div>
-                    ) : pdfLayout === "nested" ? (
-                      <div>Beside filings only ignores the library format because PDFs stay next to the original filing files.</div>
-                    ) : (
-                      <>
-                        <div>Click any token to append it to the format field.</div>
-                        <div><span className="mono text-text">[sequence]</span> and <span className="mono text-text">[accession]</span> both use the filing accession id, so the folder name stays stable across reruns.</div>
-                        <div>The example path updates live with your current ticker and format string.</div>
-                      </>
-                    )}
-                  </div>
-                </div>
-              ) : null}
-              <div className="mt-4 grid gap-3">
-                <label className="grid gap-2">
-                  <span className="text-xs uppercase tracking-[0.18em] text-muted">PDF folder format</span>
-                  <input
-                    className={inputClassName}
-                    disabled={pdfControlsDisabled || pdfLayout === "nested"}
-                    onChange={(event) => {
-                      setPdfFolderFormat(event.target.value);
-                      setPdfFolderFormatTouched(true);
-                    }}
-                    placeholder={DEFAULT_PDF_FOLDER_FORMAT}
-                    type="text"
-                    value={pdfFolderFormat}
-                  />
-                </label>
-                <div>
-                  <div className="text-xs uppercase tracking-[0.16em] text-muted">Example path</div>
-                  <div className="mono mt-2 break-all text-sm text-[#9cead8]">{formatterExamplePath}</div>
-                </div>
-                <div className="grid gap-2 sm:grid-cols-2">
-                  {PDF_FORMAT_TOKENS.map((item) => (
-                    <button
-                      key={item.token}
-                      className="flex items-start justify-between gap-4 rounded-[10px] border border-line px-3 py-3 text-left transition hover:border-accent/25"
-                      disabled={pdfControlsDisabled || pdfLayout === "nested"}
-                      onClick={() => appendPdfToken(item.token)}
-                      type="button"
-                    >
-                      <span>
-                        <span className="mono block text-sm text-text">{item.token}</span>
-                        <span className="mt-1 block text-xs leading-5 text-muted">{item.meaning}</span>
-                      </span>
-                      <span className="mono text-xs text-[#9cead8]">{item.sample === "MSFT" ? resolvedTicker : item.sample}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </section>
-
             <section className="relative">
               <div className="flex items-center justify-between gap-3">
                 <div>
@@ -558,7 +415,7 @@ export function EdgarWorkspace({
                   <div className="mt-3 grid gap-2 leading-6">
                     <div>Blank dates mean every available filing date is eligible.</div>
                     <div>The stock folder stays human-visible, while metadata and manifests stay under <span className="mono text-text">.edgar</span>.</div>
-                    <div>Readable PDFs land either beside the filing files, in the PDF library, or both, depending on your current PDF destination setting.</div>
+                    <div>Company-site PDFs are collected by the Company PDFs sync, using the same issuer context.</div>
                   </div>
                 </div>
               ) : null}
@@ -580,11 +437,6 @@ export function EdgarWorkspace({
                   value={activeSyncResult?.stockPath || stockRoot}
                 />
                 <InfoRow
-                  detail={describePdfLayoutDetail(downloadMode, pdfLayout, effectivePdfFolderFormat)}
-                  label="Readable PDFs"
-                  value={visiblePdfsPath}
-                />
-                <InfoRow
                   detail="Metadata exports, raw submissions, and manifests stay hidden here."
                   label=".edgar"
                   value={predictedEdgarPath}
@@ -604,10 +456,9 @@ export function EdgarWorkspace({
           </div>
           {activeSyncResult ? (
             <div className="grid gap-4">
-              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
                 <StatItem hint="Issuer resolved and filings matched." label="Matched filings" value={String(activeSyncResult.matchedFilings)} />
                 <StatItem hint="Fresh files saved during the run." label="Downloaded files" value={String(activeSyncResult.downloadedFiles)} />
-                <StatItem hint="Readable PDFs generated from HTML or TXT filing files." label="PDFs generated" value={String(activeSyncResult.generatedPdfs)} />
                 <StatItem hint="Checksum matches let these files skip download." label="Skipped files" value={String(activeSyncResult.skippedFiles)} />
                 <StatItem hint="Metadata artifacts synced into .edgar." label="Metadata files" value={String(activeSyncResult.metadataFilesSynced)} />
               </div>
@@ -632,14 +483,6 @@ export function EdgarWorkspace({
                       Include exhibits <span className="text-text">{activeSyncResult.includeExhibits ? "yes" : "no"}</span>
                     </div>
                     <div>
-                      PDF destination <span className="text-text">{formatPdfLayout(activeSyncResult.pdfLayout)}</span>
-                    </div>
-                    {activeSyncResult.pdfLayout !== "nested" && activeSyncResult.pdfFolderFormat ? (
-                      <div>
-                        PDF folder format <span className="mono text-text">{activeSyncResult.pdfFolderFormat}</span>
-                      </div>
-                    ) : null}
-                    <div>
                       Failures <span className="text-text">{activeSyncResult.failedFiles}</span>
                     </div>
                   </div>
@@ -649,7 +492,6 @@ export function EdgarWorkspace({
                   <div className="text-[11px] uppercase tracking-[0.22em] text-muted">Saved to</div>
                   <div className="mt-4 grid gap-3 text-sm text-muted">
                     <PathField label="Stock folder" value={activeSyncResult.stockPath} />
-                    <PathField label="Readable PDFs" value={activeSyncResult.pdfsPath} />
                     <PathField label=".edgar" value={activeSyncResult.edgarPath} />
                     <PathField label="Matched JSON" value={activeSyncResult.exportsJsonPath} />
                     <PathField label="Matched CSV" value={activeSyncResult.exportsCsvPath} />
@@ -757,8 +599,6 @@ function buildRequest({
   includeExhibits,
   lookupMode,
   outputDir,
-  pdfFolderFormat,
-  pdfLayout,
   resume,
   startDate,
   ticker,
@@ -771,8 +611,6 @@ function buildRequest({
   includeExhibits: boolean;
   lookupMode: EdgarLookupMode;
   outputDir: string;
-  pdfFolderFormat: string;
-  pdfLayout: EdgarPdfLayout;
   resume: boolean;
   startDate: string;
   ticker: string;
@@ -780,7 +618,6 @@ function buildRequest({
   const request: EdgarDownloadRequest = {
     downloadMode,
     includeExhibits,
-    pdfLayout,
     resume,
   };
 
@@ -805,10 +642,6 @@ function buildRequest({
   if (outputDir) {
     request.outputDir = outputDir;
   }
-  if (pdfFolderFormat.trim()) {
-    request.pdfFolderFormat = pdfFolderFormat.trim();
-  }
-
   return request;
 }
 
@@ -829,52 +662,15 @@ function summarizeFilters(formTypes: string[], startDate: string, endDate: strin
 
 function describeDownloadMode(downloadMode: EdgarDownloadMode) {
   if (downloadMode === "all-attachments") {
-    return "This saves every SEC filing file in each matched filing folder. If a filing file is HTML or TXT, the workspace also creates a readable PDF version for it.";
+    return "This saves every SEC filing file in each matched filing folder, preserving EDGAR's original file formats.";
   }
   if (downloadMode === "full-filing-bundle") {
-    return "This saves every SEC filing file plus the SEC index and submission artifacts. Readable PDFs are still generated only from HTML or TXT filing files.";
+    return "This saves every SEC filing file plus the SEC index and submission artifacts.";
   }
   if (downloadMode === "primary-document") {
-    return "This saves one primary filing file per match. If that file is HTML or TXT, the workspace also creates a readable PDF copy.";
+    return "This saves one primary EDGAR document per matched filing.";
   }
-  return "This saves only matched metadata exports in .edgar. No filing files or PDFs are created.";
-}
-
-function formatPdfLayout(pdfLayout: EdgarPdfLayout) {
-  if (pdfLayout === "both") {
-    return "both";
-  }
-  if (pdfLayout === "by-filing") {
-    return "pdf library only";
-  }
-  return "beside filings only";
-}
-
-function describePdfLayoutDetail(downloadMode: EdgarDownloadMode, pdfLayout: EdgarPdfLayout, pdfFolderFormat: string) {
-  if (downloadMode === "metadata-only") {
-    return "No readable PDFs are created in metadata-only mode.";
-  }
-  if (pdfLayout === "both") {
-    return `Readable PDFs stay beside the filing files and are also mirrored into ${pdfFolderFormat}.`;
-  }
-  if (pdfLayout === "by-filing") {
-    return `Readable PDFs are written only into ${pdfFolderFormat}.`;
-  }
-  return "Readable PDFs stay beside the original filing files only.";
-}
-
-function renderPdfFolderFormatExample(format: string, ticker: string) {
-  const replacements: Record<string, string> = {
-    "[date]": "2026-01-28",
-    "[filing-type]": "10-Q",
-    "[sequence]": "000119312526027207",
-    "[accession]": "000119312526027207",
-    "[ticker]": ticker || "MSFT",
-    "[filename]": "primary-document",
-    "[filing]": "2026-01-28_10-Q_000119312526027207",
-  };
-
-  return Object.entries(replacements).reduce((result, [token, value]) => result.split(token).join(value), format);
+  return "This saves only matched metadata exports in .edgar. No filing documents are downloaded.";
 }
 
 function formatTimestamp(value: string) {

@@ -646,6 +646,38 @@ export interface OptionOrderPreview {
   generatedAt: string;
 }
 
+export interface StockOrderRequest {
+  accountId: string;
+  symbol: string;
+  action: "BUY" | "SELL";
+  quantity: number;
+  orderType: "LMT" | "MKT";
+  limitPrice: number | null;
+  tif: "DAY" | "GTC";
+  orderRef?: string | null;
+}
+
+export interface StockOrderPreview {
+  accountId: string;
+  symbol: string;
+  action: "BUY" | "SELL";
+  quantity: number;
+  orderType: "LMT" | "MKT";
+  limitPrice: number | null;
+  tif: "DAY" | "GTC";
+  orderRef: string;
+  openingOrClosing: "opening" | "closing" | "unknown";
+  marketReferencePrice: number | null;
+  estimatedGrossTradeValue: number | null;
+  conservativeCashImpact: number | null;
+  brokerInitialMarginChange: number | null;
+  brokerMaintenanceMarginChange: number | null;
+  commissionEstimate: number | null;
+  warningText: string | null;
+  note: string | null;
+  generatedAt: string;
+}
+
 export interface SubmittedOrder {
   orderId: number;
   permId: number | null;
@@ -844,8 +876,6 @@ export interface EdgarDownloadRequest {
   startDate?: string;
   endDate?: string;
   downloadMode?: "primary-document" | "all-attachments" | "metadata-only" | "full-filing-bundle";
-  pdfLayout?: "nested" | "by-filing" | "both";
-  pdfFolderFormat?: string;
   outputDir?: string;
   includeExhibits?: boolean;
   resume?: boolean;
@@ -861,18 +891,14 @@ export interface EdgarDownloadResponse {
   matchedFilings: number;
   metadataFilesSynced: number;
   downloadedFiles: number;
-  generatedPdfs: number;
   skippedFiles: number;
   failedFiles: number;
   downloadMode: "primary-document" | "all-attachments" | "metadata-only" | "full-filing-bundle";
-  pdfLayout: "nested" | "by-filing" | "both";
-  pdfFolderFormat?: string | null;
   includeExhibits: boolean;
   resume: boolean;
   researchRootPath: string;
   stockPath: string;
   filingsPath: string;
-  pdfsPath: string;
   edgarPath: string;
   exportsJsonPath: string;
   exportsCsvPath: string;

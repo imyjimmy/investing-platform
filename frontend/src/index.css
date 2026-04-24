@@ -63,7 +63,7 @@ body {
 }
 
 .app-shell {
-  --sidebar-open-width: 304px;
+  --sidebar-open-width: 248px;
   --sidebar-width: 0px;
   --shell-gap: 0px;
   --shell-radius: 16px;
@@ -190,6 +190,16 @@ body {
 
 .options-rail-pane-closed {
   animation-name: options-rail-closed-in;
+}
+
+.stock-ticket-number-input::-webkit-outer-spin-button,
+.stock-ticket-number-input::-webkit-inner-spin-button {
+  margin: 0;
+  appearance: none;
+}
+
+.stock-ticket-number-input {
+  appearance: textfield;
 }
 
 @keyframes options-rail-open-in {
@@ -499,7 +509,7 @@ body {
 
 @media (max-width: 1280px) {
   .app-shell {
-    --sidebar-open-width: 288px;
+    --sidebar-open-width: 240px;
   }
 }
 

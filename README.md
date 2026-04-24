@@ -37,7 +37,7 @@ The original options-scanner pipeline is still present under `src/options_scanne
 - Cancels open paper orders from the desktop dashboard
 - Shows exposure by ticker and expiry
 - Runs a simple portfolio shock scenario
-- Syncs SEC EDGAR machine state into `/stocks/[ticker]/.edgar`, filing folders into `/stocks/[ticker]/`, and generated PDFs into a user-selectable layout such as `/stocks/[ticker]/pdfs/[filing]/`
+- Syncs SEC EDGAR machine state into `/stocks/[ticker]/.edgar`, saves raw filing folders into `/stocks/[ticker]/`, and keeps public investor-site PDFs in `/stocks/[ticker]/pdfs`
 
 ## Quick start
 
@@ -212,7 +212,7 @@ SEC EDGAR download helper:
 - The Tauri desktop shell uses the same React dashboard UI as the browser version.
 - Execution is intentionally **paper-only** right now. Live-account order routing is blocked in the backend.
 - Order submission is explicit-account only. Market data remains gateway-wide, and the current connected account is used for the paper ticket.
-- EDGAR downloads use checksum-based resume with machine state under `[research root]/stocks/[ticker]/.edgar/`, filing folders under `[research root]/stocks/[ticker]/`, and generated PDFs in a configurable layout such as `[research root]/stocks/[ticker]/pdfs/[filing]/`.
+- EDGAR downloads use checksum-based resume with machine state under `[research root]/stocks/[ticker]/.edgar/` and raw filing folders under `[research root]/stocks/[ticker]/`. Public investor-site PDFs are downloaded by the stock research PDF sync into `[research root]/stocks/[ticker]/pdfs/`.
 - Coinbase account access follows the current CDP auth flow from the Coinbase docs: bearer token or per-request JWT signed with either an Ed25519 secret key or a PEM private key, depending on the key type you created.
 - If market data permissions are missing, some quotes and Greeks may be delayed, partial, or unavailable.
 - Collateral, assignment risk, and scenario outputs are deliberately labeled as heuristics where appropriate.

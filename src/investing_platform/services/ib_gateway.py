@@ -39,6 +39,8 @@ from investing_platform.models import (
     OptionPosition,
     OrderCancelResponse,
     Position,
+    StockOrderPreview,
+    StockOrderRequest,
     SubmittedOrder,
     TickerFinancialsResponse,
     TickerOverviewResponse,
@@ -564,6 +566,49 @@ class IBGatewayBrokerService(BrokerService):
             submittedAt=datetime.now(UTC),
         )
 
+    def _preview_stock_order_on_thread(self, ib: Any, request: StockOrderRequest) -> StockOrderPreview:
+        self._ensure_connected(ib)
+        account_id = self._resolve_account_id(ib, request.accountId)
+        self._ensure_execution_allowed(account_id)
+        contract = self._qualify_one(ib, Stock(request.symbol, self.settings.ib_underlying_exchange, self.settings.ib_currency))
+        stock_qty, _option_qty = self._position_maps_for_account(ib, account_id)
+        opening_or_closing = _stock_request_open_or_close(request, stock_qty)
+        market_reference_price = self._request_stock_reference_price(ib, contract)
+        order = self._build_stock_ib_order(request, account_id)
+        order_state = ib.whatIfOrder(contract, order)
+        return self._build_stock_order_preview(
+            request=request,
+            account_id=account_id,
+            market_reference_price=market_reference_price,
+            order_state=order_state,
+            opening_or_closing=opening_or_closing,
+        )
+
+    def _submit_stock_order_on_thread(self, ib: Any, request: StockOrderRequest) -> SubmittedOrder:
+        self._ensure_connected(ib)
+        account_id = self._resolve_account_id(ib, request.accountId)
+        self._ensure_execution_allowed(account_id)
+        contract = self._qualify_one(ib, Stock(request.symbol, self.settings.ib_underlying_exchange, self.settings.ib_currency))
+        order = self._build_stock_ib_order(request, account_id)
+        trade = ib.placeOrder(contract, order)
+        order_status, message = self._await_trade_ack(ib, trade)
+        status = str(getattr(order_status, "status", "") or "Submitted")
+        if status in {"Cancelled", "ApiCancelled", "Inactive"}:
+            raise RuntimeError(message or f"IB Gateway did not accept the order. Final status: {status}.")
+        self._clear_portfolio_cache(account_id)
+        return SubmittedOrder(
+            orderId=int(getattr(trade.order, "orderId", 0)),
+            permId=_optional_int(getattr(order_status, "permId", None)),
+            clientId=_optional_int(getattr(order_status, "clientId", None)),
+            status=status,
+            filledQuantity=round(float(getattr(order_status, "filled", 0.0) or 0.0), 4),
+            remainingQuantity=round(float(getattr(order_status, "remaining", 0.0) or 0.0), 4),
+            structureLabel=None,
+            legCount=1,
+            message=message,
+            submittedAt=datetime.now(UTC),
+        )
+
     def _cancel_order_on_thread(self, ib: Any, account_id: str, order_id: int) -> OrderCancelResponse:
         self._ensure_connected(ib)
         resolved_account_id = self._resolve_account_id(ib, account_id)
@@ -608,6 +653,34 @@ class IBGatewayBrokerService(BrokerService):
         except FutureTimeoutError as exc:
             raise BrokerUnavailableError(
                 f"Timed out submitting {request.symbol} {request.expiry} {request.right}{request.strike:.2f}. The IBKR worker is busy or order routing is slow."
+            ) from exc
+
+    def preview_stock_order(self, request: StockOrderRequest) -> StockOrderPreview:
+        try:
+            return cast(
+                StockOrderPreview,
+                self._submit(
+                    lambda ib: self._preview_stock_order_on_thread(ib, request),
+                    timeout=self.settings.ib_request_timeout_seconds + 18.0,
+                ),
+            )
+        except FutureTimeoutError as exc:
+            raise BrokerUnavailableError(
+                f"Timed out previewing {request.symbol} stock order. The IBKR worker is busy or the contract lookup is slow."
+            ) from exc
+
+    def submit_stock_order(self, request: StockOrderRequest) -> SubmittedOrder:
+        try:
+            return cast(
+                SubmittedOrder,
+                self._submit(
+                    lambda ib: self._submit_stock_order_on_thread(ib, request),
+                    timeout=self.settings.ib_request_timeout_seconds + self.settings.ib_order_ack_timeout_seconds + 18.0,
+                ),
+            )
+        except FutureTimeoutError as exc:
+            raise BrokerUnavailableError(
+                f"Timed out submitting {request.symbol} stock order. The IBKR worker is busy or order routing is slow."
             ) from exc
 
     def cancel_order(self, account_id: str, order_id: int) -> OrderCancelResponse:
@@ -1367,6 +1440,15 @@ class IBGatewayBrokerService(BrokerService):
             return round(float(midpoint), 4)
         return None
 
+    def _request_stock_reference_price(self, ib: Any, contract: Any) -> float | None:
+        for market_data_type in _market_data_type_candidates(self.settings.ib_market_data_type):
+            ticker = self._req_market_data_snapshot(ib, contract, market_data_type)
+            price = _ticker_market_price(ticker)
+            if _is_valid_number(price):
+                return round(float(price), 4)
+        latest = _latest_underlying_price(ib, contract)
+        return round(float(latest), 4) if _is_valid_number(latest) else None
+
     def _position_maps_for_account(
         self,
         ib: Any,
@@ -1412,6 +1494,20 @@ class IBGatewayBrokerService(BrokerService):
             f"options-dashboard:paper:{account_id}:{request.symbol}:"
             f"{request.expiry}:{request.right}:{request.strike:.2f}:{request.action}:{request.quantity}"
         )
+
+    def _build_stock_ib_order(self, request: StockOrderRequest, account_id: str) -> Any:
+        order_kwargs = {
+            "account": account_id,
+            "tif": request.tif,
+            "orderRef": request.orderRef or self._default_stock_order_ref(request, account_id),
+            "transmit": True,
+        }
+        if request.orderType == "MKT":
+            return MarketOrder(request.action, request.quantity, **order_kwargs)
+        return LimitOrder(request.action, request.quantity, float(request.limitPrice or 0.0), **order_kwargs)
+
+    def _default_stock_order_ref(self, request: StockOrderRequest, account_id: str) -> str:
+        return f"stocks-dashboard:paper:{account_id}:{request.symbol}:stock:{request.action}:{request.quantity}"
 
     def _build_option_order_preview(
         self,
@@ -1477,6 +1573,41 @@ class IBGatewayBrokerService(BrokerService):
             maxLoss=max_loss,
             warningText=warning_text,
             note=note,
+            generatedAt=datetime.now(UTC),
+        )
+
+    def _build_stock_order_preview(
+        self,
+        request: StockOrderRequest,
+        account_id: str,
+        market_reference_price: float | None,
+        order_state: Any,
+        opening_or_closing: str,
+    ) -> StockOrderPreview:
+        pricing_reference = request.limitPrice if request.orderType == "LMT" else market_reference_price
+        estimated_gross_trade_value = None
+        if pricing_reference is not None:
+            signed = 1.0 if request.action == "SELL" else -1.0
+            estimated_gross_trade_value = round(float(pricing_reference) * request.quantity * signed, 2)
+        warning_text = _string_or_none(getattr(order_state, "warningText", None))
+        return StockOrderPreview(
+            accountId=account_id,
+            symbol=request.symbol,
+            action=request.action,
+            quantity=request.quantity,
+            orderType=request.orderType,
+            limitPrice=request.limitPrice,
+            tif=request.tif,
+            orderRef=request.orderRef or self._default_stock_order_ref(request, account_id),
+            openingOrClosing=opening_or_closing,  # type: ignore[arg-type]
+            marketReferencePrice=market_reference_price,
+            estimatedGrossTradeValue=estimated_gross_trade_value,
+            conservativeCashImpact=_stock_conservative_cash_impact(request, opening_or_closing, pricing_reference),
+            brokerInitialMarginChange=_optional_float(getattr(order_state, "initMarginChange", None)),
+            brokerMaintenanceMarginChange=_optional_float(getattr(order_state, "maintMarginChange", None)),
+            commissionEstimate=_optional_float(getattr(order_state, "commission", None)),
+            warningText=warning_text,
+            note=_stock_order_note(request, opening_or_closing),
             generatedAt=datetime.now(UTC),
         )
 
@@ -2954,6 +3085,44 @@ def _option_order_note(
         return "This looks like a closing sale against an existing long option position."
     if request.orderType == "MKT":
         return f"Market order preview for {contract.symbol} {request.expiry} {request.right}{request.strike:.2f}. Use sparingly on options."
+    return None
+
+
+def _stock_request_open_or_close(
+    request: StockOrderRequest,
+    stock_qty: dict[str, float],
+) -> Literal["opening", "closing", "unknown"]:
+    existing_stock = stock_qty.get(request.symbol, 0.0)
+    if request.action == "BUY" and existing_stock < 0:
+        return "closing"
+    if request.action == "SELL" and existing_stock > 0:
+        return "closing"
+    return "opening"
+
+
+def _stock_conservative_cash_impact(
+    request: StockOrderRequest,
+    opening_or_closing: str,
+    pricing_reference: float | None,
+) -> float | None:
+    if pricing_reference is None:
+        return None
+    if request.action == "BUY":
+        return round(float(pricing_reference) * request.quantity, 2)
+    if opening_or_closing == "closing":
+        return 0.0
+    return None
+
+
+def _stock_order_note(request: StockOrderRequest, opening_or_closing: str) -> str | None:
+    if request.action == "SELL" and opening_or_closing == "closing":
+        return "This looks like a closing sale against an existing stock position."
+    if request.action == "BUY" and opening_or_closing == "closing":
+        return "This looks like a buy-to-cover against an existing short stock position."
+    if request.action == "SELL" and opening_or_closing == "opening":
+        return "This looks like an opening short sale. Confirm borrow and margin availability before transmitting."
+    if request.orderType == "MKT":
+        return f"Market order preview for {request.symbol} stock. Use sparingly outside liquid market hours."
     return None
 
 

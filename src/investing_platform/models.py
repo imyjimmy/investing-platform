@@ -61,7 +61,6 @@ OrderAction = Literal["BUY", "SELL"]
 OrderType = Literal["LMT", "MKT"]
 TimeInForce = Literal["DAY", "GTC"]
 EdgarDownloadMode = Literal["primary-document", "all-attachments", "metadata-only", "full-filing-bundle"]
-EdgarPdfLayout = Literal["nested", "by-filing", "both"]
 InvestorPdfCategory = Literal["annual-report", "earnings-deck", "investor-presentation", "company-report", "sec-exhibit"]
 FinancialStatementType = Literal["income_statement", "balance_sheet", "cash_flow", "ratios", "estimates", "summary"]
 FinancialPeriodType = Literal["annual", "quarterly", "ttm", "current", "unknown"]
@@ -820,6 +819,64 @@ class OptionOrderPreview(DashboardModel):
     generatedAt: datetime
 
 
+class StockOrderRequest(DashboardModel):
+    accountId: str
+    symbol: str
+    action: OrderAction
+    quantity: int = Field(gt=0)
+    orderType: OrderType = "LMT"
+    limitPrice: float | None = Field(default=None, ge=0.0)
+    tif: TimeInForce = "DAY"
+    orderRef: str | None = None
+
+    @field_validator("accountId")
+    @classmethod
+    def _normalize_account_id(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if not normalized:
+            raise ValueError("Account ID is required.")
+        return normalized
+
+    @field_validator("symbol")
+    @classmethod
+    def _normalize_symbol(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if not normalized:
+            raise ValueError("Symbol is required.")
+        return normalized
+
+    @field_validator("limitPrice")
+    @classmethod
+    def _validate_limit_price(cls, value: float | None, info) -> float | None:
+        order_type = info.data.get("orderType")
+        if order_type == "LMT" and value is None:
+            raise ValueError("Limit price is required for limit orders.")
+        if order_type == "MKT":
+            return None
+        return round(float(value), 4) if value is not None else value
+
+
+class StockOrderPreview(DashboardModel):
+    accountId: str
+    symbol: str
+    action: OrderAction
+    quantity: int
+    orderType: OrderType
+    limitPrice: float | None = None
+    tif: TimeInForce
+    orderRef: str
+    openingOrClosing: Literal["opening", "closing", "unknown"]
+    marketReferencePrice: float | None = None
+    estimatedGrossTradeValue: float | None = None
+    conservativeCashImpact: float | None = None
+    brokerInitialMarginChange: float | None = None
+    brokerMaintenanceMarginChange: float | None = None
+    commissionEstimate: float | None = None
+    warningText: str | None = None
+    note: str | None = None
+    generatedAt: datetime
+
+
 class SubmittedOrder(DashboardModel):
     orderId: int
     permId: int | None = None
@@ -1021,8 +1078,6 @@ class EdgarDownloadRequest(DashboardModel):
     startDate: date | None = None
     endDate: date | None = None
     downloadMode: EdgarDownloadMode = "primary-document"
-    pdfLayout: EdgarPdfLayout = "both"
-    pdfFolderFormat: str | None = None
     outputDir: str | None = None
     includeExhibits: bool = True
     resume: bool = True
@@ -1080,18 +1135,14 @@ class EdgarDownloadResponse(DashboardModel):
     matchedFilings: int
     metadataFilesSynced: int
     downloadedFiles: int
-    generatedPdfs: int
     skippedFiles: int
     failedFiles: int
     downloadMode: EdgarDownloadMode
-    pdfLayout: EdgarPdfLayout
-    pdfFolderFormat: str | None = None
     includeExhibits: bool
     resume: bool
     researchRootPath: str
     stockPath: str
     filingsPath: str
-    pdfsPath: str
     edgarPath: str
     exportsJsonPath: str
     exportsCsvPath: str

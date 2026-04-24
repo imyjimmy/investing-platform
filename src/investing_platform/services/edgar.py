@@ -6,21 +6,15 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 import csv
 import hashlib
-import html
 import json
 from pathlib import Path
 import random
 import re
-import shutil
 import threading
 import time
 from typing import Any
 
-from bs4 import BeautifulSoup
 import requests
-from reportlab.lib.pagesizes import letter
-from reportlab.lib.utils import simpleSplit
-from reportlab.pdfgen import canvas
 
 from investing_platform.config import DashboardSettings
 from investing_platform.models import EdgarDownloadRequest, EdgarDownloadResponse, EdgarSourceStatus
@@ -55,21 +49,6 @@ FILING_EXPORT_FIELDS = [
     "primaryDocumentUrl",
 ]
 EXHIBIT_NAME_RE = re.compile(r"(?i)(?:^|[/_-])(?:ex(?:hibit)?|xex)\d")
-DEFAULT_PDF_FOLDER_FORMAT = "pdfs/[date]_[filing-type]_[sequence]"
-PDF_FOLDER_TOKEN_ALIASES = {
-    "date": "filing_date",
-    "filing_date": "filing_date",
-    "filing-date": "filing_date",
-    "filing_type": "form",
-    "filing-type": "form",
-    "form": "form",
-    "sequence": "accession",
-    "accession": "accession",
-    "filename": "filename",
-    "file": "filename",
-    "filing": "filing",
-    "ticker": "ticker",
-}
 
 
 @dataclass(slots=True)
@@ -93,7 +72,6 @@ class ResolvedCompany:
 class DownloadCounters:
     metadata_files_synced: int = 0
     downloaded_files: int = 0
-    generated_pdfs: int = 0
     skipped_files: int = 0
     failed_files: int = 0
 
@@ -151,9 +129,6 @@ class EdgarDownloader:
 
         output_root = Path(request.outputDir).expanduser() if request.outputDir else self._settings.research_root
         output_root.mkdir(parents=True, exist_ok=True)
-        effective_pdf_folder_format = self._effective_pdf_folder_format(request.pdfFolderFormat)
-        if request.pdfLayout != "nested":
-            self._compile_pdf_folder_format(effective_pdf_folder_format)
 
         resolved = self._resolve_company(request, options)
         stock_root = output_root / "stocks" / resolved.ticker
@@ -222,22 +197,14 @@ class EdgarDownloader:
             matchedFilings=len(matched_filings),
             metadataFilesSynced=counters.metadata_files_synced,
             downloadedFiles=counters.downloaded_files,
-            generatedPdfs=counters.generated_pdfs,
             skippedFiles=counters.skipped_files,
             failedFiles=counters.failed_files,
             downloadMode=request.downloadMode,
-            pdfLayout=request.pdfLayout,
-            pdfFolderFormat=effective_pdf_folder_format,
             includeExhibits=request.includeExhibits,
             resume=request.resume,
             researchRootPath=str(output_root),
             stockPath=str(stock_root),
             filingsPath=str(filings_dir),
-            pdfsPath=str(
-                stock_root
-                if request.pdfLayout == "nested"
-                else stock_root / self._pdf_library_root_relative(effective_pdf_folder_format)
-            ),
             edgarPath=str(edgar_root),
             exportsJsonPath=str(exports_dir / "matched-filings.json"),
             exportsCsvPath=str(exports_dir / "matched-filings.csv"),
@@ -578,13 +545,6 @@ class EdgarDownloader:
         destination.parent.mkdir(parents=True, exist_ok=True)
         if request.resume and self._should_skip_download(destination, manifest, edgar_root):
             counters.skipped_files += 1
-            self._maybe_generate_pdf_copy(
-                source_path=destination,
-                request=request,
-                manifest=manifest,
-                edgar_root=edgar_root,
-                counters=counters,
-            )
             return
 
         temp_path = destination.with_name(f"{destination.name}.part")
@@ -615,13 +575,6 @@ class EdgarDownloader:
             source_url=url,
         )
         counters.downloaded_files += 1
-        self._maybe_generate_pdf_copy(
-            source_path=destination,
-            request=request,
-            manifest=manifest,
-            edgar_root=edgar_root,
-            counters=counters,
-        )
 
     def _safe_download_one_file(
         self,
@@ -660,312 +613,6 @@ class EdgarDownloader:
         }
         available_names = {str(item.get("name") or "").strip() for item in archive_items}
         return {name for name in candidates if name in available_names}
-
-    def _maybe_generate_pdf_copy(
-        self,
-        *,
-        source_path: Path,
-        request: EdgarDownloadRequest,
-        manifest: dict[str, Any],
-        edgar_root: Path,
-        counters: DownloadCounters,
-    ) -> None:
-        if request.downloadMode == "metadata-only":
-            return
-        if not source_path.exists() or not self._is_pdf_source_candidate(source_path):
-            return
-        if "bundle" in source_path.parts:
-            return
-
-        source_checksum = self._sha256_file(source_path)
-        pdf_targets = self._pdf_target_paths(
-            source_path=source_path,
-            edgar_root=edgar_root,
-            pdf_layout=request.pdfLayout,
-            pdf_folder_format=self._effective_pdf_folder_format(request.pdfFolderFormat),
-        )
-        if not pdf_targets:
-            return
-
-        stale_targets = [
-            pdf_path
-            for pdf_path in pdf_targets
-            if not (
-                request.resume
-                and self._should_skip_generated_pdf(
-                    source_path=source_path,
-                    pdf_path=pdf_path,
-                    source_checksum=source_checksum,
-                    manifest=manifest,
-                    edgar_root=edgar_root,
-                )
-            )
-        ]
-        if not stale_targets:
-            return
-
-        primary_target = stale_targets[0]
-
-        try:
-            self._render_readable_pdf(source_path=source_path, pdf_path=primary_target)
-        except Exception:
-            counters.failed_files += 1
-            return
-
-        self._record_generated_pdf(
-            pdf_path=primary_target,
-            source_path=source_path,
-            source_checksum=source_checksum,
-            manifest=manifest,
-            edgar_root=edgar_root,
-            source_url=f"generated://readable-pdf/{source_path.name}",
-        )
-        counters.generated_pdfs += 1
-
-        for pdf_path in stale_targets[1:]:
-            pdf_path.parent.mkdir(parents=True, exist_ok=True)
-            temp_path = pdf_path.with_name(f"{pdf_path.name}.part")
-            shutil.copy2(primary_target, temp_path)
-            temp_path.replace(pdf_path)
-            self._record_generated_pdf(
-                pdf_path=pdf_path,
-                source_path=source_path,
-                source_checksum=source_checksum,
-                manifest=manifest,
-                edgar_root=edgar_root,
-                source_url=f"generated://readable-pdf/{source_path.name}",
-            )
-            counters.generated_pdfs += 1
-
-    def _is_pdf_source_candidate(self, source_path: Path) -> bool:
-        return source_path.suffix.lower() in {".htm", ".html", ".txt"}
-
-    def _should_skip_generated_pdf(
-        self,
-        *,
-        source_path: Path,
-        pdf_path: Path,
-        source_checksum: str,
-        manifest: dict[str, Any],
-        edgar_root: Path,
-    ) -> bool:
-        if not pdf_path.exists():
-            return False
-        relative_name = self._manifest_relative_name(pdf_path, edgar_root)
-        manifest_entry = manifest.get("files", {}).get(relative_name)
-        if not manifest_entry:
-            return False
-        expected_checksum = str(manifest_entry.get("checksum") or "").strip()
-        expected_source_checksum = str(manifest_entry.get("sourceChecksum") or "").strip()
-        if not expected_checksum or expected_source_checksum != source_checksum:
-            return False
-        return self._sha256_file(pdf_path) == expected_checksum
-
-    def _pdf_target_paths(self, *, source_path: Path, edgar_root: Path, pdf_layout: str, pdf_folder_format: str) -> list[Path]:
-        stock_root = edgar_root.parent
-        nested_path = source_path.with_name(f"{source_path.stem}-readable.pdf")
-        library_directory = self._render_pdf_library_directory(
-            source_path=source_path,
-            edgar_root=edgar_root,
-            pdf_folder_format=pdf_folder_format,
-        )
-        by_filing_path = stock_root / library_directory / nested_path.name
-
-        if pdf_layout == "nested":
-            return [nested_path]
-        if pdf_layout == "by-filing":
-            return [by_filing_path]
-        return [nested_path, by_filing_path]
-
-    def _effective_pdf_folder_format(self, pdf_folder_format: str | None) -> str:
-        value = (pdf_folder_format or "").strip()
-        return value or DEFAULT_PDF_FOLDER_FORMAT
-
-    def _pdf_library_root_relative(self, pdf_folder_format: str) -> Path:
-        compiled = self._compile_pdf_folder_format(pdf_folder_format)
-        compiled_path = Path(compiled)
-        stable_parts: list[str] = []
-        for part in compiled_path.parts:
-            if "{" in part or "}" in part:
-                break
-            stable_parts.append(part)
-        if stable_parts:
-            return Path(*stable_parts)
-        return Path("pdfs")
-
-    def _compile_pdf_folder_format(self, pdf_folder_format: str) -> str:
-        def replace_square(match: re.Match[str]) -> str:
-            token = match.group(1).strip().lower()
-            canonical = PDF_FOLDER_TOKEN_ALIASES.get(token)
-            if canonical is None:
-                raise ValueError(
-                    f"Unknown PDF folder token '[{match.group(1)}]'. Use [date], [filing-type], [sequence], [accession], [filename], [filing], or [ticker]."
-                )
-            return "{" + canonical + "}"
-
-        compiled = re.sub(r"\[([^\]]+)\]", replace_square, pdf_folder_format)
-
-        def replace_brace(match: re.Match[str]) -> str:
-            token = match.group(1).strip().lower()
-            canonical = PDF_FOLDER_TOKEN_ALIASES.get(token, token)
-            if canonical not in {"filing_date", "form", "accession", "filename", "filing", "ticker"}:
-                raise ValueError(
-                    f"Unknown PDF folder token '{{{match.group(1)}}}'. Use date, filing-type, sequence, accession, filename, filing, or ticker."
-                )
-            return "{" + canonical + "}"
-
-        compiled = re.sub(r"\{([^{}]+)\}", replace_brace, compiled)
-        if Path(compiled).is_absolute():
-            raise ValueError("PDF folder format must be relative to the stock folder, not an absolute path.")
-        return compiled
-
-    def _render_pdf_library_directory(
-        self,
-        *,
-        source_path: Path,
-        edgar_root: Path,
-        pdf_folder_format: str,
-    ) -> Path:
-        stock_root = edgar_root.parent
-        compiled = self._compile_pdf_folder_format(pdf_folder_format)
-        relative_source = source_path.relative_to(stock_root)
-        path_parts = relative_source.parts
-        filing_folder = path_parts[1] if path_parts and path_parts[0] == "filings" and len(path_parts) > 1 else path_parts[0]
-        filename = source_path.stem
-        ticker = stock_root.name
-
-        filing_date, form, accession = self._parse_filing_folder_name(filing_folder)
-        rendered = compiled.format(
-            filing_date=self._sanitize_pdf_token(filing_date),
-            form=self._sanitize_pdf_token(form),
-            accession=self._sanitize_pdf_token(accession),
-            filename=self._sanitize_pdf_token(filename),
-            filing=self._sanitize_pdf_token(filing_folder),
-            ticker=self._sanitize_pdf_token(ticker),
-        )
-        relative_path = Path(rendered)
-        if any(part in {"..", "."} for part in relative_path.parts):
-            raise ValueError("PDF folder format cannot escape the stock folder.")
-        return relative_path
-
-    def _parse_filing_folder_name(self, filing_folder: str) -> tuple[str, str, str]:
-        parts = filing_folder.split("_", 2)
-        if len(parts) == 3:
-            return parts[0], parts[1], parts[2]
-        return "undated", "filing", filing_folder
-
-    def _sanitize_pdf_token(self, value: str) -> str:
-        sanitized = value.replace("/", "-").replace("\\", "-").strip()
-        return re.sub(r"\s+", "-", sanitized) or "item"
-
-    def _record_generated_pdf(
-        self,
-        *,
-        pdf_path: Path,
-        source_path: Path,
-        source_checksum: str,
-        manifest: dict[str, Any],
-        edgar_root: Path,
-        source_url: str,
-    ) -> None:
-        if not pdf_path.exists():
-            return
-        self._update_manifest_entry(
-            manifest=manifest,
-            edgar_root=edgar_root,
-            file_path=pdf_path,
-            checksum=self._sha256_file(pdf_path),
-            size_bytes=pdf_path.stat().st_size,
-            source_url=source_url,
-            source_checksum=source_checksum,
-        )
-
-    def _render_readable_pdf(self, *, source_path: Path, pdf_path: Path) -> None:
-        source_text = self._extract_human_text(source_path)
-        title = self._readable_pdf_title(source_path, source_text)
-        temp_path = pdf_path.with_name(f"{pdf_path.name}.part")
-        pdf_path.parent.mkdir(parents=True, exist_ok=True)
-
-        pdf = canvas.Canvas(str(temp_path), pagesize=letter)
-        pdf.setAuthor("Investing Platform EDGAR")
-        pdf.setTitle(title)
-        page_width, page_height = letter
-        margin = 54
-        text_width = page_width - (margin * 2)
-        body_font = "Helvetica"
-        title_font = "Helvetica-Bold"
-        meta_font = "Helvetica"
-        body_size = 10
-        body_leading = 14
-        y = page_height - margin
-
-        def new_page() -> None:
-            nonlocal y
-            pdf.showPage()
-            y = page_height - margin
-
-        def draw_wrapped(lines: list[str], *, font_name: str, font_size: int, leading: int) -> None:
-            nonlocal y
-            for line in lines:
-                if y < margin:
-                    new_page()
-                pdf.setFont(font_name, font_size)
-                pdf.drawString(margin, y, line)
-                y -= leading
-
-        title_lines = simpleSplit(title, title_font, 14, text_width)
-        draw_wrapped(title_lines, font_name=title_font, font_size=14, leading=18)
-        y -= 4
-
-        meta_lines = [
-            f"Generated from {source_path.name}",
-            f"Saved beside the original filing file on {datetime.now(UTC).strftime('%Y-%m-%d %H:%M UTC')}",
-        ]
-        for meta_line in meta_lines:
-            draw_wrapped(simpleSplit(meta_line, meta_font, 9, text_width), font_name=meta_font, font_size=9, leading=12)
-        y -= 8
-
-        for paragraph in self._split_pdf_paragraphs(source_text):
-            wrapped_lines = simpleSplit(paragraph, body_font, body_size, text_width)
-            draw_wrapped(wrapped_lines or [""], font_name=body_font, font_size=body_size, leading=body_leading)
-            y -= 6
-
-        pdf.save()
-        temp_path.replace(pdf_path)
-
-    def _extract_human_text(self, source_path: Path) -> str:
-        raw_bytes = source_path.read_bytes()
-        text = self._decode_text(raw_bytes)
-        if source_path.suffix.lower() in {".htm", ".html"}:
-            soup = BeautifulSoup(text, "html.parser")
-            for tag in soup(["script", "style", "noscript"]):
-                tag.decompose()
-            extracted = soup.get_text("\n", strip=True)
-            text = html.unescape(extracted)
-        text = text.replace("\r\n", "\n").replace("\r", "\n")
-        text = re.sub(r"\n{3,}", "\n\n", text)
-        return text.strip() or source_path.name
-
-    def _decode_text(self, raw_bytes: bytes) -> str:
-        for encoding in ("utf-8", "utf-8-sig", "latin-1"):
-            try:
-                return raw_bytes.decode(encoding)
-            except UnicodeDecodeError:
-                continue
-        return raw_bytes.decode("utf-8", errors="replace")
-
-    def _readable_pdf_title(self, source_path: Path, source_text: str) -> str:
-        first_line = next((line.strip() for line in source_text.splitlines() if line.strip()), source_path.stem)
-        return first_line[:140]
-
-    def _split_pdf_paragraphs(self, source_text: str) -> list[str]:
-        paragraphs: list[str] = []
-        for block in source_text.split("\n\n"):
-            lines = [line.strip() for line in block.splitlines() if line.strip()]
-            if not lines:
-                continue
-            paragraphs.append(" ".join(lines))
-        return paragraphs or [source_text]
 
     def _should_skip_download(self, destination: Path, manifest: dict[str, Any], edgar_root: Path) -> bool:
         if not destination.exists():
@@ -1045,19 +692,15 @@ class EdgarDownloader:
         checksum: str,
         size_bytes: int,
         source_url: str,
-        source_checksum: str | None = None,
     ) -> None:
         files = manifest.setdefault("files", {})
         relative_name = self._manifest_relative_name(file_path, edgar_root)
-        entry = {
+        files[relative_name] = {
             "checksum": checksum,
             "sizeBytes": size_bytes,
             "sourceUrl": source_url,
             "updatedAt": datetime.now(UTC).isoformat(),
         }
-        if source_checksum:
-            entry["sourceChecksum"] = source_checksum
-        files[relative_name] = entry
 
     def _manifest_relative_name(self, file_path: Path, edgar_root: Path) -> str:
         try:

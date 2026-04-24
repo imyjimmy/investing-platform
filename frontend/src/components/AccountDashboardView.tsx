@@ -5,6 +5,7 @@ import {
   getDashboardAccountByKey,
   type DashboardAccountKey,
 } from "../config/dashboardAccounts";
+import { ChromeTabs } from "./ui/ChromeTabs";
 
 interface AccountDashboardViewProps {
   selectedAccountKey: DashboardAccountKey;
@@ -35,23 +36,12 @@ export function AccountDashboardView({
 
   return (
     <div className="chrome-header-frame">
-      <div className="chrome-tabs-shell">
-        <div className="chrome-tab-strip">
-          {DASHBOARD_ACCOUNTS.map((account) => {
-            return (
-              <button
-                key={account.key}
-                aria-current={selectedAccount.key === account.key ? "page" : undefined}
-                className={`chrome-tab ${selectedAccount.key === account.key ? "is-active" : ""}`}
-                onClick={() => onSelectAccount(account.key)}
-                type="button"
-              >
-                <span className="chrome-tab-title truncate text-sm font-medium">{account.name}</span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
+      <ChromeTabs
+        activeKey={selectedAccount.key}
+        ariaLabel="Dashboard accounts"
+        onSelect={onSelectAccount}
+        tabs={DASHBOARD_ACCOUNTS.map((account) => ({ key: account.key, label: account.name }))}
+      />
 
       <div className="account-workspace panel rounded-[16px]">
         <header className="chrome-header-body relative px-10 py-5 lg:px-12">

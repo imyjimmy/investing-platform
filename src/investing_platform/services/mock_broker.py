@@ -24,6 +24,8 @@ from investing_platform.models import (
     OptionPosition,
     OrderCancelResponse,
     Position,
+    StockOrderPreview,
+    StockOrderRequest,
     SubmittedOrder,
     TickerFinancialsResponse,
     TickerOverviewResponse,
@@ -359,6 +361,12 @@ class MockBrokerService(BrokerService):
         )
 
     def submit_option_order(self, request: OptionOrderRequest) -> SubmittedOrder:
+        raise BrokerServiceError("Trade execution is disabled in mock mode. Switch to the live IB Gateway adapter to submit orders.")
+
+    def preview_stock_order(self, request: StockOrderRequest) -> StockOrderPreview:
+        raise BrokerServiceError("Trade execution is disabled in mock mode. Switch to the live IB Gateway adapter to preview or submit orders.")
+
+    def submit_stock_order(self, request: StockOrderRequest) -> SubmittedOrder:
         raise BrokerServiceError("Trade execution is disabled in mock mode. Switch to the live IB Gateway adapter to submit orders.")
 
     def cancel_order(self, account_id: str, order_id: int) -> OrderCancelResponse:
