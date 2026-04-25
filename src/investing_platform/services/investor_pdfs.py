@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 import csv
 import hashlib
+import heapq
 import json
 from pathlib import Path
 import random
@@ -74,21 +75,21 @@ KNOWN_PUBLIC_PDF_HOST_SUFFIXES = (
     "q4cdn.com",
     "gcs-web.com",
     "cdn-website.com",
+    "cision.com",
     "sec.gov",
 )
-SEARCH_QUERY_PLANS: tuple[tuple[InvestorPdfCategory, str], ...] = (
-    ("annual-report", "{company} annual report annualreports pdf"),
-    ("annual-report", "{ticker} annual report annualreports pdf"),
-    ("annual-report", "{ticker} annual report pdf"),
-    ("earnings-deck", "{ticker} earnings presentation pdf investor"),
-    ("earnings-deck", "{company} earnings presentation pdf investor"),
-    ("investor-presentation", "{ticker} investor presentation pdf"),
-    ("investor-presentation", "{company} investor presentation pdf"),
-    ("company-report", "{ticker} financial reports pdf investor"),
-    ("company-report", "{company} financial reports pdf investor"),
+COMPANY_SITE_SEARCH_QUERIES: tuple[str, ...] = (
+    "{company} investor relations",
+    "{ticker} investor relations",
+    "{company} annual reports investor",
+    "{company} quarterly results investor",
 )
 RESULT_LIMIT_PER_QUERY = 8
 MAX_CRAWL_PAGES = 8
+MAX_COMPANY_SITE_ENTRYPOINTS = 12
+MAX_COMPANY_SITE_PAGES = 16
+MAX_COMPANY_SITE_DEPTH = 3
+MAX_INTERNAL_LINKS_PER_PAGE = 12
 YEAR_RE = re.compile(r"(20\d{2})")
 SHORT_FY_RE = re.compile(r"(?:FY|F|Q\d)(\d{2})", re.IGNORECASE)
 NON_COMPANY_WORD_RE = re.compile(r"[^A-Z0-9]+")
@@ -98,12 +99,52 @@ COMPANY_SITE_PRIORITY_FORMS = {"8-K", "10-K", "10-Q", "6-K", "20-F"}
 COMPANY_SITE_FILING_INSPECTION_LIMIT = 18
 COMPANY_SITE_HINT_PATHS = (
     "",
+    "/investor",
     "/investors",
     "/investor-relations",
-    "/quarterly-results",
-    "/annual-reports",
-    "/financial-reports",
+    "/ir",
+    "/financials",
+    "/financial-results",
+    "/results",
+    "/reports",
     "/presentations",
+)
+NAVIGATION_HINT_WEIGHTS: tuple[tuple[str, int], ...] = (
+    ("investor relations", 10),
+    ("investor", 7),
+    ("annual report", 10),
+    ("annual reports", 10),
+    ("quarterly report", 9),
+    ("quarterly results", 9),
+    ("financial report", 8),
+    ("financial results", 8),
+    ("reports", 6),
+    ("report", 4),
+    ("results", 4),
+    ("presentation", 4),
+    ("presentations", 4),
+    ("earnings", 4),
+    ("sec filings", 6),
+    ("filings", 3),
+    ("downloads", 2),
+    ("documents", 2),
+)
+NAVIGATION_SKIP_TERMS = (
+    "privacy",
+    "cookie",
+    "terms of use",
+    "terms and conditions",
+    "legal notice",
+    "mailto:",
+    "tel:",
+    "javascript:",
+    "login",
+    "sign in",
+    "support",
+    "careers",
+    "jobs",
+    "contact us",
+    "shopping cart",
 )
 DROP_COMPANY_TOKENS = {
     "INC",
@@ -121,6 +162,7 @@ DROP_COMPANY_TOKENS = {
     "THE",
 }
 DIRECTORY_HINT_RE = re.compile(r"[^A-Za-z0-9._-]+")
+ALPHA_PATH_RE = re.compile(r"[A-Za-z]")
 
 
 @dataclass(slots=True)
@@ -342,7 +384,7 @@ class InvestorPdfDownloader:
     ) -> list[PdfCandidate]:
         deduped: dict[str, PdfCandidate] = {}
 
-        if request.includeAnnualReports or request.includeCompanyReports:
+        if self._enabled_public_categories(request):
             for candidate in self._discover_public_pdf_candidates(resolved, request, options, start_date, end_date):
                 deduped.setdefault(candidate.source_url, candidate)
 
@@ -368,23 +410,12 @@ class InvestorPdfDownloader:
         start_date: date,
         end_date: date,
     ) -> list[PdfCandidate]:
+        if not self._enabled_public_categories(request):
+            return []
         candidates: dict[str, PdfCandidate] = {}
-        for slug in self._slug_variants(resolved.company_name):
-            for candidate in self._discover_stocklight_annual_reports(resolved, slug, options):
-                if self._candidate_matches_window(candidate, start_date, end_date):
-                    key = f"{candidate.category}:{candidate.year}" if candidate.category == "annual-report" and candidate.year else candidate.source_url
-                    candidates.setdefault(key, candidate)
-            for candidate in self._discover_annualreports_archive(slug, options):
-                if self._candidate_matches_window(candidate, start_date, end_date):
-                    key = f"{candidate.category}:{candidate.year}" if candidate.category == "annual-report" and candidate.year else candidate.source_url
-                    candidates.setdefault(key, candidate)
-        for candidate in self._discover_company_site_pdf_candidates(resolved, options, start_date, end_date):
+        for candidate in self._discover_company_site_pdf_candidates(resolved, request, options, start_date, end_date):
             key = f"{candidate.category}:{candidate.year}" if candidate.category == "annual-report" and candidate.year else candidate.source_url
             candidates.setdefault(key, candidate)
-        if not candidates:
-            for candidate in self._discover_search_candidates(resolved, request, options, start_date, end_date):
-                key = f"{candidate.category}:{candidate.year}" if candidate.category == "annual-report" and candidate.year else candidate.source_url
-                candidates.setdefault(key, candidate)
         return list(candidates.values())
 
     def _discover_stocklight_annual_reports(
@@ -454,63 +485,7 @@ class InvestorPdfDownloader:
         start_date: date,
         end_date: date,
     ) -> list[PdfCandidate]:
-        candidates: dict[str, PdfCandidate] = {}
-        crawl_budget = MAX_CRAWL_PAGES
-        crawled_pages: set[str] = set()
-
-        query_values = {
-            "ticker": resolved.ticker,
-            "company": resolved.company_name,
-        }
-        enabled_categories = {
-            "annual-report": request.includeAnnualReports,
-            "earnings-deck": request.includeEarningsDecks,
-            "investor-presentation": request.includeInvestorPresentations,
-            "company-report": request.includeCompanyReports,
-        }
-
-        for category, template in SEARCH_QUERY_PLANS:
-            if not enabled_categories.get(category, False):
-                continue
-            query = template.format(**query_values)
-            try:
-                results = self._search(query, options)
-            except RuntimeError:
-                continue
-            for result in results:
-                if self._is_direct_pdf_like_url(result.url) and self._allow_public_pdf_host(result.host, resolved):
-                    candidate = self._candidate_from_url(
-                        category=category,
-                        source_label=f"Search: {query}",
-                        url=result.url,
-                        title=result.title,
-                    )
-                    if self._candidate_matches_window(candidate, start_date, end_date):
-                        candidates.setdefault(candidate.source_url, candidate)
-                    continue
-
-                if crawl_budget <= 0:
-                    continue
-                if result.url in crawled_pages:
-                    continue
-                if not self._should_crawl_result(result, resolved):
-                    continue
-                crawled_pages.add(result.url)
-                crawl_budget -= 1
-                try:
-                    crawled_candidates = self._crawl_for_pdf_links(
-                        url=result.url,
-                        category=category,
-                        resolved=resolved,
-                        options=options,
-                        start_date=start_date,
-                        end_date=end_date,
-                    )
-                except RuntimeError:
-                    continue
-                for candidate in crawled_candidates:
-                    candidates.setdefault(candidate.source_url, candidate)
-        return list(candidates.values())
+        return []
 
     def _discover_edgar_pdf_exhibits(
         self,
@@ -568,10 +543,145 @@ class InvestorPdfDownloader:
     def _discover_company_site_pdf_candidates(
         self,
         resolved: ResolvedIssuer,
+        request: InvestorPdfDownloadRequest,
         options: InvestorPdfRuntimeOptions,
         start_date: date,
         end_date: date,
     ) -> list[PdfCandidate]:
+        enabled_categories = self._enabled_public_categories(request)
+        if not enabled_categories:
+            return []
+
+        entrypoints = self._discover_company_site_entrypoints(resolved, options)
+        if not entrypoints:
+            return []
+
+        site_keys = {
+            self._site_key(self._hostname(url))
+            for url in entrypoints
+            if self._hostname(url)
+        }
+        queue: list[tuple[int, int, int, str, str]] = []
+        queued_keys: set[str] = set()
+        visited_keys: set[str] = set()
+        sequence = 0
+        for page_url, source_label in entrypoints.items():
+            page_key = self._page_visit_key(page_url)
+            if not page_key or page_key in queued_keys:
+                continue
+            queued_keys.add(page_key)
+            priority = max(1, self._page_relevance_score(page_url, source_label))
+            heapq.heappush(queue, (-priority, 0, sequence, page_url, source_label))
+            sequence += 1
+
+        candidates: dict[str, PdfCandidate] = {}
+        pages_crawled = 0
+        while queue and pages_crawled < MAX_COMPANY_SITE_PAGES:
+            _, depth, _, page_url, source_label = heapq.heappop(queue)
+            page_key = self._page_visit_key(page_url)
+            if not page_key or page_key in visited_keys:
+                continue
+            try:
+                response = self._web_request("GET", page_url, options)
+            except RuntimeError:
+                continue
+            try:
+                canonical_url = self._normalize_page_url(response.url or page_url) or page_url
+                canonical_key = self._page_visit_key(canonical_url)
+                if canonical_key and canonical_key in visited_keys:
+                    continue
+                content_type = response.headers.get("content-type", "")
+                if "html" not in content_type and not response.text.lstrip().startswith("<"):
+                    continue
+                soup = BeautifulSoup(response.text, "html.parser")
+            finally:
+                response.close()
+
+            visited_keys.add(page_key)
+            if canonical_key:
+                visited_keys.add(canonical_key)
+                queued_keys.add(canonical_key)
+            pages_crawled += 1
+
+            page_heading = self._page_heading_text(soup)
+            if depth == 0 and not self._page_matches_issuer(canonical_url, page_heading, soup, resolved):
+                continue
+            page_context = " ".join(
+                part for part in (page_url, canonical_url, page_heading, source_label) if part
+            ).strip()
+            discovered_links: list[tuple[int, str, str]] = []
+
+            for anchor in soup.select("a[href]"):
+                href = str(anchor.get("href") or "").strip()
+                if not href:
+                    continue
+                absolute_url = urljoin(canonical_url, href)
+                if self._is_direct_pdf_like_url(absolute_url):
+                    link_text = anchor.get_text(" ", strip=True)
+                    category = self._classify_company_site_pdf(
+                        page_context=page_context,
+                        page_url=canonical_url,
+                        pdf_url=absolute_url,
+                        link_text=link_text,
+                        enabled_categories=enabled_categories,
+                    )
+                    if not category:
+                        continue
+                    candidate = self._candidate_from_url(
+                        category=category,
+                        source_label=f"Company site: {canonical_url}",
+                        url=absolute_url,
+                        title=link_text or Path(urlparse(absolute_url).path).name,
+                    )
+                    if self._candidate_matches_window(candidate, start_date, end_date):
+                        key = (
+                            f"{candidate.category}:{candidate.year}"
+                            if candidate.category == "annual-report" and candidate.year
+                            else candidate.source_url
+                        )
+                        candidates.setdefault(key, candidate)
+                    continue
+
+                if depth >= MAX_COMPANY_SITE_DEPTH:
+                    continue
+                next_url = self._normalize_page_url(absolute_url)
+                next_key = self._page_visit_key(next_url)
+                if not next_url or not next_key:
+                    continue
+                if next_key in queued_keys or next_key in visited_keys:
+                    continue
+                if not self._is_company_site_page(next_url, site_keys):
+                    continue
+                link_text = anchor.get_text(" ", strip=True)
+                region_text = self._anchor_region_text(anchor)
+                score = self._link_relevance_score(
+                    current_url=canonical_url,
+                    next_url=next_url,
+                    link_text=link_text,
+                    page_context=page_context,
+                    region_text=region_text,
+                )
+                if score <= 0:
+                    continue
+                discovered_links.append((score, next_url, link_text))
+
+            for score, next_url, link_text in sorted(discovered_links, key=lambda item: (-item[0], item[1]))[
+                :MAX_INTERNAL_LINKS_PER_PAGE
+            ]:
+                next_key = self._page_visit_key(next_url)
+                if not next_key or next_key in queued_keys:
+                    continue
+                queued_keys.add(next_key)
+                heapq.heappush(queue, (-score, depth + 1, sequence, next_url, link_text or next_url))
+                sequence += 1
+
+        return list(candidates.values())
+
+    def _discover_company_site_entrypoints(
+        self,
+        resolved: ResolvedIssuer,
+        options: InvestorPdfRuntimeOptions,
+    ) -> dict[str, str]:
         payloads = [resolved.submissions_payload]
         for older_reference in resolved.submissions_payload.get("filings", {}).get("files", []):
             name = str(older_reference.get("name") or "").strip()
@@ -580,12 +690,9 @@ class InvestorPdfDownloader:
             payloads.append(self._get_sec_json(OLDER_SUBMISSIONS_URL_TEMPLATE.format(name=name), options))
 
         filings = self._build_filing_rows(payloads, resolved)
-        company_page_urls: set[str] = set()
+        entrypoints: dict[str, str] = {}
         inspected_filings = 0
         for filing in filings:
-            filing_date = date.fromisoformat(str(filing.get("filingDate") or "1900-01-01"))
-            if filing_date < start_date or filing_date > end_date:
-                continue
             if str(filing.get("form") or "").upper() not in COMPANY_SITE_PRIORITY_FORMS:
                 continue
             if inspected_filings >= COMPANY_SITE_FILING_INSPECTION_LIMIT:
@@ -604,24 +711,283 @@ class InvestorPdfDownloader:
                 response.close()
 
             for url in self._extract_company_site_urls(filing_text, resolved):
-                company_page_urls.update(self._expand_company_site_urls(url))
+                for expanded, is_exact in self._expand_company_site_urls(url):
+                    label = "SEC filing exact company page" if is_exact else "SEC filing company website"
+                    entrypoints.setdefault(expanded, label)
 
-        candidates: dict[str, PdfCandidate] = {}
-        for page_url in sorted(company_page_urls):
+        query_values = {"ticker": resolved.ticker, "company": resolved.company_name}
+        for template in COMPANY_SITE_SEARCH_QUERIES:
+            query = template.format(**query_values)
             try:
-                crawled_candidates = self._crawl_for_pdf_links(
-                    url=page_url,
-                    category="company-report",
-                    resolved=resolved,
-                    options=options,
-                    start_date=start_date,
-                    end_date=end_date,
-                )
+                results = self._search(query, options)
             except RuntimeError:
                 continue
-            for candidate in crawled_candidates:
-                candidates.setdefault(candidate.source_url, candidate)
-        return list(candidates.values())
+            for result in results:
+                if not self._looks_like_company_site_seed(result, resolved):
+                    continue
+                normalized_url = self._normalize_page_url(result.url)
+                if not normalized_url:
+                    continue
+                entrypoints.setdefault(normalized_url, f"Search result: {result.title}")
+        return self._prune_company_site_entrypoints(entrypoints, resolved)
+
+    def _enabled_public_categories(self, request: InvestorPdfDownloadRequest) -> set[InvestorPdfCategory]:
+        categories: set[InvestorPdfCategory] = set()
+        if request.includeAnnualReports:
+            categories.add("annual-report")
+        if request.includeEarningsDecks:
+            categories.add("earnings-deck")
+        if request.includeInvestorPresentations:
+            categories.add("investor-presentation")
+        if request.includeCompanyReports:
+            categories.add("company-report")
+        return categories
+
+    def _looks_like_company_site_seed(self, result: SearchResult, resolved: ResolvedIssuer) -> bool:
+        if self._is_direct_pdf_like_url(result.url):
+            return False
+        host = result.host.lower()
+        if not host or self._is_blocked_result_host(host):
+            return False
+        haystack = f"{result.title} {result.url}".lower()
+        company_tokens = self._company_tokens(resolved.company_name)
+        mentions_company = resolved.ticker.lower() in haystack or any(token in haystack for token in company_tokens)
+        if not mentions_company and not self._allow_public_pdf_host(host, resolved):
+            return False
+        parsed = urlparse(result.url)
+        if (parsed.path or "").strip("/") == "":
+            return True
+        return self._page_relevance_score(result.url, result.title) > 0
+
+    def _page_heading_text(self, soup: BeautifulSoup) -> str:
+        parts: list[str] = []
+        title = soup.title.get_text(" ", strip=True) if soup.title else ""
+        if title:
+            parts.append(title)
+        for heading in soup.select("h1, h2, h3"):
+            text = heading.get_text(" ", strip=True)
+            if not text or text in parts:
+                continue
+            parts.append(text)
+            if len(parts) >= 8:
+                break
+        return " ".join(parts)
+
+    def _classify_company_site_pdf(
+        self,
+        *,
+        page_context: str,
+        page_url: str,
+        pdf_url: str,
+        link_text: str,
+        enabled_categories: set[InvestorPdfCategory],
+    ) -> InvestorPdfCategory | None:
+        haystack = " ".join((page_context, page_url, pdf_url, link_text)).lower()
+        if any(term in haystack for term in NAVIGATION_SKIP_TERMS):
+            return None
+
+        scores: dict[InvestorPdfCategory, int] = {category: 0 for category in enabled_categories}
+
+        def add(category: InvestorPdfCategory, value: int) -> None:
+            if category in scores:
+                scores[category] += value
+
+        if "annual report" in haystack or "annual reports" in haystack:
+            add("annual-report", 12)
+        if re.search(r"\bar[-_ ]?(?:20)?\d{2}\b", haystack):
+            add("annual-report", 5)
+        if re.search(r"\b(10-k|20-f|integrated report)\b", haystack):
+            add("annual-report", 6)
+
+        if "earnings presentation" in haystack or "results presentation" in haystack or "earnings deck" in haystack:
+            add("earnings-deck", 12)
+        if "quarterly presentation" in haystack:
+            add("earnings-deck", 10)
+        if re.search(r"\bq[1-4]\b", haystack) and "presentation" in haystack:
+            add("earnings-deck", 8)
+
+        if "investor presentation" in haystack or "capital markets day" in haystack or "analyst day" in haystack:
+            add("investor-presentation", 10)
+        if "presentation" in haystack:
+            add("investor-presentation", 4)
+
+        if "quarterly report" in haystack or "quarterly results" in haystack:
+            add("company-report", 10)
+        if "interim report" in haystack or "half year report" in haystack or "half-year report" in haystack:
+            add("company-report", 10)
+        if "financial report" in haystack or "financial results" in haystack or "trading update" in haystack:
+            add("company-report", 8)
+        if "sustainability report" in haystack or "esg report" in haystack:
+            add("company-report", 6)
+        if re.search(r"\bq[1-4]\b", haystack):
+            add("company-report", 4)
+        if "report" in haystack or "reports" in haystack or "results" in haystack:
+            add("company-report", 3)
+
+        if not scores:
+            return None
+        category, score = max(scores.items(), key=lambda item: (item[1], item[0]))
+        if score >= 4:
+            return category
+        if "company-report" in scores and self._page_relevance_score(page_url, page_context) >= 10:
+            return "company-report"
+        return None
+
+    def _page_relevance_score(self, url: str, text: str) -> int:
+        haystack = f"{url} {text}".lower()
+        if any(term in haystack for term in NAVIGATION_SKIP_TERMS):
+            return -1
+        score = 0
+        for hint, weight in NAVIGATION_HINT_WEIGHTS:
+            if hint in haystack:
+                score += weight
+        if re.search(r"\bq[1-4]\b", haystack):
+            score += 2
+        if "/category/" in haystack or "/tag/" in haystack:
+            score += 2
+        return score
+
+    def _link_relevance_score(
+        self,
+        *,
+        current_url: str,
+        next_url: str,
+        link_text: str,
+        page_context: str,
+        region_text: str,
+    ) -> int:
+        if next_url == current_url:
+            return 0
+        score = self._page_relevance_score(next_url, f"{link_text} {page_context} {region_text}")
+        if score <= 0:
+            return 0
+        lowered_region = region_text.lower()
+        if any(term in lowered_region for term in ("header", "nav", "navigation", "menu", "drawer", "mega-menu")):
+            score += 3
+        if "footer" in lowered_region:
+            score += 1
+        parsed = urlparse(next_url)
+        if (parsed.path or "").strip("/") == "":
+            score += 1
+        return score
+
+    def _is_company_site_page(self, url: str, site_keys: set[str]) -> bool:
+        if not url or self._is_direct_pdf_like_url(url):
+            return False
+        host = self._hostname(url)
+        if not host:
+            return False
+        return self._site_key(host) in site_keys
+
+    def _normalize_page_url(self, url: str) -> str:
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            return ""
+        path = parsed.path or "/"
+        if path != "/":
+            path = path.rstrip("/") or "/"
+        normalized = parsed._replace(path=path, query="", fragment="")
+        return normalized.geturl()
+
+    def _page_visit_key(self, url: str) -> str:
+        parsed = urlparse(url)
+        if not parsed.netloc:
+            return ""
+        path = parsed.path or "/"
+        if path != "/":
+            path = path.rstrip("/") or "/"
+        return f"{parsed.netloc.lower()}{path}"
+
+    def _site_key(self, host: str) -> str:
+        parts = [part for part in host.lower().split(".") if part]
+        if len(parts) <= 2:
+            return ".".join(parts)
+        if len(parts[-1]) == 2 and parts[-2] in {"co", "com", "org", "net"}:
+            return ".".join(parts[-3:])
+        return ".".join(parts[-2:])
+
+    def _prune_company_site_entrypoints(
+        self,
+        entrypoints: dict[str, str],
+        resolved: ResolvedIssuer,
+    ) -> dict[str, str]:
+        ranked: list[tuple[int, str, str]] = []
+        best_by_key: dict[str, tuple[int, str, str]] = {}
+        company_tokens = self._company_tokens(resolved.company_name)
+        for url, source_label in entrypoints.items():
+            normalized_url = self._normalize_page_url(url)
+            if not normalized_url:
+                continue
+            page_key = self._page_visit_key(normalized_url)
+            if not page_key:
+                continue
+            host = self._hostname(normalized_url).lower()
+            score = self._page_relevance_score(normalized_url, source_label)
+            if host.startswith(("investor.", "investors.", "ir.")):
+                score += 8
+            if "https://" in normalized_url:
+                score += 1
+            path = urlparse(normalized_url).path or "/"
+            if source_label.lower().startswith("search result:"):
+                score += 8
+            if "exact company page" in source_label.lower():
+                score += 12
+            if path.strip("/") == "":
+                score -= 2
+            else:
+                score += 3
+                if self._page_relevance_score(normalized_url, normalized_url) > 0:
+                    score += 4
+            if any(token in host for token in company_tokens):
+                score += 2
+            if any(term in host for term in ("blog.", "blogs.", "developer.", "support.")):
+                score -= 8
+            ranked_entry = (score, normalized_url, source_label)
+            existing = best_by_key.get(page_key)
+            if existing is None or ranked_entry > existing:
+                best_by_key[page_key] = ranked_entry
+
+        ranked.extend(best_by_key.values())
+        ranked.sort(key=lambda item: (-item[0], item[1]))
+        ordered: dict[str, str] = {}
+        for _, url, source_label in ranked[:MAX_COMPANY_SITE_ENTRYPOINTS]:
+            ordered[url] = source_label
+        return ordered
+
+    def _page_matches_issuer(
+        self,
+        url: str,
+        page_heading: str,
+        soup: BeautifulSoup,
+        resolved: ResolvedIssuer,
+    ) -> bool:
+        body_text = soup.get_text(" ", strip=True)
+        haystack = " ".join((url, page_heading, body_text[:2000])).lower()
+        company_tokens = self._company_tokens(resolved.company_name)
+        token_hits = sum(1 for token in company_tokens if token in haystack)
+        ticker_hit = resolved.ticker.lower() in haystack
+        if token_hits >= min(2, len(company_tokens)):
+            return True
+        return token_hits >= 1 and ticker_hit
+
+    def _anchor_region_text(self, anchor: Any) -> str:
+        parts: list[str] = []
+        current = anchor
+        for _ in range(6):
+            current = getattr(current, "parent", None)
+            if current is None:
+                break
+            name = getattr(current, "name", None)
+            if name:
+                parts.append(str(name))
+            if hasattr(current, "get"):
+                identifier = str(current.get("id") or "").strip()
+                if identifier:
+                    parts.append(identifier)
+                classes = current.get("class") or []
+                if classes:
+                    parts.append(" ".join(str(value) for value in classes))
+        return " ".join(parts)
 
     def _crawl_for_pdf_links(
         self,
@@ -972,7 +1338,7 @@ class InvestorPdfDownloader:
         return tokens[:4]
 
     def _slug_variants(self, company_name: str) -> list[str]:
-        raw_tokens = [token.lower() for token in NON_COMPANY_WORD_RE.sub(" ", company_name).split() if token]
+        raw_tokens = [token.lower() for token in NON_COMPANY_WORD_RE.sub(" ", company_name.upper()).split() if token]
         if not raw_tokens:
             return ["company"]
 
@@ -1015,17 +1381,22 @@ class InvestorPdfDownloader:
             company_urls.append(url.rstrip(".,);"))
         return company_urls
 
-    def _expand_company_site_urls(self, url: str) -> list[str]:
+    def _expand_company_site_urls(self, url: str) -> list[tuple[str, bool]]:
         parsed = urlparse(url)
         if not parsed.scheme or not parsed.netloc:
             return []
         base_root = f"{parsed.scheme}://{parsed.netloc}"
-        expanded: list[str] = []
-        for path in (parsed.path or "", *COMPANY_SITE_HINT_PATHS):
+        expanded: list[tuple[str, bool]] = []
+        discovered_path = parsed.path or ""
+        if discovered_path and ALPHA_PATH_RE.search(discovered_path):
+            candidate = self._normalize_page_url(f"{base_root}{discovered_path}")
+            if candidate and self._page_relevance_score(candidate, candidate) > 0:
+                expanded.append((candidate, True))
+        for path in COMPANY_SITE_HINT_PATHS:
             normalized_path = path if path.startswith("/") else f"/{path}" if path else ""
-            candidate = f"{base_root}{normalized_path}".rstrip("/")
-            if candidate and candidate not in expanded:
-                expanded.append(candidate)
+            candidate = self._normalize_page_url(f"{base_root}{normalized_path}")
+            if candidate and candidate not in {value for value, _ in expanded}:
+                expanded.append((candidate, False))
         return expanded
 
     def _is_direct_pdf_like_url(self, url: str) -> bool:
