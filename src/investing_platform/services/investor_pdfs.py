@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 import csv
 import hashlib
 import heapq
@@ -90,6 +90,9 @@ MAX_COMPANY_SITE_ENTRYPOINTS = 12
 MAX_COMPANY_SITE_PAGES = 16
 MAX_COMPANY_SITE_DEPTH = 3
 MAX_INTERNAL_LINKS_PER_PAGE = 12
+DISCOVERY_CACHE_SCHEMA_VERSION = 1
+DISCOVERY_CACHE_POSITIVE_TTL_DAYS = 90
+DISCOVERY_CACHE_EMPTY_TTL_DAYS = 7
 YEAR_RE = re.compile(r"(20\d{2})")
 SHORT_FY_RE = re.compile(r"(?:FY|F|Q\d)(\d{2})", re.IGNORECASE)
 NON_COMPANY_WORD_RE = re.compile(r"[^A-Z0-9]+")
@@ -258,6 +261,18 @@ class InvestorPdfDownloader:
         output_root = Path(request.outputDir).expanduser() if request.outputDir else self._settings.research_root
         output_root.mkdir(parents=True, exist_ok=True)
         start_date, end_date = self._effective_date_window(request)
+
+        if request.ticker and not request.forceRefresh:
+            cached_response = self._fresh_cached_response(
+                output_root=output_root,
+                ticker=request.ticker,
+                request=request,
+                start_date=start_date,
+                end_date=end_date,
+            )
+            if cached_response is not None:
+                return cached_response
+
         resolved = self._resolve_issuer(request, options)
 
         stock_root = output_root / "stocks" / resolved.ticker
@@ -269,7 +284,19 @@ class InvestorPdfDownloader:
             directory.mkdir(parents=True, exist_ok=True)
 
         manifest_path = manifests_dir / "download-manifest.json"
+        discovery_cache_path = manifests_dir / "discovery-cache.json"
         manifest = self._load_manifest(manifest_path)
+
+        if not request.forceRefresh:
+            cached_response = self._fresh_cached_response(
+                output_root=output_root,
+                ticker=resolved.ticker,
+                request=request,
+                start_date=start_date,
+                end_date=end_date,
+            )
+            if cached_response is not None:
+                return cached_response
 
         candidates = self._discover_candidates(
             resolved=resolved,
@@ -341,9 +368,18 @@ class InvestorPdfDownloader:
             manifestPath=str(manifest_path),
             artifacts=artifacts,
             syncedAt=datetime.now(UTC),
+            cacheHit=False,
         )
+        response.cacheExpiresAt = self._discovery_cache_expires_at(response)
 
         self._write_json(manifests_dir / "last-sync.json", response.model_dump(mode="json"))
+        self._write_discovery_cache(
+            path=discovery_cache_path,
+            response=response,
+            request=request,
+            start_date=start_date,
+            end_date=end_date,
+        )
         manifest["lastRun"] = response.model_dump(mode="json")
         self._save_manifest(manifest_path, manifest)
         return response
@@ -372,6 +408,160 @@ class InvestorPdfDownloader:
         if not isinstance(payload, dict):
             return None
         return InvestorPdfDownloadResponse.model_validate(payload)
+
+    def _fresh_cached_response(
+        self,
+        *,
+        output_root: Path,
+        ticker: str,
+        request: InvestorPdfDownloadRequest,
+        start_date: date,
+        end_date: date,
+    ) -> InvestorPdfDownloadResponse | None:
+        cache_path = output_root / "stocks" / ticker.strip().upper() / ".investor-pdfs" / "manifests" / "discovery-cache.json"
+        if not cache_path.exists():
+            return None
+        try:
+            payload = json.loads(cache_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(payload, dict):
+            return None
+        if payload.get("schemaVersion") != DISCOVERY_CACHE_SCHEMA_VERSION:
+            return None
+
+        expires_at = self._parse_datetime(str(payload.get("expiresAt") or ""))
+        if expires_at is None or expires_at <= datetime.now(UTC):
+            return None
+        scope = payload.get("scope")
+        if not isinstance(scope, dict) or not self._cache_scope_covers(scope, request, start_date, end_date):
+            return None
+
+        response_payload = payload.get("response")
+        if not isinstance(response_payload, dict):
+            return None
+        try:
+            cached_response = InvestorPdfDownloadResponse.model_validate(response_payload)
+        except ValueError:
+            return None
+
+        enabled_categories = self._enabled_categories(request)
+        artifacts = [
+            artifact
+            for artifact in cached_response.artifacts
+            if artifact.category in enabled_categories and self._artifact_matches_window(artifact, start_date, end_date)
+        ]
+        cache_generated_at = self._parse_datetime(str(payload.get("generatedAt") or "")) or cached_response.syncedAt
+        return cached_response.model_copy(
+            update={
+                "lookbackYears": request.lookbackYears,
+                "startDate": start_date,
+                "endDate": end_date,
+                "discoveredCandidates": len(artifacts),
+                "matchedPdfs": len(artifacts),
+                "downloadedFiles": 0,
+                "skippedFiles": len(artifacts),
+                "failedFiles": 0,
+                "resume": request.resume,
+                "artifacts": artifacts,
+                "cacheHit": True,
+                "cacheExpiresAt": expires_at,
+                "cacheMessage": f"Using cached discovery from {cache_generated_at.isoformat()} until {expires_at.isoformat()}.",
+            }
+        )
+
+    def _write_discovery_cache(
+        self,
+        *,
+        path: Path,
+        response: InvestorPdfDownloadResponse,
+        request: InvestorPdfDownloadRequest,
+        start_date: date,
+        end_date: date,
+    ) -> None:
+        expires_at = response.cacheExpiresAt or self._discovery_cache_expires_at(response)
+        payload = {
+            "schemaVersion": DISCOVERY_CACHE_SCHEMA_VERSION,
+            "generatedAt": response.syncedAt.isoformat(),
+            "expiresAt": expires_at.isoformat(),
+            "ticker": response.ticker,
+            "cik": response.cik,
+            "companyName": response.companyName,
+            "scope": self._cache_scope_for_request(request, start_date, end_date),
+            "response": response.model_dump(mode="json"),
+        }
+        self._write_json(path, payload)
+
+    def _discovery_cache_expires_at(self, response: InvestorPdfDownloadResponse) -> datetime:
+        ttl_days = DISCOVERY_CACHE_POSITIVE_TTL_DAYS if response.matchedPdfs > 0 else DISCOVERY_CACHE_EMPTY_TTL_DAYS
+        return response.syncedAt + timedelta(days=ttl_days)
+
+    def _cache_scope_for_request(
+        self,
+        request: InvestorPdfDownloadRequest,
+        start_date: date,
+        end_date: date,
+    ) -> dict[str, Any]:
+        return {
+            "categories": sorted(self._enabled_categories(request)),
+            "startDate": start_date.isoformat(),
+            "endDate": end_date.isoformat(),
+        }
+
+    def _cache_scope_covers(
+        self,
+        cached_scope: dict[str, Any],
+        request: InvestorPdfDownloadRequest,
+        start_date: date,
+        end_date: date,
+    ) -> bool:
+        cached_categories = set(cached_scope.get("categories") or [])
+        if not self._enabled_categories(request).issubset(cached_categories):
+            return False
+        try:
+            cached_start_date = date.fromisoformat(str(cached_scope.get("startDate") or ""))
+            cached_end_date = date.fromisoformat(str(cached_scope.get("endDate") or ""))
+        except ValueError:
+            return False
+        return cached_start_date <= start_date and cached_end_date >= end_date
+
+    def _enabled_categories(self, request: InvestorPdfDownloadRequest) -> set[InvestorPdfCategory]:
+        categories = self._enabled_public_categories(request)
+        if request.includeSecExhibits:
+            categories.add("sec-exhibit")
+        return categories
+
+    def _artifact_matches_window(
+        self,
+        artifact: InvestorPdfArtifact,
+        start_date: date,
+        end_date: date,
+    ) -> bool:
+        if artifact.publishedAt:
+            marker = artifact.publishedAt
+            if len(marker) == 10:
+                try:
+                    published_date = date.fromisoformat(marker)
+                except ValueError:
+                    return True
+                return start_date <= published_date <= end_date
+            if len(marker) == 4 and marker.isdigit():
+                year = int(marker)
+                return start_date.year <= year <= end_date.year
+        if artifact.year is not None:
+            return start_date.year <= artifact.year <= end_date.year
+        return True
+
+    def _parse_datetime(self, value: str) -> datetime | None:
+        if not value:
+            return None
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC)
 
     def _discover_candidates(
         self,

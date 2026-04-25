@@ -936,6 +936,7 @@ export interface InvestorPdfDownloadRequest {
   includeCompanyReports?: boolean;
   includeSecExhibits?: boolean;
   resume?: boolean;
+  forceRefresh?: boolean;
   maxRequestsPerSecond?: number;
   userAgent?: string;
 }
@@ -973,4 +974,7 @@ export interface InvestorPdfDownloadResponse {
   manifestPath: string;
   artifacts: InvestorPdfArtifact[];
   syncedAt: string;
+  cacheHit: boolean;
+  cacheExpiresAt?: string | null;
+  cacheMessage?: string | null;
 }

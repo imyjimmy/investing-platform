@@ -79,6 +79,7 @@ export function buildInvestorPdfDownloadRequest({
   includeEarningsDecks,
   includeInvestorPresentations,
   includeSecExhibits,
+  forceRefresh,
   lookbackYears,
   lookupMode,
   outputDir,
@@ -94,6 +95,7 @@ export function buildInvestorPdfDownloadRequest({
   includeEarningsDecks: boolean;
   includeInvestorPresentations: boolean;
   includeSecExhibits: boolean;
+  forceRefresh: boolean;
   lookbackYears: number;
   lookupMode: StockIntelLookupMode;
   outputDir?: string;
@@ -107,6 +109,7 @@ export function buildInvestorPdfDownloadRequest({
     includeEarningsDecks,
     includeInvestorPresentations,
     includeSecExhibits,
+    forceRefresh,
     lookbackYears,
     resume,
   };

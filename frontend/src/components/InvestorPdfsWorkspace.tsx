@@ -62,6 +62,7 @@ export function InvestorPdfsWorkspace({
   const [endDate, setEndDate] = useState("");
   const [includeSecExhibits, setIncludeSecExhibits] = useState(true);
   const [resume, setResume] = useState(true);
+  const [forceRefresh, setForceRefresh] = useState(false);
   const [stockFolderTemplate, setStockFolderTemplate] = useState("");
 
   useEffect(() => {
@@ -102,6 +103,7 @@ export function InvestorPdfsWorkspace({
     includeEarningsDecks: false,
     includeInvestorPresentations: false,
     includeSecExhibits,
+    forceRefresh,
     lookbackYears: effectiveLookbackYears,
     lookupMode,
     outputDir: derivedOutputDir,
@@ -332,6 +334,15 @@ export function InvestorPdfsWorkspace({
                       />
                       Resume safely
                     </label>
+                    <label className="inline-flex items-center gap-3">
+                      <input
+                        checked={forceRefresh}
+                        className="h-4 w-4 rounded border-line bg-panelSoft text-accent"
+                        onChange={(event) => setForceRefresh(event.target.checked)}
+                        type="checkbox"
+                      />
+                      Force refresh
+                    </label>
                   </div>
                 </div>
 
@@ -373,6 +384,18 @@ export function InvestorPdfsWorkspace({
                       <div className="rounded-[12px] border border-line/80 bg-panelSoft px-4 py-3 text-sm text-muted">
                         No PDFs matched for <span className="text-text">{activeSyncResult.companyName}</span> in{" "}
                         <span className="text-text">{describeWindow(activeSyncResult)}</span>. Clear the dates or widen the window if you expected older documents.
+                      </div>
+                    ) : null}
+                    {activeSyncResult.cacheHit ? (
+                      <div className="rounded-[12px] border border-line/80 bg-panelSoft px-4 py-3 text-sm text-muted">
+                        Cached discovery served this result
+                        {activeSyncResult.cacheExpiresAt ? (
+                          <>
+                            {" "}
+                            until <span className="text-text">{formatDateTime(activeSyncResult.cacheExpiresAt)}</span>
+                          </>
+                        ) : null}
+                        .
                       </div>
                     ) : null}
                     <div className="grid gap-3 sm:grid-cols-3">
@@ -424,6 +447,13 @@ function describeWindow(result: InvestorPdfDownloadResponse) {
     return `the window ending ${result.endDate}`;
   }
   return `the previous ${result.lookbackYears} years`;
+}
+
+function formatDateTime(value: string) {
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(value));
 }
 
 function PathField({ label, value }: { label: string; value: string }) {

@@ -1195,6 +1195,7 @@ class InvestorPdfDownloadRequest(DashboardModel):
     includeCompanyReports: bool = True
     includeSecExhibits: bool = True
     resume: bool = True
+    forceRefresh: bool = False
     maxRequestsPerSecond: float | None = Field(default=None, gt=0)
     userAgent: str | None = None
 
@@ -1274,3 +1275,6 @@ class InvestorPdfDownloadResponse(DashboardModel):
     manifestPath: str
     artifacts: list[InvestorPdfArtifact] = Field(default_factory=list)
     syncedAt: datetime
+    cacheHit: bool = False
+    cacheExpiresAt: datetime | None = None
+    cacheMessage: str | None = None
