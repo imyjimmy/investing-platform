@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(PROJECT_ROOT / ".env")
+InvestorBrowserProvider = Literal["disabled", "lightpanda", "obscura", "scrapling", "custom"]
 
 
 def _first_env(*names: str) -> str | None:
@@ -41,6 +42,13 @@ def _env_execution_mode(*names: str, default: str) -> Literal["disabled", "enabl
     value = _env_str(*names, default=default).strip().lower()
     if value in {"enabled", "paper"}:
         return "enabled"
+    return "disabled"
+
+
+def _env_investor_browser_provider(*names: str, default: str) -> InvestorBrowserProvider:
+    value = _env_str(*names, default=default).strip().lower()
+    if value in {"lightpanda", "obscura", "scrapling", "custom"}:
+        return value
     return "disabled"
 
 
@@ -103,6 +111,9 @@ class DashboardSettings:
     edgar_max_requests_per_second: float = 5.0
     edgar_timeout_seconds: float = 30.0
     edgar_retry_limit: int = 5
+    investor_browser_provider: InvestorBrowserProvider = "disabled"
+    investor_browser_command: str | None = None
+    investor_browser_timeout_seconds: float = 30.0
     coinbase_api_base_url: str = "https://api.coinbase.com"
     coinbase_api_key: str | None = None
     coinbase_api_key_id: str | None = None
@@ -250,6 +261,15 @@ class DashboardSettings:
                 "INVESTING_PLATFORM_EDGAR_RETRY_LIMIT",
                 "OPTIONS_DASHBOARD_EDGAR_RETRY_LIMIT",
                 default=5,
+            ),
+            investor_browser_provider=_env_investor_browser_provider(
+                "INVESTING_PLATFORM_INVESTOR_BROWSER_PROVIDER",
+                default="disabled",
+            ),
+            investor_browser_command=_env_optional_str("INVESTING_PLATFORM_INVESTOR_BROWSER_COMMAND"),
+            investor_browser_timeout_seconds=_env_float(
+                "INVESTING_PLATFORM_INVESTOR_BROWSER_TIMEOUT_SECONDS",
+                default=30.0,
             ),
             coinbase_api_base_url=_env_str("COINBASE_API_BASE_URL", default="https://api.coinbase.com"),
             coinbase_api_key=_env_optional_str("COINBASE_API_KEY"),

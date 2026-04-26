@@ -764,6 +764,10 @@ export interface CoinbasePortfolioResponse {
   totalUsdValue: number;
   cryptoUsdValue: number;
   cashLikeUsdValue: number;
+  totalPnl: number | null;
+  todayPnl: number | null;
+  monthlyPnl: number | null;
+  netContributions: number | null;
   visibleHoldingsCount: number;
   totalAccountsCount: number;
   holdings: CoinbaseHolding[];
@@ -781,6 +785,8 @@ export interface FilesystemConnectorStatus {
   detail: string;
   displayName: string | null;
   directoryPath: string | null;
+  positionsDirectoryPath: string | null;
+  historyCsvPath: string | null;
   detectFooter: boolean;
   csvFilesCount: number;
   latestCsvPath: string | null;
@@ -790,7 +796,9 @@ export interface FilesystemConnectorStatus {
 
 export interface FilesystemConnectorConfigRequest {
   displayName: string;
-  directoryPath: string;
+  directoryPath: string | null;
+  positionsDirectoryPath: string | null;
+  historyCsvPath: string | null;
   detectFooter: boolean;
 }
 
@@ -821,7 +829,9 @@ export interface FilesystemConnectorPortfolioResponse {
   displayName: string | null;
   directoryPath: string;
   latestCsvPath: string | null;
+  historyCsvPath: string | null;
   totalValue: number;
+  netContributions: number | null;
   investmentAccountsCount: number;
   holdingsCount: number;
   accounts: FilesystemInvestmentAccount[];
@@ -920,6 +930,9 @@ export interface InvestorPdfSourceStatus {
   stocksRootPath: string;
   pdfFolderName: string;
   timeoutSeconds: number;
+  browserProvider: string;
+  browserRenderingEnabled: boolean;
+  browserTimeoutSeconds?: number | null;
 }
 
 export interface InvestorPdfDownloadRequest {
@@ -930,6 +943,7 @@ export interface InvestorPdfDownloadRequest {
   startDate?: string;
   endDate?: string;
   outputDir?: string;
+  seedUrl?: string;
   includeAnnualReports?: boolean;
   includeEarningsDecks?: boolean;
   includeInvestorPresentations?: boolean;

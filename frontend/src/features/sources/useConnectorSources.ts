@@ -13,6 +13,8 @@ const PDF_FOLDER_CONNECTOR_ID: ConnectorCatalogId = "pdfFolder";
 export type ConnectorDraftState = {
   displayName: string;
   directoryPath: string;
+  positionsDirectoryPath: string;
+  historyCsvPath: string;
   detectFooter: boolean;
 };
 
@@ -20,7 +22,9 @@ type FilesystemConnectorConfigureVariables = {
   accountKey: DashboardAccountKey;
   connectorId: ConnectorCatalogId;
   displayName: string;
-  directoryPath: string;
+  directoryPath: string | null;
+  positionsDirectoryPath: string | null;
+  historyCsvPath: string | null;
   detectFooter: boolean;
   sourceId?: string;
 };
@@ -35,7 +39,7 @@ export function useConnectorSources({ accountSettingsOpen, selectedDashboardAcco
   const [connectorPickerOpen, setConnectorPickerOpen] = useState(false);
   const [connectorSetupError, setConnectorSetupError] = useState<string | null>(null);
   const [finnhubApiKeyInput, setFinnhubApiKeyInput] = useState("");
-  const [connectorDraftsById, setConnectorDraftsById] = useState<Partial<Record<ConnectorCatalogId, ConnectorDraftState>>>({});
+  const [connectorDraftsById, setConnectorDraftsById] = useState<Record<string, ConnectorDraftState>>({});
 
   const coinbaseStatusQuery = useQuery({
     queryKey: queryKeys.sources.coinbaseStatus,
@@ -102,8 +106,13 @@ export function useConnectorSources({ accountSettingsOpen, selectedDashboardAcco
   });
 
   const filesystemConnectorConfigureMutation = useMutation({
-    mutationFn: ({ accountKey, connectorId, displayName, directoryPath, detectFooter, sourceId }: FilesystemConnectorConfigureVariables) =>
-      sourceApi.filesystemConnectorConfigure(accountKey, connectorId, { displayName, directoryPath, detectFooter }, sourceId),
+    mutationFn: ({ accountKey, connectorId, displayName, directoryPath, positionsDirectoryPath, historyCsvPath, detectFooter, sourceId }: FilesystemConnectorConfigureVariables) =>
+      sourceApi.filesystemConnectorConfigure(
+        accountKey,
+        connectorId,
+        { displayName, directoryPath, positionsDirectoryPath, historyCsvPath, detectFooter },
+        sourceId,
+      ),
     onSuccess: async (_data, variables) => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.sources.filesystemConnectorStatuses(variables.accountKey) }),

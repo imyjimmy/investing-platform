@@ -24,12 +24,13 @@ import {
   getDashboardAccountWithAttachedSource,
   type DashboardAccountKey,
 } from "./config/dashboardAccounts";
-import { CONNECTOR_CATALOG, getConnectorCatalogEntry, type ConnectorCatalogId } from "./config/connectorCatalog";
+import { CONNECTOR_CATALOG, getConnectorCatalogEntry, type ConnectorCatalogEntry, type ConnectorCatalogId } from "./config/connectorCatalog";
 import { AccountDashboardView } from "./components/AccountDashboardView";
 import { AccountConnectorSection } from "./components/AccountConnectorSection";
 import { CoinbaseAccountSource } from "./components/account-sources/CoinbaseAccountSource";
 import { FilesystemAccountSourceContent } from "./components/account-sources/FilesystemAccountSourceContent";
 import { FilesystemAccountSourceList } from "./components/account-sources/FilesystemAccountSourceList";
+import { AccountSourceSummaryCards } from "./components/account-sources/AccountSourceSummaryCards";
 import { MetricCard } from "./components/MetricCard";
 import { TickerWorkspace } from "./components/TickerWorkspace";
 import { Panel } from "./components/Panel";
@@ -57,13 +58,6 @@ function pnlTone(value: number | null | undefined) {
     return "text-danger";
   }
   return "text-text";
-}
-
-function pnlMetricTone(value: number | null | undefined): "neutral" | "safe" | "danger" {
-  if (value == null || Number.isNaN(value) || value === 0) {
-    return "neutral";
-  }
-  return value > 0 ? "safe" : "danger";
 }
 
 function sumPositionPnl(positions: Position[]) {
@@ -146,6 +140,60 @@ function describeAccountSourceMetricCoverage(summaries: AccountSourceSummary[], 
   return `Reported by ${contributingSources.length}/${summaries.length} sources.`;
 }
 
+function deriveDashboardTotalPnl(netWorth: number | null, netContributionsUsd: number | null) {
+  if (netWorth == null || Number.isNaN(netWorth) || netContributionsUsd == null || Number.isNaN(netContributionsUsd)) {
+    return null;
+  }
+  return netWorth - netContributionsUsd;
+}
+
+function deriveDashboardTotalPnlFromSourceContributions(summaries: AccountSourceSummary[]) {
+  const netWorthContributors = summaries.filter((summary) => summary.netWorth != null && !Number.isNaN(summary.netWorth));
+  if (!netWorthContributors.length) {
+    return null;
+  }
+  const contributionContributors = netWorthContributors.filter(
+    (summary) => summary.netContributions != null && !Number.isNaN(summary.netContributions),
+  );
+  if (contributionContributors.length !== netWorthContributors.length) {
+    return null;
+  }
+  const totalNetWorth = netWorthContributors.reduce((total, summary) => total + (summary.netWorth ?? 0), 0);
+  const totalNetContributions = contributionContributors.reduce((total, summary) => total + (summary.netContributions ?? 0), 0);
+  return totalNetWorth - totalNetContributions;
+}
+
+function describeDashboardTotalPnl(
+  summaries: AccountSourceSummary[],
+  sourceDerivedTotalPnl: number | null,
+  derivedTotalPnl: number | null,
+  reportedTotalPnl: number | null,
+  netWorth: number | null,
+) {
+  if (sourceDerivedTotalPnl != null) {
+    const netWorthCoverage = describeAccountSourceMetricCoverage(summaries, "netWorth").replace(/\.$/, "");
+    return `${netWorthCoverage}. Derived from source net worth minus source net contributions.`;
+  }
+  if (derivedTotalPnl != null) {
+    const netWorthCoverage = describeAccountSourceMetricCoverage(summaries, "netWorth").replace(/\.$/, "");
+    return `${netWorthCoverage}. Derived as net worth minus configured net contributions.`;
+  }
+  const netWorthContributors = summaries.filter((summary) => summary.netWorth != null && !Number.isNaN(summary.netWorth));
+  const contributionContributors = netWorthContributors.filter(
+    (summary) => summary.netContributions != null && !Number.isNaN(summary.netContributions),
+  );
+  if (netWorthContributors.length && contributionContributors.length && contributionContributors.length < netWorthContributors.length) {
+    return `${contributionContributors.length}/${netWorthContributors.length} net-worth sources have contribution history. Add contribution coverage for the remaining sources to derive fund-level PnL automatically.`;
+  }
+  if (reportedTotalPnl != null) {
+    return `${describeAccountSourceMetricCoverage(summaries, "totalPnl").replace(/\.$/, "")}. Holding-level gain/loss sum; not full fund PnL.`;
+  }
+  if (netWorth != null) {
+    return "Add net contributions to derive fund-level PnL.";
+  }
+  return describeAccountSourceMetricCoverage(summaries, "totalPnl");
+}
+
 function isLocalBackendUnavailable(message: string | null | undefined) {
   return Boolean(message && message.includes("Could not reach local backend at"));
 }
@@ -209,13 +257,14 @@ type AccountConnectorCard = {
   icon: ReactNode;
 };
 
-type AccountSourceSummaryMetricKey = "totalPnl" | "todayPnl" | "monthlyPnl" | "netWorth";
+type AccountSourceSummaryMetricKey = "totalPnl" | "todayPnl" | "monthlyPnl" | "netWorth" | "netContributions";
 
 type AccountSourceSummary = AccountConnectorCard & {
   totalPnl: number | null;
   todayPnl: number | null;
   monthlyPnl: number | null;
   netWorth: number | null;
+  netContributions: number | null;
 };
 
 function gatewaySessionPresentation(status: ConnectionStatus | undefined): { label: string; tone: InlinePillTone } {
@@ -266,6 +315,7 @@ function App() {
   const [ibkrConnectorCollapsed, setIbkrConnectorCollapsed] = useState(false);
   const [coinbaseConnectorCollapsed, setCoinbaseConnectorCollapsed] = useState(false);
   const [filesystemConnectorCollapsedBySourceId, setFilesystemConnectorCollapsedBySourceId] = useState<Record<string, boolean>>({});
+  const [editingFilesystemSourceId, setEditingFilesystemSourceId] = useState<string | null>(null);
   const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceSurface>("dashboard");
   const [selectedDashboardAccountKey, setSelectedDashboardAccountKey] = useState<DashboardAccountKey>(DEFAULT_DASHBOARD_ACCOUNT_KEY);
   const [selectedStockSymbol, setSelectedStockSymbol] = useState("NVDA");
@@ -435,10 +485,14 @@ function App() {
       todayPnl: null,
       monthlyPnl: null,
       netWorth: ownsRoute ? risk?.account.netLiquidation ?? null : null,
+      netContributions: null,
     };
   }
 
   function buildCoinbaseAccountSourceSummary(accountKey: DashboardAccountKey): AccountSourceSummary {
+    const portfolio = coinbasePortfolioQuery.data;
+    const netWorth = portfolio?.totalUsdValue ?? null;
+    const netContributions = portfolio?.netContributions ?? null;
     return {
       id: `coinbase-${accountKey}`,
       title: "Coinbase account",
@@ -447,10 +501,11 @@ function App() {
       tone: coinbaseConnectorTone,
       countsTowardHealth: true,
       icon: <CoinbaseIcon />,
-      totalPnl: null,
-      todayPnl: null,
-      monthlyPnl: null,
-      netWorth: coinbasePortfolioQuery.data?.totalUsdValue ?? null,
+      totalPnl: portfolio?.totalPnl ?? deriveDashboardTotalPnl(netWorth, netContributions),
+      todayPnl: portfolio?.todayPnl ?? null,
+      monthlyPnl: portfolio?.monthlyPnl ?? null,
+      netWorth,
+      netContributions,
     };
   }
 
@@ -491,15 +546,19 @@ function App() {
   function buildFilesystemAccountSourceSummary(status: FilesystemConnectorStatus): AccountSourceSummary {
     const connector = buildFilesystemConnectorCard(status);
     const portfolio = filesystemConnectorPortfolioBySourceId[status.sourceId];
+    const netWorth = status.connectorId === CSV_FOLDER_CONNECTOR_ID ? portfolio?.totalValue ?? null : null;
+    const netContributions = status.connectorId === CSV_FOLDER_CONNECTOR_ID ? portfolio?.netContributions ?? null : null;
+    const derivedTotalPnl = deriveDashboardTotalPnl(netWorth, netContributions);
     return {
       ...connector,
-      totalPnl:
+      totalPnl: derivedTotalPnl ??
         status.connectorId === CSV_FOLDER_CONNECTOR_ID
           ? portfolio?.holdings.reduce((total, holding) => total + (holding.gainLoss ?? 0), 0) ?? null
           : null,
       todayPnl: null,
       monthlyPnl: null,
-      netWorth: status.connectorId === CSV_FOLDER_CONNECTOR_ID ? portfolio?.totalValue ?? null : null,
+      netWorth,
+      netContributions,
     };
   }
 
@@ -524,10 +583,20 @@ function App() {
       : accountStatusTone === "caution"
         ? "Partial connector coverage"
         : "No live connectors";
-  const dashboardTotalPnl = sumAccountSourceMetric(accountSourceSummaries, "totalPnl");
+  const dashboardReportedTotalPnl = sumAccountSourceMetric(accountSourceSummaries, "totalPnl");
   const dashboardTodayPnl = sumAccountSourceMetric(accountSourceSummaries, "todayPnl");
   const dashboardMonthlyPnl = sumAccountSourceMetric(accountSourceSummaries, "monthlyPnl");
   const dashboardNetWorth = sumAccountSourceMetric(accountSourceSummaries, "netWorth");
+  const dashboardSourceDerivedTotalPnl = deriveDashboardTotalPnlFromSourceContributions(accountSourceSummaries);
+  const dashboardDerivedTotalPnl = deriveDashboardTotalPnl(dashboardNetWorth, selectedDashboardAccount.netContributionsUsd);
+  const dashboardTotalPnl = dashboardSourceDerivedTotalPnl ?? dashboardDerivedTotalPnl ?? dashboardReportedTotalPnl;
+  const dashboardTotalPnlHint = describeDashboardTotalPnl(
+    accountSourceSummaries,
+    dashboardSourceDerivedTotalPnl,
+    dashboardDerivedTotalPnl,
+    dashboardReportedTotalPnl,
+    dashboardNetWorth,
+  );
   const dashboardTodayPnlHint = describeAccountSourceMetricCoverage(accountSourceSummaries, "todayPnl");
   const dashboardMonthlyPnlHint = describeAccountSourceMetricCoverage(accountSourceSummaries, "monthlyPnl");
   const dashboardNetWorthHint = describeAccountSourceMetricCoverage(accountSourceSummaries, "netWorth");
@@ -548,19 +617,35 @@ function App() {
     selectedDashboardOwnsRoute && routedAccount ? `${routedAccount} · ${routedAccountPill.label}` : "No active broker route for this account";
   const marketGatewayPill = gatewaySessionPresentation(connectionQuery.data);
 
-  function getConnectorDraft(connectorId: ConnectorCatalogId): ConnectorDraftState {
-    return connectorDraftsById[connectorId] ?? { displayName: "", directoryPath: "", detectFooter: true };
+  function emptyConnectorDraft(): ConnectorDraftState {
+    return { displayName: "", directoryPath: "", positionsDirectoryPath: "", historyCsvPath: "", detectFooter: true };
   }
 
-  function updateConnectorDraft(connectorId: ConnectorCatalogId, patch: Partial<ConnectorDraftState>) {
+  function getConnectorDraft(draftKey: string): ConnectorDraftState {
+    return connectorDraftsById[draftKey] ?? emptyConnectorDraft();
+  }
+
+  function updateConnectorDraft(draftKey: string, patch: Partial<ConnectorDraftState>) {
     setConnectorDraftsById((current) => ({
       ...current,
-      [connectorId]: {
-        displayName: patch.displayName ?? current[connectorId]?.displayName ?? "",
-        directoryPath: patch.directoryPath ?? current[connectorId]?.directoryPath ?? "",
-        detectFooter: patch.detectFooter ?? current[connectorId]?.detectFooter ?? true,
+      [draftKey]: {
+        displayName: patch.displayName ?? current[draftKey]?.displayName ?? "",
+        directoryPath: patch.directoryPath ?? current[draftKey]?.directoryPath ?? "",
+        positionsDirectoryPath: patch.positionsDirectoryPath ?? current[draftKey]?.positionsDirectoryPath ?? "",
+        historyCsvPath: patch.historyCsvPath ?? current[draftKey]?.historyCsvPath ?? "",
+        detectFooter: patch.detectFooter ?? current[draftKey]?.detectFooter ?? true,
       },
     }));
+  }
+
+  function connectorDraftFromStatus(status: FilesystemConnectorStatus, detectedHistoryCsvPath?: string | null): ConnectorDraftState {
+    return {
+      displayName: status.displayName?.trim() ?? "",
+      directoryPath: status.directoryPath?.trim() ?? "",
+      positionsDirectoryPath: status.positionsDirectoryPath?.trim() ?? status.directoryPath?.trim() ?? "",
+      historyCsvPath: status.historyCsvPath?.trim() ?? detectedHistoryCsvPath?.trim() ?? "",
+      detectFooter: status.detectFooter,
+    };
   }
 
   function openSymbolWorkspace(nextSymbol: string, nextWorkspace: "ticker" | "options") {
@@ -574,11 +659,19 @@ function App() {
 
 
   function renderCoinbasePanelContent() {
+    const coinbaseNetWorth = coinbasePortfolioQuery.data?.totalUsdValue ?? null;
+    const coinbaseTotalPnl = coinbasePortfolioQuery.data?.totalPnl ?? null;
+    const coinbaseTodayPnl = coinbasePortfolioQuery.data?.todayPnl ?? null;
+    const coinbaseMonthlyPnl = coinbasePortfolioQuery.data?.monthlyPnl ?? null;
     return coinbaseStatusQuery.isLoading ? (
-      <div className="text-sm text-muted">Checking Coinbase connector...</div>
+      <div className="grid gap-4">
+        <AccountSourceSummaryCards monthlyPnl={null} netWorth={null} todayPnl={null} totalPnl={null} />
+        <div className="text-sm text-muted">Checking Coinbase connector...</div>
+      </div>
     ) : !coinbaseStatusQuery.data?.available ? (
       <div className="grid gap-4">
-        <div className="grid gap-4 md:grid-cols-3">
+        <AccountSourceSummaryCards monthlyPnl={null} netWorth={null} todayPnl={null} totalPnl={null} />
+        <div className="grid gap-4 md:grid-cols-3 xl:grid-cols-4">
           <MetricCard
             label="Connector"
             value={coinbaseStatusQuery.data?.authMode === "missing" ? "Not configured" : "Unavailable"}
@@ -592,21 +685,23 @@ function App() {
         <ErrorState message={coinbaseStatusError ?? coinbaseStatusQuery.data?.detail ?? "Coinbase connector is unavailable."} />
       </div>
     ) : coinbasePortfolioQuery.isLoading ? (
-      <div className="text-sm text-muted">Loading Coinbase balances...</div>
+      <div className="grid gap-4">
+        <AccountSourceSummaryCards monthlyPnl={null} netWorth={null} todayPnl={null} totalPnl={null} />
+        <div className="text-sm text-muted">Loading Coinbase balances...</div>
+      </div>
     ) : coinbasePortfolioQuery.error instanceof Error ? (
-      <ErrorState message={coinbasePortfolioQuery.error.message} />
+      <div className="grid gap-4">
+        <AccountSourceSummaryCards monthlyPnl={null} netWorth={null} todayPnl={null} totalPnl={null} />
+        <ErrorState message={coinbasePortfolioQuery.error.message} />
+      </div>
     ) : coinbasePortfolioQuery.data ? (
       <div className="grid gap-4">
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <MetricCard label="Total value" value={fmtCurrency(coinbasePortfolioQuery.data.totalUsdValue)} />
-          <MetricCard label="Cash-like" value={fmtCurrency(coinbasePortfolioQuery.data.cashLikeUsdValue)} />
-          <MetricCard label="Crypto" value={fmtCurrency(coinbasePortfolioQuery.data.cryptoUsdValue)} />
-          <MetricCard
-            hint={`${coinbasePortfolioQuery.data.totalAccountsCount} total accounts returned`}
-            label="Visible holdings"
-            value={fmtNumber(coinbasePortfolioQuery.data.visibleHoldingsCount)}
-          />
-        </div>
+        <AccountSourceSummaryCards
+          monthlyPnl={coinbaseMonthlyPnl}
+          netWorth={coinbaseNetWorth}
+          todayPnl={coinbaseTodayPnl}
+          totalPnl={coinbaseTotalPnl}
+        />
         {coinbasePortfolioQuery.data.sourceNotice ? (
           <div
             className={`rounded-2xl border px-4 py-3 text-sm ${
@@ -667,7 +762,10 @@ function App() {
         </div>
       </div>
     ) : (
-      <ErrorState message="Coinbase balances are unavailable." />
+      <div className="grid gap-4">
+        <AccountSourceSummaryCards monthlyPnl={null} netWorth={null} todayPnl={null} totalPnl={null} />
+        <ErrorState message="Coinbase balances are unavailable." />
+      </div>
     );
   }
 
@@ -783,7 +881,28 @@ function App() {
     );
   }
 
-  async function saveFilesystemConnector(connectorId: ConnectorCatalogId) {
+  function startEditingFilesystemConnector(sourceId: string) {
+    const status = filesystemConnectorStatusBySourceId[sourceId];
+    const portfolio = filesystemConnectorPortfolioBySourceId[sourceId];
+    if (!status) {
+      setConnectorSetupError("This connector source could not be found.");
+      return;
+    }
+    setEditingFilesystemSourceId(sourceId);
+    setConnectorPickerOpen(false);
+    setConnectorSetupError(null);
+    setConnectorDraftsById((current) => ({
+      ...current,
+      [sourceId]: connectorDraftFromStatus(status, portfolio?.historyCsvPath),
+    }));
+  }
+
+  function stopEditingFilesystemConnector() {
+    setEditingFilesystemSourceId(null);
+    setConnectorSetupError(null);
+  }
+
+  async function saveFilesystemConnector(connectorId: ConnectorCatalogId, draftKey: string, sourceId?: string) {
     setConnectorSetupError(null);
     const connector = getConnectorCatalogEntry(connectorId);
     if (!connector) {
@@ -794,14 +913,21 @@ function App() {
       setConnectorSetupError(`${connector.title} is not ready yet.`);
       return;
     }
-    const draft = getConnectorDraft(connectorId);
+    const draft = getConnectorDraft(draftKey);
     const displayName = draft.displayName.trim();
-    const directoryPath = draft.directoryPath.trim();
     if (!displayName) {
       setConnectorSetupError("Add a connector name before saving this connector.");
       return;
     }
-    if (!directoryPath) {
+    const isCsvConnector = connectorId === CSV_FOLDER_CONNECTOR_ID;
+    const directoryPath = isCsvConnector ? null : draft.directoryPath.trim();
+    const positionsDirectoryPath = isCsvConnector ? draft.positionsDirectoryPath.trim() : null;
+    const historyCsvPath = isCsvConnector ? draft.historyCsvPath.trim() || null : null;
+    if (isCsvConnector && !positionsDirectoryPath) {
+      setConnectorSetupError("Add a positions folder path before saving this connector.");
+      return;
+    }
+    if (!isCsvConnector && !directoryPath) {
       setConnectorSetupError("Add a folder path before saving this connector.");
       return;
     }
@@ -811,36 +937,220 @@ function App() {
         connectorId,
         displayName,
         directoryPath,
-        detectFooter: connectorId === CSV_FOLDER_CONNECTOR_ID ? draft.detectFooter : false,
+        positionsDirectoryPath,
+        historyCsvPath,
+        detectFooter: isCsvConnector ? draft.detectFooter : false,
+        sourceId,
       });
-      setConnectorPickerOpen(false);
+      if (sourceId) {
+        setEditingFilesystemSourceId(null);
+      } else {
+        setConnectorPickerOpen(false);
+      }
       setConnectorSetupError(null);
     } catch (error) {
-      setConnectorSetupError(error instanceof Error ? error.message : "Could not save the CSV folder.");
+      setConnectorSetupError(error instanceof Error ? error.message : "Could not save the connector.");
     }
   }
 
-  async function chooseConnectorFolder(connectorId: ConnectorCatalogId, connectorTitle: string) {
+  async function chooseConnectorFolder(draftKey: string, connectorTitle: string, field: "directoryPath" | "positionsDirectoryPath") {
     setConnectorSetupError(null);
     try {
       const { open } = await import("@tauri-apps/plugin-dialog");
-      const draft = getConnectorDraft(connectorId);
+      const draft = getConnectorDraft(draftKey);
       const selected = await open({
         directory: true,
         multiple: false,
         title: `Choose ${connectorTitle} Folder`,
-        defaultPath: draft.directoryPath.trim() || undefined,
+        defaultPath: draft[field].trim() || undefined,
       });
       if (typeof selected === "string" && selected.trim()) {
-        updateConnectorDraft(connectorId, { directoryPath: selected });
+        updateConnectorDraft(draftKey, field === "directoryPath" ? { directoryPath: selected } : { positionsDirectoryPath: selected });
       }
     } catch (error) {
       setConnectorSetupError(error instanceof Error ? error.message : "Could not open the system folder picker.");
     }
   }
 
+  async function chooseConnectorHistoryFile(draftKey: string, connectorTitle: string) {
+    setConnectorSetupError(null);
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const draft = getConnectorDraft(draftKey);
+      const selected = await open({
+        directory: false,
+        multiple: false,
+        title: `Choose ${connectorTitle} History CSV`,
+        defaultPath: draft.historyCsvPath.trim() || undefined,
+        filters: [{ name: "CSV", extensions: ["csv"] }],
+      });
+      if (typeof selected === "string" && selected.trim()) {
+        updateConnectorDraft(draftKey, { historyCsvPath: selected });
+      }
+    } catch (error) {
+      setConnectorSetupError(error instanceof Error ? error.message : "Could not open the system file picker.");
+    }
+  }
+
+  function renderFilesystemConnectorForm({
+    connector,
+    draftKey,
+    mode,
+    onSubmit,
+    onCancel,
+  }: {
+    connector: ConnectorCatalogEntry;
+    draftKey: string;
+    mode: "add" | "edit";
+    onSubmit: () => void;
+    onCancel?: () => void;
+  }) {
+    const connectorDraft = getConnectorDraft(draftKey);
+    const isCsvConnector = connector.id === CSV_FOLDER_CONNECTOR_ID;
+    const submitDisabled = filesystemConnectorConfigureMutation.isPending
+      || !connectorDraft.displayName.trim()
+      || (isCsvConnector ? !connectorDraft.positionsDirectoryPath.trim() : !connectorDraft.directoryPath.trim());
+
+    return (
+      <div className="rounded-2xl border border-line/80 bg-panel px-4 py-4">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-panelSoft text-text">
+              <BankIcon />
+            </span>
+            <div>
+              <div className="text-sm font-medium text-text">{connector.title}</div>
+              <div className="mt-1 text-xs uppercase tracking-[0.16em] text-muted">
+                {mode === "edit" ? "Editing configured source" : connector.provider}
+              </div>
+            </div>
+          </div>
+          {onCancel ? (
+            <button
+              className="rounded-full border border-line/80 bg-panel px-3 py-1 text-[11px] font-medium uppercase tracking-[0.16em] text-muted transition hover:border-accent/35 hover:text-text"
+              onClick={onCancel}
+              type="button"
+            >
+              Cancel
+            </button>
+          ) : null}
+        </div>
+        <div className="mt-3 text-sm text-muted">{connector.description}</div>
+        <div className="mt-4 grid gap-3">
+          <label className="grid gap-2">
+            <span className="text-[11px] uppercase tracking-[0.16em] text-muted">Source name</span>
+            <input
+              className="w-full rounded-xl border border-line/80 bg-panelSoft px-4 py-3 text-sm text-text outline-none transition focus:border-accent/60"
+              onChange={(event) => updateConnectorDraft(draftKey, { displayName: event.target.value })}
+              placeholder={connector.defaultDisplayNamePlaceholder}
+              spellCheck={false}
+              type="text"
+              value={connectorDraft.displayName}
+            />
+          </label>
+          {isCsvConnector ? (
+            <>
+              <label className="grid gap-2">
+                <span className="text-[11px] uppercase tracking-[0.16em] text-muted">Positions folder path</span>
+                <div className="flex gap-2">
+                  <input
+                    className="w-full rounded-xl border border-line/80 bg-panelSoft px-4 py-3 text-sm text-text outline-none transition focus:border-accent/60"
+                    onChange={(event) => updateConnectorDraft(draftKey, { positionsDirectoryPath: event.target.value })}
+                    placeholder={connector.directoryPathPlaceholder}
+                    spellCheck={false}
+                    type="text"
+                    value={connectorDraft.positionsDirectoryPath}
+                  />
+                  <button
+                    className="shrink-0 rounded-xl border border-line/80 bg-panelSoft px-3 py-3 text-[11px] font-medium uppercase tracking-[0.16em] text-muted transition hover:border-accent/35 hover:text-text"
+                    onClick={() => {
+                      void chooseConnectorFolder(draftKey, connector.title, "positionsDirectoryPath");
+                    }}
+                    type="button"
+                  >
+                    Choose Folder
+                  </button>
+                </div>
+              </label>
+              <label className="grid gap-2">
+                <span className="text-[11px] uppercase tracking-[0.16em] text-muted">Account History CSV (used for PnL)</span>
+                <div className="flex gap-2">
+                  <input
+                    className="w-full rounded-xl border border-line/80 bg-panelSoft px-4 py-3 text-sm text-text outline-none transition focus:border-accent/60"
+                    onChange={(event) => updateConnectorDraft(draftKey, { historyCsvPath: event.target.value })}
+                    placeholder="~/Documents/investing/account-history.csv"
+                    spellCheck={false}
+                    type="text"
+                    value={connectorDraft.historyCsvPath}
+                  />
+                  <button
+                    className="shrink-0 rounded-xl border border-line/80 bg-panelSoft px-3 py-3 text-[11px] font-medium uppercase tracking-[0.16em] text-muted transition hover:border-accent/35 hover:text-text"
+                    onClick={() => {
+                      void chooseConnectorHistoryFile(draftKey, connector.title);
+                    }}
+                    type="button"
+                  >
+                    Choose File
+                  </button>
+                </div>
+              </label>
+              <label className="flex items-center gap-3 rounded-xl border border-line/80 bg-panelSoft px-4 py-3 text-sm text-text">
+                <input
+                  checked={connectorDraft.detectFooter}
+                  className="h-4 w-4 accent-accent"
+                  onChange={(event) => updateConnectorDraft(draftKey, { detectFooter: event.target.checked })}
+                  type="checkbox"
+                />
+                <span>Detect and ignore footer</span>
+              </label>
+            </>
+          ) : (
+            <label className="grid gap-2">
+              <span className="text-[11px] uppercase tracking-[0.16em] text-muted">PDF folder path</span>
+              <div className="flex gap-2">
+                <input
+                  className="w-full rounded-xl border border-line/80 bg-panelSoft px-4 py-3 text-sm text-text outline-none transition focus:border-accent/60"
+                  onChange={(event) => updateConnectorDraft(draftKey, { directoryPath: event.target.value })}
+                  placeholder={connector.directoryPathPlaceholder}
+                  spellCheck={false}
+                  type="text"
+                  value={connectorDraft.directoryPath}
+                />
+                <button
+                  className="shrink-0 rounded-xl border border-line/80 bg-panelSoft px-3 py-3 text-[11px] font-medium uppercase tracking-[0.16em] text-muted transition hover:border-accent/35 hover:text-text"
+                  onClick={() => {
+                    void chooseConnectorFolder(draftKey, connector.title, "directoryPath");
+                  }}
+                  type="button"
+                >
+                  Choose Folder
+                </button>
+              </div>
+            </label>
+          )}
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-xs text-muted">
+              {isCsvConnector
+                ? "Use a positions folder for holdings snapshots and optionally attach a full account-history CSV for contribution-aware PnL."
+                : "This source surfaces recent PDFs and connectivity for the selected account."}
+            </div>
+            <button
+              className="rounded-full border border-line/80 bg-panel px-3 py-1 text-[11px] font-medium uppercase tracking-[0.16em] text-muted transition hover:border-accent/35 hover:text-text disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={submitDisabled}
+              onClick={onSubmit}
+              type="button"
+            >
+              {filesystemConnectorConfigureMutation.isPending ? "Saving…" : mode === "edit" ? "Update" : "Add"}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   function renderFilesystemConnectorPanelContent(sourceId: string) {
     const status = filesystemConnectorStatusBySourceId[sourceId];
+    const summary = filesystemAccountSourceSummaries.find((item) => item.id === sourceId) ?? null;
     const portfolio = filesystemConnectorPortfolioBySourceId[sourceId];
     const portfolioError = filesystemConnectorPortfolioErrorBySourceId[sourceId] ?? null;
     const portfolioLoading = filesystemConnectorPortfolioLoadingBySourceId[sourceId] ?? false;
@@ -858,34 +1168,29 @@ function App() {
         portfolio={portfolio}
         portfolioError={portfolioError}
         portfolioLoading={portfolioLoading}
+        monthlyPnl={summary?.monthlyPnl ?? null}
+        netWorth={summary?.netWorth ?? null}
         status={status}
         statusesError={filesystemConnectorStatusesError}
         statusesLoading={filesystemConnectorStatusesQuery.isLoading}
+        todayPnl={summary?.todayPnl ?? null}
+        totalPnl={summary?.totalPnl ?? null}
       />
     );
   }
 
   const dashboardSummaryContent = (
     <>
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-        <MetricCard
-          hint={describeAccountSourceMetricCoverage(accountSourceSummaries, "totalPnl")}
-          label="Total PnL"
-          tone={pnlMetricTone(dashboardTotalPnl)}
-          value={fmtCurrency(dashboardTotalPnl)}
-        />
-        <MetricCard
-          hint={dashboardTodayPnlHint}
-          label="Today's PnL"
-          value={fmtCurrency(dashboardTodayPnl)}
-        />
-        <MetricCard
-          hint={dashboardMonthlyPnlHint}
-          label="Month PnL"
-          value={fmtCurrency(dashboardMonthlyPnl)}
-        />
-        <MetricCard hint={dashboardNetWorthHint} label="Net Worth" value={fmtCurrency(dashboardNetWorth)} />
-      </div>
+      <AccountSourceSummaryCards
+        monthlyPnl={dashboardMonthlyPnl}
+        monthlyPnlHint={dashboardMonthlyPnlHint}
+        netWorth={dashboardNetWorth}
+        netWorthHint={dashboardNetWorthHint}
+        todayPnl={dashboardTodayPnl}
+        todayPnlHint={dashboardTodayPnlHint}
+        totalPnl={dashboardTotalPnl}
+        totalPnlHint={dashboardTotalPnlHint}
+      />
 
       {connectionQuery.data?.lastError || connectError || reconnectError ? (
         <div className="mt-4 rounded-2xl border border-danger/20 bg-danger/8 px-4 py-3 text-sm text-danger">
@@ -902,6 +1207,7 @@ function App() {
           className="inline-flex items-center gap-2 rounded-full border border-accent/30 bg-accent/10 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.16em] text-accent transition hover:border-accent/50 hover:bg-accent/16 disabled:cursor-not-allowed disabled:opacity-50"
           disabled={availableConnectorCount === 0}
           onClick={() => {
+            setEditingFilesystemSourceId(null);
             setConnectorPickerOpen((value) => !value);
             setConnectorSetupError(null);
           }}
@@ -920,12 +1226,60 @@ function App() {
               key={connector.id}
               detail={connector.detail}
               icon={connector.icon}
+              actionLabel={filesystemConnectorStatusBySourceId[connector.id] ? "Edit" : undefined}
+              onOpen={
+                filesystemConnectorStatusBySourceId[connector.id]
+                  ? () => {
+                      startEditingFilesystemConnector(connector.id);
+                    }
+                  : undefined
+              }
               status={connector.status}
               title={connector.title}
               tone={connector.tone}
             />
           ))}
         </div>
+
+        {editingFilesystemSourceId ? (
+          (() => {
+            const editingStatus = filesystemConnectorStatusBySourceId[editingFilesystemSourceId];
+            const editingConnector = editingStatus
+              ? getConnectorCatalogEntry(editingStatus.connectorId as ConnectorCatalogId)
+              : null;
+            if (!editingStatus || !editingConnector) {
+              return null;
+            }
+            return (
+              <div className="rounded-2xl border border-line/80 bg-panelSoft px-5 py-5">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                  <div>
+                    <div className="text-sm font-semibold text-text">Edit Connector</div>
+                    <div className="mt-1 text-sm text-muted">Update the configured inputs for {editingStatus.displayName ?? editingConnector.title}.</div>
+                  </div>
+                </div>
+                {connectorSetupError ? (
+                  <div className="mt-4 rounded-2xl border border-danger/20 bg-danger/8 px-4 py-3 text-sm text-danger">{connectorSetupError}</div>
+                ) : null}
+                <div className="mt-4">
+                  {renderFilesystemConnectorForm({
+                    connector: editingConnector,
+                    draftKey: editingFilesystemSourceId,
+                    mode: "edit",
+                    onSubmit: () => {
+                      void saveFilesystemConnector(
+                        editingStatus.connectorId as ConnectorCatalogId,
+                        editingFilesystemSourceId,
+                        editingFilesystemSourceId,
+                      );
+                    },
+                    onCancel: stopEditingFilesystemConnector,
+                  })}
+                </div>
+              </div>
+            );
+          })()
+        ) : null}
 
         {connectorPickerOpen ? (
           <div className="rounded-2xl border border-line/80 bg-panelSoft px-5 py-5">
@@ -940,89 +1294,31 @@ function App() {
             ) : null}
             <div className="mt-4 grid gap-3 lg:grid-cols-2">
               {availableConnectorOptions.map((connector) => (
-                (() => {
-                  const connectorDraft = getConnectorDraft(connector.id);
-                  return (
-                <div key={connector.id} className="rounded-2xl border border-line/80 bg-panel px-4 py-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex items-center gap-3">
-                      <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-panelSoft text-text">
-                        <BankIcon />
-                      </span>
-                      <div>
-                        <div className="text-sm font-medium text-text">{connector.title}</div>
-                        <div className="mt-1 text-xs uppercase tracking-[0.16em] text-muted">{connector.provider}</div>
-                      </div>
-                    </div>
+                connector.availability === "ready" ? (
+                  <div key={connector.id}>
+                    {renderFilesystemConnectorForm({
+                      connector,
+                      draftKey: connector.id,
+                      mode: "add",
+                      onSubmit: () => {
+                        void saveFilesystemConnector(connector.id, connector.id);
+                      },
+                    })}
                   </div>
-                  <div className="mt-3 text-sm text-muted">{connector.description}</div>
-                  {connector.availability === "ready" ? (
-                    <div className="mt-4 grid gap-3">
-                      <label className="grid gap-2">
-                        <span className="text-[11px] uppercase tracking-[0.16em] text-muted">Source name</span>
-                        <input
-                          className="w-full rounded-xl border border-line/80 bg-panelSoft px-4 py-3 text-sm text-text outline-none transition focus:border-accent/60"
-                          onChange={(event) => updateConnectorDraft(connector.id, { displayName: event.target.value })}
-                          placeholder={connector.defaultDisplayNamePlaceholder}
-                          spellCheck={false}
-                          type="text"
-                          value={connectorDraft.displayName}
-                        />
-                      </label>
-                      <label className="grid gap-2">
-                        <span className="text-[11px] uppercase tracking-[0.16em] text-muted">
-                          {connector.id === CSV_FOLDER_CONNECTOR_ID ? "CSV folder path" : "PDF folder path"}
+                ) : (
+                  <div key={connector.id} className="rounded-2xl border border-line/80 bg-panel px-4 py-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-center gap-3">
+                        <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-panelSoft text-text">
+                          <BankIcon />
                         </span>
-                        <div className="flex gap-2">
-                          <input
-                            className="w-full rounded-xl border border-line/80 bg-panelSoft px-4 py-3 text-sm text-text outline-none transition focus:border-accent/60"
-                            onChange={(event) => updateConnectorDraft(connector.id, { directoryPath: event.target.value })}
-                            placeholder={connector.directoryPathPlaceholder}
-                            spellCheck={false}
-                            type="text"
-                            value={connectorDraft.directoryPath}
-                          />
-                          <button
-                            className="shrink-0 rounded-xl border border-line/80 bg-panelSoft px-3 py-3 text-[11px] font-medium uppercase tracking-[0.16em] text-muted transition hover:border-accent/35 hover:text-text"
-                            onClick={() => {
-                              void chooseConnectorFolder(connector.id, connector.title);
-                            }}
-                            type="button"
-                          >
-                            Choose Folder
-                          </button>
+                        <div>
+                          <div className="text-sm font-medium text-text">{connector.title}</div>
+                          <div className="mt-1 text-xs uppercase tracking-[0.16em] text-muted">{connector.provider}</div>
                         </div>
-                      </label>
-                      {connector.id === CSV_FOLDER_CONNECTOR_ID ? (
-                        <label className="flex items-center gap-3 rounded-xl border border-line/80 bg-panelSoft px-4 py-3 text-sm text-text">
-                          <input
-                            checked={connectorDraft.detectFooter}
-                            className="h-4 w-4 accent-accent"
-                            onChange={(event) => updateConnectorDraft(connector.id, { detectFooter: event.target.checked })}
-                            type="checkbox"
-                          />
-                          <span>Detect and ignore footer</span>
-                        </label>
-                      ) : null}
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="text-xs text-muted">
-                          {connector.id === CSV_FOLDER_CONNECTOR_ID
-                            ? "This adds a new account-owned source. The latest CSV in this folder will drive its snapshot."
-                            : "This adds a new account-owned document source. The folder will surface recent PDFs and connectivity."}
-                        </div>
-                        <button
-                          className="rounded-full border border-line/80 bg-panel px-3 py-1 text-[11px] font-medium uppercase tracking-[0.16em] text-muted transition hover:border-accent/35 hover:text-text disabled:cursor-not-allowed disabled:opacity-50"
-                          disabled={filesystemConnectorConfigureMutation.isPending || !connectorDraft.displayName.trim() || !connectorDraft.directoryPath.trim()}
-                          onClick={() => {
-                            void saveFilesystemConnector(connector.id);
-                          }}
-                          type="button"
-                        >
-                          {filesystemConnectorConfigureMutation.isPending ? "Saving…" : "Add"}
-                        </button>
                       </div>
                     </div>
-                  ) : (
+                    <div className="mt-3 text-sm text-muted">{connector.description}</div>
                     <div className="mt-4 flex justify-end">
                       <button
                         className="rounded-full border border-line/80 bg-panel px-3 py-1 text-[11px] font-medium uppercase tracking-[0.16em] text-muted transition disabled:cursor-not-allowed disabled:opacity-50"
@@ -1032,10 +1328,8 @@ function App() {
                         Coming soon
                       </button>
                     </div>
-                  )}
-                </div>
-                  );
-                })()
+                  </div>
+                )
               ))}
             </div>
           </div>
@@ -1062,7 +1356,15 @@ function App() {
         title="Interactive Brokers"
         topDivider={false}
       >
-        <div className="grid gap-6 xl:grid-cols-2">
+        <div className="grid gap-6">
+          <AccountSourceSummaryCards
+            monthlyPnl={ibkrAccountSourceSummary?.monthlyPnl ?? null}
+            netWorth={ibkrAccountSourceSummary?.netWorth ?? null}
+            todayPnl={ibkrAccountSourceSummary?.todayPnl ?? null}
+            totalPnl={ibkrAccountSourceSummary?.totalPnl ?? null}
+          />
+
+          <div className="grid gap-6 xl:grid-cols-2">
           <div className="grid gap-3">
             <h3 className="text-lg font-semibold text-text">Working Orders</h3>
             {dashboardOpenOrders.length > 0 ? (
@@ -1119,6 +1421,7 @@ function App() {
                 {selectedDashboardOwnsRoute ? "No open option positions in the routed IBKR account." : "Route this account through Gateway to view IBKR option positions here."}
               </div>
             )}
+          </div>
           </div>
         </div>
       </AccountConnectorSection>
@@ -1416,6 +1719,7 @@ function ConnectorStatusCard({
   detail,
   tone,
   icon,
+  actionLabel,
   onOpen,
 }: {
   title: string;
@@ -1423,6 +1727,7 @@ function ConnectorStatusCard({
   detail: string;
   tone: ConnectionHealthTone;
   icon: ReactNode;
+  actionLabel?: string;
   onOpen?: () => void;
 }) {
   return (
@@ -1441,7 +1746,7 @@ function ConnectorStatusCard({
             onClick={onOpen}
             type="button"
           >
-            Open
+            {actionLabel ?? "Open"}
           </button>
         ) : null}
       </div>

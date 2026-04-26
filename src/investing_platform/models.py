@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from typing import Literal
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -971,6 +972,10 @@ class CoinbasePortfolioResponse(DashboardModel):
     totalUsdValue: float
     cryptoUsdValue: float
     cashLikeUsdValue: float
+    totalPnl: float | None = None
+    todayPnl: float | None = None
+    monthlyPnl: float | None = None
+    netContributions: float | None = None
     visibleHoldingsCount: int
     totalAccountsCount: int
     holdings: list[CoinbaseHolding]
@@ -988,6 +993,8 @@ class FilesystemConnectorStatus(DashboardModel):
     detail: str
     displayName: str | None = None
     directoryPath: str | None = None
+    positionsDirectoryPath: str | None = None
+    historyCsvPath: str | None = None
     detectFooter: bool = False
     csvFilesCount: int = 0
     latestCsvPath: str | None = None
@@ -997,7 +1004,9 @@ class FilesystemConnectorStatus(DashboardModel):
 
 class FilesystemConnectorConfigRequest(DashboardModel):
     displayName: str
-    directoryPath: str
+    directoryPath: str | None = None
+    positionsDirectoryPath: str | None = None
+    historyCsvPath: str | None = None
     detectFooter: bool = True
 
 
@@ -1028,7 +1037,9 @@ class FilesystemConnectorPortfolioResponse(DashboardModel):
     displayName: str | None = None
     directoryPath: str
     latestCsvPath: str | None = None
+    historyCsvPath: str | None = None
     totalValue: float
+    netContributions: float | None = None
     investmentAccountsCount: int
     holdingsCount: int
     accounts: list[FilesystemInvestmentAccount] = Field(default_factory=list)
@@ -1179,6 +1190,9 @@ class InvestorPdfSourceStatus(DashboardModel):
     stocksRootPath: str
     pdfFolderName: str = "pdfs"
     timeoutSeconds: float
+    browserProvider: str = "disabled"
+    browserRenderingEnabled: bool = False
+    browserTimeoutSeconds: float | None = None
 
 
 class InvestorPdfDownloadRequest(DashboardModel):
@@ -1189,6 +1203,7 @@ class InvestorPdfDownloadRequest(DashboardModel):
     startDate: date | None = None
     endDate: date | None = None
     outputDir: str | None = None
+    seedUrl: str | None = None
     includeAnnualReports: bool = True
     includeEarningsDecks: bool = True
     includeInvestorPresentations: bool = True
@@ -1222,6 +1237,21 @@ class InvestorPdfDownloadRequest(DashboardModel):
             return None
         digits = "".join(character for character in value if character.isdigit())
         return digits or None
+
+    @field_validator("seedUrl")
+    @classmethod
+    def _normalize_investor_pdf_seed_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            return None
+        if any(character.isspace() for character in normalized):
+            raise ValueError("seedUrl must not contain whitespace.")
+        parsed = urlparse(normalized)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("seedUrl must be an http(s) URL.")
+        return normalized
 
     @model_validator(mode="after")
     def _validate_investor_pdf_request(self) -> "InvestorPdfDownloadRequest":

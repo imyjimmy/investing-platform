@@ -8,6 +8,7 @@ export type DashboardAccountConfig = {
   headerEyebrow: string;
   routeAccountIds: string[];
   attachedSourceIds: DashboardAttachedSourceId[];
+  netContributionsUsd: number | null;
 };
 
 export type DashboardAccountKey = DashboardAccountConfig["key"];
@@ -19,6 +20,7 @@ const FALLBACK_DASHBOARD_ACCOUNTS: DashboardAccountConfig[] = [
     headerEyebrow: "Configured brokerage account",
     routeAccountIds: [],
     attachedSourceIds: [],
+    netContributionsUsd: null,
   },
 ];
 
@@ -101,6 +103,7 @@ function normalizeDashboardAccounts(value: unknown): DashboardAccountConfig[] {
             : "Configured investing account",
         routeAccountIds: normalizeStringList(raw.routeAccountIds),
         attachedSourceIds: normalizeAttachedSourceIds(raw.attachedSourceIds),
+        netContributionsUsd: normalizeOptionalNumber(raw.netContributionsUsd),
       };
     })
     .filter((account): account is DashboardAccountConfig => Boolean(account));
@@ -118,4 +121,11 @@ function normalizeAttachedSourceIds(value: unknown): DashboardAttachedSourceId[]
     return [];
   }
   return value.filter((item): item is DashboardAttachedSourceId => item === "coinbase");
+}
+
+function normalizeOptionalNumber(value: unknown): number | null {
+  if (typeof value !== "number" || Number.isNaN(value)) {
+    return null;
+  }
+  return value;
 }

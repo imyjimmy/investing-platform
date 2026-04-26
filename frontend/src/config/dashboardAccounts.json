@@ -4,13 +4,15 @@
     "name": "Primary",
     "headerEyebrow": "Configured brokerage account",
     "routeAccountIds": ["DU-MOCK"],
-    "attachedSourceIds": ["coinbase"]
+    "attachedSourceIds": ["coinbase"],
+    "netContributionsUsd": 500000
   },
   {
     "key": "secondary",
     "name": "Secondary",
     "headerEyebrow": "Additional investing account",
     "routeAccountIds": [],
-    "attachedSourceIds": []
+    "attachedSourceIds": [],
+    "netContributionsUsd": null
   }
 ]

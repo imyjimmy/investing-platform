@@ -1,15 +1,15 @@
 [
   {
     "id": "csvFolder",
-    "title": "CSV Folder",
-    "shortTitle": "CSV Folder",
+    "title": "Brokerage CSV Source",
+    "shortTitle": "Brokerage CSV",
     "provider": "Filesystem",
-    "description": "Point the dashboard at a folder of end-of-day CSV exports and give the connector a display name.",
-    "settingsDetail": "Reads the latest CSV snapshot from a local filesystem folder.",
-    "dashboardTitle": "CSV Folder",
-    "dashboardEyebrow": "Filesystem investment source",
-    "defaultDisplayNamePlaceholder": "Brokerage CSV export",
-    "directoryPathPlaceholder": "~/Documents/investing/csv-exports",
+    "description": "Attach a positions snapshot folder and optionally an account-history CSV for contribution-aware PnL.",
+    "settingsDetail": "Reads the latest positions CSV snapshot and can also parse an account-history CSV for external cash flows.",
+    "dashboardTitle": "Brokerage CSV Source",
+    "dashboardEyebrow": "Filesystem brokerage source",
+    "defaultDisplayNamePlaceholder": "Fidelity taxable account",
+    "directoryPathPlaceholder": "~/Documents/investing/daily-positions",
     "availability": "ready"
   },
   {
