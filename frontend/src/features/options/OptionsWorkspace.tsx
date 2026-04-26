@@ -1,16 +1,10 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
 
-import { executionApi } from "../../lib/api";
 import { fmtCurrencySmall, fmtNumber } from "../../lib/formatters";
-import { queryKeys } from "../../lib/queryKeys";
 import type {
   ChainRow,
   ConnectionStatus,
-  OptionOrderPreview,
-  OptionOrderRequest,
   OptionPosition,
-  SubmittedOrder,
 } from "../../lib/types";
 import {
   OptionBuilderTool,
@@ -30,8 +24,14 @@ import {
 import { useOptionChain } from "../../components/options/useOptionChain";
 import { ToolWorkspaceFrame } from "../../components/shell/ToolWorkspaceFrame";
 import { TradeTicketFrame } from "../../components/trading/TradeTicketFrame";
-import { ErrorState } from "../../components/ui/ErrorState";
 import { TradeRailToggleIcon } from "../../components/ui/TradeRailToggleIcon";
+import {
+  OptionsTradeTicket,
+  computeOptionsTicketNetReferencePrice,
+  deriveEffectiveOptionsTicketLegs,
+  type OptionsTicketLegTemplate,
+  type OptionsTicketPlan,
+} from "./OptionsTradeTicket";
 
 export type OptionsWorkspaceSurface =
   | "options"
@@ -42,27 +42,6 @@ export type OptionsWorkspaceSurface =
   | "optionsScanner";
 
 type InlinePillTone = "neutral" | "safe" | "caution" | "danger" | "accent";
-
-type TicketPlan = {
-  label: string;
-  strategyTag: string | null;
-  summary: string | null;
-  defaultAction: "BUY" | "SELL";
-  legs: TicketLegTemplate[];
-};
-
-type TicketLegTemplate = {
-  symbol: string;
-  expiry: string;
-  strike: number;
-  right: TicketContractSide;
-  entryAction: "BUY" | "SELL";
-  referencePrice: number | null;
-  bid: number | null;
-  ask: number | null;
-  ratio: number;
-  delta: number | null;
-};
 
 type ChainGreekKey = "iv" | "delta" | "gamma" | "theta" | "vega" | "rho";
 type ChainGreekOption = OptionsChainGreekOption;
@@ -134,18 +113,11 @@ export function OptionsWorkspace({
   onOpenChain,
   onSymbolChange,
 }: OptionsWorkspaceProps) {
-  const queryClient = useQueryClient();
   const normalizedInitialSymbol = initialSymbol.trim().toUpperCase() || "NVDA";
   const [showChainMark, setShowChainMark] = useState<boolean>(() => readShowChainMark());
   const [optionsTradeRailOpen, setOptionsTradeRailOpen] = useState<boolean>(() => readOptionsTradeRailOpen());
   const [visibleChainGreeks, setVisibleChainGreeks] = useState<ChainGreekKey[]>(() => readVisibleChainGreeks());
-  const [ticketPlan, setTicketPlan] = useState<TicketPlan | null>(null);
-  const [ticketAction, setTicketAction] = useState<"BUY" | "SELL">("SELL");
-  const [ticketQuantity, setTicketQuantity] = useState(1);
-  const [ticketOrderType, setTicketOrderType] = useState<"LMT" | "MKT">("LMT");
-  const [ticketLimitPrice, setTicketLimitPrice] = useState("");
-  const [ticketTif, setTicketTif] = useState<"DAY" | "GTC">("DAY");
-  const [previewRequestKey, setPreviewRequestKey] = useState<string | null>(null);
+  const [ticketPlan, setTicketPlan] = useState<OptionsTicketPlan | null>(null);
   const {
     activeDisplayedChain,
     activeExpiry,
@@ -168,23 +140,8 @@ export function OptionsWorkspace({
     setChainSymbolInput,
     tickerOverviewQuery,
   } = useOptionChain(normalizedInitialSymbol);
-
-  const previewMutation = useMutation({
-    mutationFn: executionApi.previewOptionOrder,
-    onSuccess: (_data, variables) => setPreviewRequestKey(JSON.stringify(variables)),
-  });
-  const submitMutation = useMutation({
-    mutationFn: executionApi.submitOptionOrder,
-    onSuccess: async (_data, variables) => {
-      setPreviewRequestKey(JSON.stringify(variables));
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.account.riskSummary(selectedAccount) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.account.optionPositions(selectedAccount) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.account.openOrders(selectedAccount) }),
-      ]);
-    },
-  });
   const lastExternalSymbolRef = useRef(normalizedInitialSymbol);
+  const ticketPlanIdRef = useRef(0);
 
   useEffect(() => {
     if (normalizedInitialSymbol === lastExternalSymbolRef.current) {
@@ -222,11 +179,8 @@ export function OptionsWorkspace({
     }
     if (ticketPlan.legs.some((leg) => leg.symbol !== chainSymbol)) {
       setTicketPlan(null);
-      setPreviewRequestKey(null);
-      previewMutation.reset();
-      submitMutation.reset();
     }
-  }, [chainSymbol, previewMutation, submitMutation, ticketPlan]);
+  }, [chainSymbol, ticketPlan]);
 
   useEffect(() => {
     if (!ticketPlan || !selectedExpiry) {
@@ -234,50 +188,10 @@ export function OptionsWorkspace({
     }
     if (ticketPlan.legs.some((leg) => leg.expiry !== selectedExpiry)) {
       setTicketPlan(null);
-      setPreviewRequestKey(null);
-      previewMutation.reset();
-      submitMutation.reset();
     }
-  }, [previewMutation, selectedExpiry, submitMutation, ticketPlan]);
+  }, [selectedExpiry, ticketPlan]);
 
-  const effectiveTicketLegs = ticketPlan ? deriveEffectiveTicketLegs(ticketPlan, ticketAction) : [];
-  const selectedTicketLeg = effectiveTicketLegs[0] ?? null;
-  const ticketNetReferencePrice = computeTicketNetReferencePrice(effectiveTicketLegs);
   const optionsDataSourcePill = optionDataSourcePresentation(activeDisplayedChain, connectionStatus, chainHasBidAsk, chainHasOptionMarks);
-  const parsedLimitPrice = ticketOrderType === "LMT" ? Number(ticketLimitPrice) : null;
-  const validLimitPrice =
-    ticketOrderType === "MKT" ? null : Number.isFinite(parsedLimitPrice) && parsedLimitPrice != null && parsedLimitPrice > 0 ? parsedLimitPrice : null;
-  const ticketRequest: OptionOrderRequest | null =
-    selectedTicketLeg && selectedAccount && effectiveTicketLegs.length && (ticketOrderType === "MKT" || validLimitPrice != null)
-      ? {
-          accountId: selectedAccount,
-          symbol: selectedTicketLeg.symbol,
-          expiry: selectedTicketLeg.expiry,
-          strike: selectedTicketLeg.strike,
-          right: selectedTicketLeg.right,
-          action: ticketAction,
-          quantity: Math.max(1, Math.floor(ticketQuantity || 1)),
-          orderType: ticketOrderType,
-          limitPrice: ticketOrderType === "LMT" ? validLimitPrice : null,
-          tif: ticketTif,
-          strategyTag: ticketPlan?.strategyTag ?? null,
-          structureLabel: ticketPlan?.label ?? null,
-          legs: effectiveTicketLegs.map((leg) => ({
-            expiry: leg.expiry,
-            strike: leg.strike,
-            right: leg.right,
-            action: leg.action,
-            ratio: leg.ratio,
-          })),
-        }
-      : null;
-  const ticketRequestKey = ticketRequest ? JSON.stringify(ticketRequest) : null;
-  const previewIsCurrent = Boolean(previewMutation.data && previewRequestKey && ticketRequestKey === previewRequestKey);
-  const submitIsCurrent = Boolean(submitMutation.data && previewRequestKey && ticketRequestKey === previewRequestKey);
-  const previewError = previewMutation.error instanceof Error ? previewMutation.error.message : null;
-  const submitError = submitMutation.error instanceof Error ? submitMutation.error.message : null;
-  const canPreviewTicket = executionEnabled && Boolean(ticketRequest);
-  const canSubmitTicket = canPreviewTicket && previewIsCurrent;
   const tickerOverview = tickerOverviewQuery.data;
 
   if (workspace === "optionsValuation") {
@@ -413,12 +327,7 @@ export function OptionsWorkspace({
   function renderIbkrOptionsSurface() {
     const busySymbolLabel = chainSymbol;
     const selectedChainGreekOptions = CHAIN_GREEK_OPTIONS.filter((option) => visibleChainGreeks.includes(option.key));
-    const selectedContractLabel =
-      ticketPlan == null
-        ? null
-        : effectiveTicketLegs.length === 1
-          ? `${effectiveTicketLegs[0].symbol} ${effectiveTicketLegs[0].expiry} ${fmtNumber(effectiveTicketLegs[0].strike)}${effectiveTicketLegs[0].right}`
-          : ticketPlan.label;
+    const selectedContractLabel = ticketPlan?.label ?? null;
     const chainHeadingLabel = isLoadingDifferentSymbol
       ? chainSymbol
       : activeDisplayedChain
@@ -547,11 +456,11 @@ export function OptionsWorkspace({
                 selectedGreekOptions={selectedChainGreekOptions}
                 showMark={showChainMark}
                 ticketSelection={
-                  effectiveTicketLegs.length === 1
+                  ticketPlan?.legs.length === 1
                     ? {
-                        expiry: effectiveTicketLegs[0].expiry,
-                        strike: effectiveTicketLegs[0].strike,
-                        right: effectiveTicketLegs[0].right,
+                        expiry: ticketPlan.legs[0].expiry,
+                        strike: ticketPlan.legs[0].strike,
+                        right: ticketPlan.legs[0].right,
                       }
                     : null
                 }
@@ -577,206 +486,19 @@ export function OptionsWorkspace({
     return (
       <div className="grid content-start gap-4">
         <TradeTicketFrame title={selectedContractLabel ?? "Select a contract"}>
-          {ticketPlan ? renderTradeTicketForm() : (
+          {ticketPlan ? (
+            <OptionsTradeTicket
+              key={ticketPlan.id}
+              executionEnabled={executionEnabled}
+              plan={ticketPlan}
+              selectedAccount={selectedAccount}
+            />
+          ) : (
             <div className="mt-4 rounded-xl border border-line/80 bg-panelSoft px-3 py-4 text-sm text-muted">
               Load any call or put from the chain, or stage a spread from the Builder workspace.
             </div>
           )}
         </TradeTicketFrame>
-      </div>
-    );
-  }
-
-  function renderTradeTicketForm() {
-    if (!ticketPlan) {
-      return null;
-    }
-    const analytics = computeTicketAnalytics(
-      ticketPlan,
-      effectiveTicketLegs,
-      ticketAction,
-      ticketQuantity,
-      ticketOrderType === "LMT" ? validLimitPrice : ticketNetReferencePrice,
-    );
-    return (
-      <div className="mt-4 grid gap-4">
-        <div className="grid grid-cols-2 gap-2">
-          <button
-            className={`rounded-xl border px-3 py-2 text-sm font-medium transition ${
-              ticketAction === "BUY"
-                ? "border-accent/45 bg-accent/12 text-accent"
-                : "border-line/80 bg-panelSoft text-muted hover:text-text"
-            }`}
-            data-testid="ticket-buy-button"
-            onClick={() => {
-              setTicketAction("BUY");
-              resetTicketFeedback();
-            }}
-            type="button"
-          >
-            Buy
-          </button>
-          <button
-            className={`rounded-xl border px-3 py-2 text-sm font-medium transition ${
-              ticketAction === "SELL"
-                ? "border-accent/45 bg-accent/12 text-accent"
-                : "border-line/80 bg-panelSoft text-muted hover:text-text"
-            }`}
-            data-testid="ticket-sell-button"
-            onClick={() => {
-              setTicketAction("SELL");
-              resetTicketFeedback();
-            }}
-            type="button"
-          >
-            Sell
-          </button>
-        </div>
-
-        {ticketPlan.summary ? (
-          <div className="rounded-xl border border-line/80 bg-panelSoft px-3 py-3 text-sm text-muted">{ticketPlan.summary}</div>
-        ) : null}
-
-        <div className="rounded-xl border border-line/80 bg-panelSoft px-3 py-3">
-          <div className="text-xs uppercase tracking-[0.18em] text-muted">Legs</div>
-          <div className="mt-3 grid gap-2">
-            {effectiveTicketLegs.map((leg, index) => (
-              <div key={`${leg.expiry}-${leg.strike}-${leg.right}-${index}`} className="flex items-center justify-between gap-3 text-sm">
-                <span className="text-text">
-                  {leg.action} {leg.symbol} {leg.expiry} {fmtNumber(leg.strike)}
-                  {leg.right}
-                  {leg.ratio > 1 ? ` x${leg.ratio}` : ""}
-                </span>
-                <span className="text-muted">{fmtCurrencySmall(leg.referencePrice)}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="grid gap-3 sm:grid-cols-2">
-          <label className="grid gap-2">
-            <span className="text-xs uppercase tracking-[0.18em] text-muted">Qty</span>
-            <input
-              className="rounded-xl border border-line/80 bg-panelSoft px-3 py-2 text-sm text-text outline-none transition focus:border-accent/60"
-              data-testid="ticket-quantity-input"
-              min={1}
-              onChange={(event) => {
-                setTicketQuantity(Math.max(1, Number.parseInt(event.target.value || "1", 10) || 1));
-                resetTicketFeedback();
-              }}
-              type="number"
-              value={ticketQuantity}
-            />
-          </label>
-          <label className="grid gap-2">
-            <span className="text-xs uppercase tracking-[0.18em] text-muted">Order type</span>
-            <select
-              className="rounded-xl border border-line/80 bg-panelSoft px-3 py-2 text-sm text-text outline-none transition focus:border-accent/60"
-              data-testid="ticket-order-type-select"
-              onChange={(event) => {
-                setTicketOrderType(event.target.value as "LMT" | "MKT");
-                resetTicketFeedback();
-              }}
-              value={ticketOrderType}
-            >
-              <option value="LMT">LMT</option>
-              <option value="MKT">MKT</option>
-            </select>
-          </label>
-          {ticketOrderType === "LMT" ? (
-            <label className="grid gap-2">
-              <span className="text-xs uppercase tracking-[0.18em] text-muted">Limit</span>
-              <input
-                className="rounded-xl border border-line/80 bg-panelSoft px-3 py-2 text-sm text-text outline-none transition focus:border-accent/60"
-                data-testid="ticket-limit-price-input"
-                onChange={(event) => {
-                  setTicketLimitPrice(event.target.value);
-                  resetTicketFeedback();
-                }}
-                type="number"
-                value={ticketLimitPrice}
-              />
-            </label>
-          ) : null}
-          <label className="grid gap-2">
-            <span className="text-xs uppercase tracking-[0.18em] text-muted">Time in force</span>
-            <select
-              className="rounded-xl border border-line/80 bg-panelSoft px-3 py-2 text-sm text-text outline-none transition focus:border-accent/60"
-              data-testid="ticket-tif-select"
-              onChange={(event) => {
-                setTicketTif(event.target.value as "DAY" | "GTC");
-                resetTicketFeedback();
-              }}
-              value={ticketTif}
-            >
-              <option value="DAY">DAY</option>
-              <option value="GTC">GTC</option>
-            </select>
-          </label>
-        </div>
-
-        <div className="grid gap-2 text-sm text-muted">
-          <div className="flex items-center justify-between gap-3">
-            <span>Net reference</span>
-            <span>{fmtCurrencySmall(ticketNetReferencePrice)}</span>
-          </div>
-          <div className="flex items-center justify-between gap-3">
-            <span>Net delta</span>
-            <span>{fmtNumber(analytics.netDelta)}</span>
-          </div>
-          {analytics.width != null ? (
-            <div className="flex items-center justify-between gap-3">
-              <span>Spread width</span>
-              <span>{fmtCurrencySmall(analytics.width)}</span>
-            </div>
-          ) : null}
-          {analytics.maxProfit != null ? (
-            <div className="flex items-center justify-between gap-3">
-              <span>Max profit</span>
-              <span>{fmtCurrencySmall(analytics.maxProfit)}</span>
-            </div>
-          ) : null}
-          {analytics.maxLoss != null ? (
-            <div className="flex items-center justify-between gap-3">
-              <span>Max loss</span>
-              <span>{fmtCurrencySmall(analytics.maxLoss)}</span>
-            </div>
-          ) : null}
-        </div>
-
-        {previewIsCurrent && previewMutation.data ? <PreviewSummary preview={previewMutation.data} /> : null}
-        {previewError ? <ErrorState message={previewError} /> : null}
-        {submitError ? <ErrorState message={submitError} /> : null}
-        {submitIsCurrent && submitMutation.data ? <SubmitSummary submitted={submitMutation.data} /> : null}
-
-        <div className="grid gap-2 sm:grid-cols-2">
-          <button
-            className="rounded-xl border border-line/80 bg-panelSoft px-4 py-3 text-sm font-medium text-text transition hover:border-accent/25 hover:text-accent disabled:cursor-not-allowed disabled:opacity-50"
-            data-testid="preview-order-button"
-            disabled={!canPreviewTicket || previewMutation.isPending}
-            onClick={() => {
-              if (ticketRequest) {
-                void previewMutation.mutateAsync(ticketRequest);
-              }
-            }}
-            type="button"
-          >
-            {previewMutation.isPending ? "Previewing..." : "Preview order"}
-          </button>
-          <button
-            className="rounded-xl border border-accent/30 bg-accent/10 px-4 py-3 text-sm font-medium text-accent transition hover:border-accent/50 hover:bg-accent/16 disabled:cursor-not-allowed disabled:opacity-50"
-            data-testid="submit-order-button"
-            disabled={!canSubmitTicket || submitMutation.isPending}
-            onClick={() => {
-              if (ticketRequest) {
-                void submitMutation.mutateAsync(ticketRequest);
-              }
-            }}
-            type="button"
-          >
-            {submitMutation.isPending ? "Submitting..." : "Submit order"}
-          </button>
-        </div>
       </div>
     );
   }
@@ -794,17 +516,22 @@ export function OptionsWorkspace({
   }
 
   function loadTicket(row: ChainRow, right: TicketContractSide) {
+    const expiry = selectedExpiry ?? activeDisplayedChain?.selectedExpiry ?? "";
     const referencePrice =
       right === "C" ? row.callMid ?? row.callAsk ?? row.callBid ?? null : row.putMid ?? row.putAsk ?? row.putBid ?? null;
-    const nextPlan: TicketPlan = {
-      label: `${chainSymbol} ${selectedExpiry ?? activeDisplayedChain?.selectedExpiry ?? ""} ${fmtNumber(row.strike)}${right}`,
+    const nextPlan: OptionsTicketPlan = {
+      id: nextTicketPlanId(),
+      label: `${chainSymbol} ${expiry} ${fmtNumber(row.strike)}${right}`,
       strategyTag: null,
       summary: null,
       defaultAction: "SELL",
+      defaultOrderType: "LMT",
+      defaultLimitPrice: referencePrice != null ? referencePrice.toFixed(2) : "",
+      defaultTif: "DAY",
       legs: [
         {
           symbol: chainSymbol,
-          expiry: selectedExpiry ?? activeDisplayedChain?.selectedExpiry ?? "",
+          expiry,
           strike: row.strike,
           right,
           entryAction: "SELL",
@@ -817,83 +544,43 @@ export function OptionsWorkspace({
       ],
     };
     setTicketPlan(nextPlan);
-    setTicketAction(nextPlan.defaultAction);
-    setTicketQuantity(1);
-    setTicketOrderType("LMT");
-    setTicketLimitPrice(referencePrice != null ? referencePrice.toFixed(2) : "");
-    setTicketTif("DAY");
-    resetTicketFeedback();
   }
 
   function stageStructure(structure: OptionStructureStageRequest) {
     const expiry = selectedExpiry ?? activeDisplayedChain?.selectedExpiry ?? "";
-    const nextPlan: TicketPlan = {
+    const legs: OptionsTicketLegTemplate[] = structure.legs.map((leg: OptionStructureLegTemplate) => ({
+      symbol: chainSymbol,
+      expiry,
+      strike: leg.strike,
+      right: leg.right,
+      entryAction: leg.action,
+      referencePrice: leg.referencePrice,
+      bid: leg.bid,
+      ask: leg.ask,
+      ratio: leg.ratio,
+      delta: leg.delta,
+    }));
+    const defaultLimit = computeOptionsTicketNetReferencePrice(
+      deriveEffectiveOptionsTicketLegs({ defaultAction: structure.defaultAction, legs }, structure.defaultAction),
+    );
+    const nextPlan: OptionsTicketPlan = {
+      id: nextTicketPlanId(),
       label: structure.title,
       strategyTag: structure.strategyTag,
       summary: structure.summary,
       defaultAction: structure.defaultAction,
-      legs: structure.legs.map((leg: OptionStructureLegTemplate) => ({
-        symbol: chainSymbol,
-        expiry,
-        strike: leg.strike,
-        right: leg.right,
-        entryAction: leg.action,
-        referencePrice: leg.referencePrice,
-        bid: leg.bid,
-        ask: leg.ask,
-        ratio: leg.ratio,
-        delta: leg.delta,
-      })),
+      defaultOrderType: defaultLimit != null ? "LMT" : "MKT",
+      defaultLimitPrice: defaultLimit != null ? defaultLimit.toFixed(2) : "",
+      defaultTif: "DAY",
+      legs,
     };
-    const defaultLimit = computeTicketNetReferencePrice(deriveEffectiveTicketLegs(nextPlan, nextPlan.defaultAction));
     setTicketPlan(nextPlan);
-    setTicketAction(nextPlan.defaultAction);
-    setTicketQuantity(1);
-    setTicketOrderType(defaultLimit != null ? "LMT" : "MKT");
-    setTicketLimitPrice(defaultLimit != null ? defaultLimit.toFixed(2) : "");
-    setTicketTif("DAY");
     setOptionsTradeRailOpen(true);
-    resetTicketFeedback();
   }
 
-  function computeTicketAnalytics(
-    plan: TicketPlan,
-    legs: Array<TicketLegTemplate & { action: "BUY" | "SELL" }>,
-    action: "BUY" | "SELL",
-    quantity: number,
-    pricingReference: number | null,
-  ) {
-    const netDelta = legs.reduce((total, leg) => total + (leg.delta ?? 0) * (leg.action === "BUY" ? 1 : -1) * leg.ratio * quantity, 0);
-    const spreadStrikes = Array.from(new Set(legs.map((leg) => leg.strike))).sort((left, right) => left - right);
-    const width =
-      plan.legs.length === 2 && spreadStrikes.length === 2
-        ? Math.abs(spreadStrikes[1] - spreadStrikes[0]) * 100 * quantity
-        : null;
-    if (width == null || pricingReference == null || action !== plan.defaultAction || plan.legs.length !== 2) {
-      return { netDelta, width, maxProfit: null, maxLoss: null };
-    }
-    const totalPremium = Math.abs(pricingReference) * 100 * quantity;
-    if (plan.defaultAction === "SELL") {
-      return { netDelta, width, maxProfit: totalPremium, maxLoss: Math.max(width - totalPremium, 0) };
-    }
-    return { netDelta, width, maxProfit: Math.max(width - totalPremium, 0), maxLoss: totalPremium };
-  }
-
-  function deriveEffectiveTicketLegs(plan: TicketPlan, action: "BUY" | "SELL") {
-    return plan.legs.map((leg) => ({
-      ...leg,
-      action: action === plan.defaultAction ? leg.entryAction : invertAction(leg.entryAction),
-    }));
-  }
-
-  function computeTicketNetReferencePrice(legs: Array<TicketLegTemplate & { action: "BUY" | "SELL" }>) {
-    const prices = legs
-      .map((leg) => (leg.referencePrice == null ? null : (leg.action === "SELL" ? 1 : -1) * leg.referencePrice * leg.ratio))
-      .filter((value): value is number => value != null);
-    if (prices.length !== legs.length) {
-      return null;
-    }
-    return prices.reduce((total, value) => total + value, 0);
+  function nextTicketPlanId() {
+    ticketPlanIdRef.current += 1;
+    return `options-ticket-${ticketPlanIdRef.current}`;
   }
 
   function toggleVisibleGreek(nextGreek: ChainGreekKey) {
@@ -905,16 +592,6 @@ export function OptionsWorkspace({
   function toggleShowChainMark() {
     setShowChainMark((current) => !current);
   }
-
-  function resetTicketFeedback() {
-    previewMutation.reset();
-    submitMutation.reset();
-    setPreviewRequestKey(null);
-  }
-}
-
-function invertAction(action: "BUY" | "SELL") {
-  return action === "BUY" ? "SELL" : "BUY";
 }
 
 function optionDataSourcePresentation(
@@ -1015,75 +692,6 @@ function readOptionsTradeRailOpen(): boolean {
   } catch {
     return true;
   }
-}
-
-function PreviewSummary({ preview }: { preview: OptionOrderPreview }) {
-  return (
-    <div className="rounded-xl border border-line/80 bg-panelSoft px-3 py-3 text-sm">
-      <div className="text-xs uppercase tracking-[0.18em] text-muted">Preview</div>
-      {preview.structureLabel ? <div className="mt-2 text-sm font-medium text-text">{preview.structureLabel}</div> : null}
-      <div className="mt-3 grid gap-2 text-muted">
-        <div className="flex items-center justify-between gap-3">
-          <span>Opening/closing</span>
-          <span className="text-text">{preview.openingOrClosing}</span>
-        </div>
-        <div className="flex items-center justify-between gap-3">
-          <span>Reference</span>
-          <span className="text-text">{fmtCurrencySmall(preview.marketReferencePrice)}</span>
-        </div>
-        <div className="flex items-center justify-between gap-3">
-          <span>Gross premium</span>
-          <span className="text-text">{fmtCurrencySmall(preview.estimatedGrossPremium)}</span>
-        </div>
-        <div className="flex items-center justify-between gap-3">
-          <span>Cash impact</span>
-          <span className="text-text">{fmtCurrencySmall(preview.conservativeCashImpact)}</span>
-        </div>
-        <div className="flex items-center justify-between gap-3">
-          <span>Init margin</span>
-          <span className="text-text">{fmtCurrencySmall(preview.brokerInitialMarginChange)}</span>
-        </div>
-        {preview.maxProfit != null ? (
-          <div className="flex items-center justify-between gap-3">
-            <span>Max profit</span>
-            <span className="text-text">{fmtCurrencySmall(preview.maxProfit)}</span>
-          </div>
-        ) : null}
-        {preview.maxLoss != null ? (
-          <div className="flex items-center justify-between gap-3">
-            <span>Max loss</span>
-            <span className="text-text">{fmtCurrencySmall(preview.maxLoss)}</span>
-          </div>
-        ) : null}
-      </div>
-      {preview.legs.length > 1 ? (
-        <div className="mt-3 grid gap-2 text-xs text-muted">
-          {preview.legs.map((leg, index) => (
-            <div key={`${leg.expiry}-${leg.strike}-${leg.right}-${index}`} className="flex items-center justify-between gap-3">
-              <span>
-                {leg.action} {leg.expiry} {fmtNumber(leg.strike)}
-                {leg.right}
-              </span>
-              <span>{fmtCurrencySmall(leg.marketReferencePrice)}</span>
-            </div>
-          ))}
-        </div>
-      ) : null}
-      {preview.warningText ? <div className="mt-3 text-sm text-caution">{preview.warningText}</div> : null}
-      {preview.note ? <div className="mt-2 text-sm text-muted">{preview.note}</div> : null}
-    </div>
-  );
-}
-
-function SubmitSummary({ submitted }: { submitted: SubmittedOrder }) {
-  return (
-    <div className="rounded-xl border border-safe/25 bg-safe/10 px-3 py-3 text-sm text-safe" data-testid="submit-banner">
-      Order {submitted.orderId} accepted with status {submitted.status}.
-      {submitted.structureLabel ? ` ${submitted.structureLabel}.` : ""}
-      {!submitted.structureLabel && submitted.legCount > 1 ? ` ${submitted.legCount} legs.` : ""}
-      {submitted.message ? ` ${submitted.message}` : ""}
-    </div>
-  );
 }
 
 function GearIcon() {

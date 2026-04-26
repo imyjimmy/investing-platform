@@ -1,13 +1,11 @@
 import { useEffect, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
 
-import { executionApi } from "../../lib/api";
 import { fmtCurrencySmall, fmtNumber } from "../../lib/formatters";
-import { queryKeys } from "../../lib/queryKeys";
 import type { ConnectionStatus, StockOrderPreview, StockOrderRequest, SubmittedOrder, TickerOverviewResponse } from "../../lib/types";
 import { ErrorState } from "../ui/ErrorState";
 import { TradeTicketFrame } from "./TradeTicketFrame";
 import { activeTradingAccount, buildTradingAccountOptions } from "./tradingAccounts";
+import { useStockTradeTicket } from "./useTradeTicket";
 
 type StockTradeTicketProps = {
   symbol: string;
@@ -28,13 +26,11 @@ export function StockTradeTicket({
   netShares,
   onSelectedAccountChange,
 }: StockTradeTicketProps) {
-  const queryClient = useQueryClient();
   const [ticketAction, setTicketAction] = useState<"BUY" | "SELL">("BUY");
   const [ticketQuantity, setTicketQuantity] = useState(100);
   const [ticketOrderType, setTicketOrderType] = useState<"LMT" | "MKT">("LMT");
   const [ticketLimitPrice, setTicketLimitPrice] = useState("");
   const [ticketTif, setTicketTif] = useState<"DAY" | "GTC">("DAY");
-  const [previewRequestKey, setPreviewRequestKey] = useState<string | null>(null);
 
   const accountOptions = buildTradingAccountOptions(connectionStatus, selectedAccount);
   const activeAccount = activeTradingAccount(accountOptions, selectedAccount);
@@ -55,28 +51,17 @@ export function StockTradeTicket({
           tif: ticketTif,
         }
       : null;
-  const ticketRequestKey = ticketRequest ? JSON.stringify(ticketRequest) : null;
-  const previewMutation = useMutation({
-    mutationFn: executionApi.previewStockOrder,
-    onSuccess: (_data, variables) => setPreviewRequestKey(JSON.stringify(variables)),
-  });
-  const submitMutation = useMutation({
-    mutationFn: executionApi.submitStockOrder,
-    onSuccess: async (_data, variables) => {
-      setPreviewRequestKey(JSON.stringify(variables));
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.account.riskSummary(variables.accountId) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.account.positions(variables.accountId) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.account.openOrders(variables.accountId) }),
-      ]);
-    },
-  });
-  const previewIsCurrent = Boolean(previewMutation.data && previewRequestKey && ticketRequestKey === previewRequestKey);
-  const submitIsCurrent = Boolean(submitMutation.data && previewRequestKey && ticketRequestKey === previewRequestKey);
-  const previewError = previewMutation.error instanceof Error ? previewMutation.error.message : null;
-  const submitError = submitMutation.error instanceof Error ? submitMutation.error.message : null;
-  const canPreviewTicket = executionEnabled && Boolean(ticketRequest);
-  const canSubmitTicket = canPreviewTicket && previewIsCurrent;
+  const {
+    canPreviewTicket,
+    canSubmitTicket,
+    previewError,
+    previewIsCurrent,
+    previewMutation,
+    resetTicketFeedback,
+    submitError,
+    submitIsCurrent,
+    submitMutation,
+  } = useStockTradeTicket(ticketRequest, executionEnabled);
 
   useEffect(() => {
     if (referencePrice != null) {
@@ -270,12 +255,6 @@ export function StockTradeTicket({
       </div>
     </TradeTicketFrame>
   );
-
-  function resetTicketFeedback() {
-    previewMutation.reset();
-    submitMutation.reset();
-    setPreviewRequestKey(null);
-  }
 }
 
 function chooseStockReferencePrice(overview: TickerOverviewResponse | undefined, action: "BUY" | "SELL") {
