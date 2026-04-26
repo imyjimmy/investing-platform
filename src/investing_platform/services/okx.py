@@ -12,6 +12,9 @@ from investing_platform.config import DashboardSettings
 from investing_platform.models import CryptoMarketQuote, CryptoMarketResponse, OkxSourceStatus
 
 
+_OKX_HEALTHCHECK_INSTRUMENT = "BTC-USDT"
+
+
 class OkxService:
     """Fetches public crypto market data from OKX without credentials."""
 
@@ -23,15 +26,26 @@ class OkxService:
         self._last_error: str | None = None
         self._last_successful_sync_at: datetime | None = None
 
-    def source_status(self) -> OkxSourceStatus:
+    def source_status(self, probe: bool = False) -> OkxSourceStatus:
+        if probe:
+            self._run_health_probe()
         with self._state_lock:
             last_error = self._last_error
             last_successful_sync_at = self._last_successful_sync_at
+        healthy = last_error is None
         return OkxSourceStatus(
-            available=last_error is None,
-            status="degraded" if last_error else "ready",
+            available=healthy,
+            status="ready" if healthy else "degraded",
             apiBaseUrl=self._settings.okx_api_base_url.rstrip("/"),
-            detail=last_error or "OKX public market data is enabled globally for the crypto market workspace.",
+            detail=(
+                f"OKX public market data health check is passing for {_OKX_HEALTHCHECK_INSTRUMENT}."
+                if healthy and last_successful_sync_at is not None
+                else (
+                    "OKX public market data is enabled globally for the crypto market workspace."
+                    if healthy
+                    else f"OKX public market data health check failed: {last_error}"
+                )
+            ),
             authMode="public",
             lastSuccessfulSyncAt=last_successful_sync_at,
             lastError=last_error,
@@ -63,9 +77,7 @@ class OkxService:
             raise RuntimeError("OKX public spot tickers are unavailable for BTC-USDT and ETH-USDT right now.")
 
         now = datetime.now(UTC)
-        with self._state_lock:
-            self._last_error = None
-            self._last_successful_sync_at = now
+        self._mark_success(now)
 
         source_notice = "Live spot pricing is available for BTC and ETH majors."
         if missing_symbols:
@@ -97,6 +109,27 @@ class OkxService:
                 self._last_error = message
             raise RuntimeError(message)
         return payload
+
+    def _run_health_probe(self) -> None:
+        try:
+            payload = self._request_json("/api/v5/market/ticker", {"instId": _OKX_HEALTHCHECK_INSTRUMENT})
+            rows = payload.get("data") if isinstance(payload, dict) else None
+            if not isinstance(rows, list) or not rows:
+                raise RuntimeError(f"OKX returned an unexpected {_OKX_HEALTHCHECK_INSTRUMENT} ticker payload.")
+            ticker = rows[0] if isinstance(rows[0], dict) else {}
+            last_price = _safe_float(ticker.get("last"))
+            if last_price is None or last_price <= 0:
+                raise RuntimeError(f"OKX did not return a usable {_OKX_HEALTHCHECK_INSTRUMENT} last price.")
+        except RuntimeError as exc:
+            with self._state_lock:
+                self._last_error = str(exc)
+            return
+        self._mark_success(datetime.now(UTC))
+
+    def _mark_success(self, captured_at: datetime) -> None:
+        with self._state_lock:
+            self._last_error = None
+            self._last_successful_sync_at = captured_at
 
 
 def _safe_float(value: Any) -> float | None:

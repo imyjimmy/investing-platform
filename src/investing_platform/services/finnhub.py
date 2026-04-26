@@ -47,7 +47,7 @@ class FinnhubService:
         self._last_error: str | None = None
         self._last_successful_sync_at: datetime | None = None
 
-    def source_status(self) -> FinnhubSourceStatus:
+    def source_status(self, probe: bool = False) -> FinnhubSourceStatus:
         record = self._read_record()
         if record is None:
             return FinnhubSourceStatus(
@@ -60,15 +60,25 @@ class FinnhubService:
                 lastSuccessfulSyncAt=self._last_successful_sync_at,
                 lastError=self._last_error,
             )
+        if probe:
+            self._run_health_probe(record.api_key)
+        with self._lock:
+            last_error = self._last_error
+            last_successful_sync_at = self._last_successful_sync_at or record.updated_at
+        healthy = last_error is None
         return FinnhubSourceStatus(
-            available=True,
+            available=healthy,
             configured=True,
-            status="degraded" if self._last_error else "ready",
+            status="ready" if healthy else "degraded",
             apiBaseUrl=self._settings.finnhub_api_base_url.rstrip("/"),
-            detail=self._last_error or "Finnhub is configured for Stock tool quote and fundamentals requests.",
+            detail=(
+                "Finnhub quote health check is passing for the configured stock data fallback."
+                if healthy
+                else f"Finnhub quote health check failed: {last_error}"
+            ),
             maskedApiKey=_mask_api_key(record.api_key),
-            lastSuccessfulSyncAt=self._last_successful_sync_at or record.updated_at,
-            lastError=self._last_error,
+            lastSuccessfulSyncAt=last_successful_sync_at,
+            lastError=last_error,
         )
 
     def configure(self, request: FinnhubConnectorConfigRequest) -> FinnhubSourceStatus:
@@ -81,15 +91,13 @@ class FinnhubService:
             return self.source_status()
 
         try:
-            self._request_json("/quote", {"symbol": _DEFAULT_TEST_SYMBOL}, api_key=normalized_key)
+            self._assert_quote_probe(normalized_key)
         except RuntimeError as exc:
             raise ValueError(f"Finnhub API key test failed: {exc}") from exc
 
         record = StoredFinnhubConnector(api_key=normalized_key, updated_at=datetime.now(UTC))
         self._write_record(record)
-        with self._lock:
-            self._last_error = None
-            self._last_successful_sync_at = record.updated_at
+        self._mark_success(record.updated_at)
         return self.source_status()
 
     def is_configured(self) -> bool:
@@ -107,6 +115,7 @@ class FinnhubService:
         ask = _coerce_float(payload.get("a"))
         last = price
         close = _coerce_float(payload.get("pc"))
+        self._mark_success(now)
         return UnderlyingQuote(
             symbol=symbol.upper(),
             price=price,
@@ -166,9 +175,7 @@ class FinnhubService:
         current_price = quote.price
         market_cap_change_pct = ((current_price / previous_close) - 1.0) * 100.0 if market_cap and previous_close and previous_close > 0 else None
 
-        with self._lock:
-            self._last_error = None
-            self._last_successful_sync_at = now
+        self._mark_success(now)
 
         return TickerOverviewResponse(
             symbol=symbol,
@@ -227,9 +234,7 @@ class FinnhubService:
             FundamentalReportStatus(reportType="estimates", available=False, message="Finnhub free tier does not provide the estimates tables used here."),
         ]
 
-        with self._lock:
-            self._last_error = None
-            self._last_successful_sync_at = now
+        self._mark_success(now)
 
         return TickerFinancialsResponse(
             symbol=symbol,
@@ -272,6 +277,27 @@ class FinnhubService:
                 self._last_error = message
             raise RuntimeError(message)
         return payload
+
+    def _run_health_probe(self, api_key: str) -> None:
+        try:
+            self._assert_quote_probe(api_key)
+        except RuntimeError as exc:
+            with self._lock:
+                self._last_error = str(exc)
+            return
+        self._mark_success(datetime.now(UTC))
+
+    def _assert_quote_probe(self, api_key: str) -> None:
+        payload = self._request_json("/quote", {"symbol": _DEFAULT_TEST_SYMBOL}, api_key=api_key)
+        current_price = _coerce_float(payload.get("c"))
+        previous_close = _coerce_float(payload.get("pc"))
+        if (current_price is None or current_price <= 0) and (previous_close is None or previous_close <= 0):
+            raise RuntimeError(f"Finnhub did not return a usable {_DEFAULT_TEST_SYMBOL} quote during the health check.")
+
+    def _mark_success(self, captured_at: datetime) -> None:
+        with self._lock:
+            self._last_error = None
+            self._last_successful_sync_at = captured_at
 
     def _require_record(self) -> StoredFinnhubConnector:
         record = self._read_record()

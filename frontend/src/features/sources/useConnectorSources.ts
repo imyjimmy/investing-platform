@@ -31,10 +31,11 @@ type FilesystemConnectorConfigureVariables = {
 
 type UseConnectorSourcesArgs = {
   accountSettingsOpen: boolean;
+  globalSettingsActive: boolean;
   selectedDashboardAccountKey: DashboardAccountKey;
 };
 
-export function useConnectorSources({ accountSettingsOpen, selectedDashboardAccountKey }: UseConnectorSourcesArgs) {
+export function useConnectorSources({ accountSettingsOpen, globalSettingsActive, selectedDashboardAccountKey }: UseConnectorSourcesArgs) {
   const queryClient = useQueryClient();
   const [connectorPickerOpen, setConnectorPickerOpen] = useState(false);
   const [connectorSetupError, setConnectorSetupError] = useState<string | null>(null);
@@ -56,14 +57,16 @@ export function useConnectorSources({ accountSettingsOpen, selectedDashboardAcco
 
   const okxStatusQuery = useQuery({
     queryKey: queryKeys.sources.okxStatus,
-    queryFn: sourceApi.okxStatus,
-    refetchInterval: 30_000,
+    queryFn: () => sourceApi.okxStatus(true),
+    enabled: globalSettingsActive,
+    refetchInterval: globalSettingsActive ? 30_000 : false,
   });
 
   const finnhubStatusQuery = useQuery({
     queryKey: queryKeys.sources.finnhubStatus,
-    queryFn: sourceApi.finnhubStatus,
-    refetchInterval: 30_000,
+    queryFn: () => sourceApi.finnhubStatus(true),
+    enabled: globalSettingsActive,
+    refetchInterval: globalSettingsActive ? 30_000 : false,
   });
 
   const filesystemConnectorStatusesQuery = useQuery({

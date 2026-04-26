@@ -17,13 +17,21 @@ import type {
 } from "../types";
 import { fetchJson, postJson, withAccountKey } from "./transport";
 
+function withProbe(path: string, probe = false) {
+  if (!probe) {
+    return path;
+  }
+  const separator = path.includes("?") ? "&" : "?";
+  return `${path}${separator}probe=true`;
+}
+
 export const sourceApi = {
   coinbaseStatus: () => fetchJson<CoinbaseSourceStatus>("/api/sources/coinbase/status"),
   coinbasePortfolio: () => fetchJson<CoinbasePortfolioResponse>("/api/sources/coinbase/portfolio"),
-  finnhubStatus: () => fetchJson<FinnhubSourceStatus>("/api/sources/finnhub/status"),
+  finnhubStatus: (probe = false) => fetchJson<FinnhubSourceStatus>(withProbe("/api/sources/finnhub/status", probe)),
   finnhubConfigure: (request: FinnhubConnectorConfigRequest) =>
     postJson<FinnhubSourceStatus>("/api/sources/finnhub/configure", request),
-  okxStatus: () => fetchJson<OkxSourceStatus>("/api/sources/okx/status"),
+  okxStatus: (probe = false) => fetchJson<OkxSourceStatus>(withProbe("/api/sources/okx/status", probe)),
   filesystemConnectorStatuses: (accountKey: string) =>
     fetchJson<FilesystemConnectorStatus[]>(withAccountKey("/api/sources/filesystem/connectors", accountKey)),
   filesystemConnectorConfigure: (

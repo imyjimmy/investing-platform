@@ -370,6 +370,7 @@ function App() {
   const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceSurface>("dashboard");
   const [selectedDashboardAccountKey, setSelectedDashboardAccountKey] = useState<DashboardAccountKey>(DEFAULT_DASHBOARD_ACCOUNT_KEY);
   const [selectedStockSymbol, setSelectedStockSymbol] = useState("NVDA");
+  const globalSettingsActive = activeWorkspace === "globalSettings";
 
   const {
     connectMutation,
@@ -414,7 +415,7 @@ function App() {
     setConnectorPickerOpen,
     setConnectorSetupError,
     setFinnhubApiKeyInput,
-  } = useConnectorSources({ accountSettingsOpen, selectedDashboardAccountKey });
+  } = useConnectorSources({ accountSettingsOpen, globalSettingsActive, selectedDashboardAccountKey });
   const activeExecutionRoute = executionRoutePresentation(connectionQuery.data);
   const routedAccount = activeExecutionRoute.accountId;
   const routedAccountPill = { label: activeExecutionRoute.label, tone: activeExecutionRoute.tone };
@@ -424,6 +425,43 @@ function App() {
   const connectionQueryError = connectionQuery.error instanceof Error ? connectionQuery.error.message : null;
   const connectionEndpoint = connectionQuery.data ? `${connectionQuery.data.host}:${connectionQuery.data.port}` : "127.0.0.1:4002";
   const sourceError = connectError ?? reconnectError ?? connectionQueryError ?? connectionQuery.data?.lastError ?? null;
+  const okxHealthStatus = okxStatusQuery.isLoading
+    ? "Checking"
+    : okxStatusError
+      ? "Unavailable"
+      : okxStatusQuery.data?.status === "ready"
+        ? "Healthy"
+        : "Degraded";
+  const okxHealthTone: ConnectionHealthTone = okxStatusQuery.isLoading
+    ? "caution"
+    : okxStatusError
+      ? "danger"
+      : okxStatusQuery.data?.status === "ready"
+        ? "safe"
+        : "danger";
+  const okxStatusMessage = okxStatusError ?? okxStatusQuery.data?.detail ?? "Public crypto market data provider";
+  const okxHealthError = okxStatusError ?? okxStatusQuery.data?.lastError ?? null;
+  const finnhubConfigured = finnhubStatusQuery.data?.configured ?? false;
+  const finnhubHealthStatus = finnhubStatusQuery.isLoading
+    ? "Checking"
+    : finnhubStatusError
+      ? "Unavailable"
+      : !finnhubConfigured
+      ? "Not configured"
+      : finnhubStatusQuery.data?.status === "ready"
+        ? "Healthy"
+        : "Degraded";
+  const finnhubHealthTone: ConnectionHealthTone = finnhubStatusQuery.isLoading
+    ? "caution"
+    : finnhubStatusError
+      ? "danger"
+      : !finnhubConfigured
+      ? "caution"
+      : finnhubStatusQuery.data?.status === "ready"
+        ? "safe"
+        : "danger";
+  const finnhubStatusMessage = finnhubStatusError ?? finnhubStatusQuery.data?.detail ?? "Stock tool data provider";
+  const finnhubHealthError = finnhubConfigureError ?? finnhubStatusError ?? finnhubStatusQuery.data?.lastError ?? null;
   const coinbaseConnectorTone: ConnectionHealthTone = coinbaseStatusQuery.isLoading
     ? "caution"
     : coinbaseStatusQuery.data?.available
@@ -466,11 +504,9 @@ function App() {
     {
       id: "okx",
       title: "OKX Market Data",
-      status: okxStatusQuery.isLoading ? "Checking" : okxStatusQuery.data?.available ? "Ready" : "Degraded",
-      detail: okxStatusQuery.isLoading
-        ? "Loading public crypto market data source state"
-        : okxStatusError ?? okxStatusQuery.data?.detail ?? "Public crypto market data provider",
-      tone: okxStatusQuery.isLoading ? "caution" : okxStatusQuery.data?.available ? "safe" : "danger",
+      status: okxHealthStatus,
+      detail: okxStatusQuery.isLoading ? "Running live public crypto market data health check" : okxStatusMessage,
+      tone: okxHealthTone,
       countsTowardHealth: true,
       icon: <MarketIcon />,
     },
@@ -481,13 +517,13 @@ function App() {
         ? "Checking"
         : finnhubConfigureMutation.isPending
           ? "Saving"
-          : finnhubStatusQuery.data?.available
-            ? "Connected"
-            : "Needs setup",
-      detail: finnhubStatusQuery.isLoading
-        ? "Loading stock data connector state"
-        : finnhubStatusError ?? finnhubStatusQuery.data?.detail ?? "Stock tool data provider",
-      tone: finnhubStatusQuery.isLoading ? "caution" : finnhubStatusQuery.data?.available ? "safe" : "caution",
+          : !finnhubConfigured
+            ? "Needs setup"
+            : finnhubStatusQuery.data?.status === "ready"
+              ? "Healthy"
+              : "Degraded",
+      detail: finnhubStatusQuery.isLoading ? "Running live Finnhub health check" : finnhubStatusMessage,
+      tone: finnhubConfigureMutation.isPending ? "caution" : finnhubHealthTone,
       countsTowardHealth: true,
       icon: <MarketIcon />,
     },
@@ -881,25 +917,32 @@ function App() {
     return (
       <Panel eyebrow="Stock data connector" title="Finnhub">
         <div className="grid gap-6">
-          <div className="grid gap-4 md:grid-cols-3">
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
             <MetricCard
-              label="Connector"
+              label="Configuration"
               value={
                 finnhubStatusQuery.isLoading
                   ? "Checking"
-                  : finnhubStatusQuery.data?.available
+                  : finnhubStatusError
+                    ? "Unavailable"
+                  : finnhubConfigured
                     ? "Configured"
                     : "Not configured"
               }
             />
+            <MetricCard label="Health" value={finnhubHealthStatus} />
             <MetricCard
               label="Active key"
               value={finnhubStatusQuery.data?.maskedApiKey ?? (finnhubStatusQuery.isLoading ? "Loading" : "None")}
             />
             <MetricCard label="API base" value={finnhubStatusQuery.data?.apiBaseUrl ?? "https://finnhub.io/api/v1"} />
+            <MetricCard
+              label="Last healthy check"
+              value={finnhubStatusQuery.data?.lastSuccessfulSyncAt ? formatTimestamp(finnhubStatusQuery.data.lastSuccessfulSyncAt) : "Pending"}
+            />
           </div>
-          {finnhubStatusError || finnhubConfigureError ? (
-            <ErrorState message={finnhubConfigureError ?? finnhubStatusError ?? "Finnhub connector is unavailable."} />
+          {finnhubHealthError ? (
+            <ErrorState message={finnhubHealthError} />
           ) : null}
           <div className="grid gap-3 rounded-2xl border border-line/80 bg-panelSoft px-4 py-4">
             <label className="grid gap-2">
@@ -907,25 +950,21 @@ function App() {
               <input
                 className="w-full rounded-xl border border-line/80 bg-panel px-4 py-3 text-sm text-text outline-none transition focus:border-accent/60"
                 onChange={(event) => setFinnhubApiKeyInput(event.target.value)}
-                placeholder={finnhubStatusQuery.data?.available ? "Paste a replacement Finnhub API key" : "Enter a Finnhub API key"}
+                placeholder={finnhubConfigured ? "Paste a replacement Finnhub API key" : "Enter a Finnhub API key"}
                 spellCheck={false}
                 type="password"
                 value={finnhubApiKeyInput}
               />
             </label>
             <div className="text-sm text-muted">
-              {finnhubStatusQuery.data?.available
-                ? "Configured Finnhub credentials are used for basic stock quotes and fundamentals in the Stock tool."
+              {finnhubConfigured
+                ? "Configured Finnhub credentials back the Stock tool when the broker session is unavailable, and this page runs a live health check while it is open."
                 : "Add a Finnhub API key to supply basic stock data when the Stock tool cannot rely on the broker session."}
             </div>
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="text-xs text-muted">
-                {finnhubStatusQuery.data?.lastSuccessfulSyncAt
-                  ? `Last successful check ${formatTimestamp(finnhubStatusQuery.data.lastSuccessfulSyncAt)}`
-                  : "No successful Finnhub check yet."}
-              </div>
+              <div className="text-xs text-muted">Live status refreshes every 30 seconds while Global Settings stays open.</div>
               <div className="flex flex-wrap gap-2">
-                {finnhubStatusQuery.data?.configured ? (
+                {finnhubConfigured ? (
                   <button
                     className="rounded-full border border-line/80 bg-panel px-3 py-1 text-[11px] font-medium uppercase tracking-[0.16em] text-muted transition hover:border-danger/30 hover:text-danger disabled:cursor-not-allowed disabled:opacity-50"
                     disabled={finnhubConfigureMutation.isPending}
@@ -945,7 +984,7 @@ function App() {
                   }}
                   type="button"
                 >
-                  {finnhubConfigureMutation.isPending ? "Saving…" : finnhubStatusQuery.data?.available ? "Update Key" : "Save Key"}
+                  {finnhubConfigureMutation.isPending ? "Saving…" : finnhubConfigured ? "Update Key" : "Save Key"}
                 </button>
               </div>
             </div>
@@ -960,10 +999,7 @@ function App() {
       <Panel eyebrow="Crypto market provider" title="OKX Market Data">
         <div className="grid gap-6">
           <div className="grid gap-4 md:grid-cols-4">
-            <MetricCard
-              label="Connector"
-              value={okxStatusQuery.isLoading ? "Checking" : okxStatusQuery.data?.available ? "Enabled" : "Unavailable"}
-            />
+            <MetricCard label="Health" value={okxHealthStatus} />
             <MetricCard label="Auth mode" value={okxStatusQuery.data?.authMode?.toUpperCase() ?? "PUBLIC"} />
             <MetricCard label="API base" value={okxStatusQuery.data?.apiBaseUrl ?? "https://www.okx.com"} />
             <MetricCard
@@ -971,10 +1007,10 @@ function App() {
               value={okxStatusQuery.data?.lastSuccessfulSyncAt ? formatTimestamp(okxStatusQuery.data.lastSuccessfulSyncAt) : "Pending"}
             />
           </div>
-          {okxStatusError ? <ErrorState message={okxStatusError} /> : null}
+          {okxHealthError ? <ErrorState message={okxHealthError} /> : null}
           <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-4 text-sm text-muted">
-            OKX is configured as a global public crypto market-data provider. No API keys are required right now, and the
-            crypto market workspace can use it without coupling market prices to an account connector.
+            OKX is the global public crypto market-data provider. No API keys are required right now, and this page runs a
+            live upstream ticker probe every 30 seconds while it remains open.
           </div>
         </div>
       </Panel>

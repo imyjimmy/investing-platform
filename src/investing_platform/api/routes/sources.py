@@ -45,8 +45,8 @@ def coinbase_portfolio() -> CoinbasePortfolioResponse:
 
 
 @router.get("/finnhub/status", response_model=FinnhubSourceStatus)
-def finnhub_status() -> FinnhubSourceStatus:
-    return finnhub_service().source_status()
+def finnhub_status(probe: bool = Query(default=False)) -> FinnhubSourceStatus:
+    return finnhub_service().source_status(probe=probe)
 
 
 @router.post("/finnhub/configure", response_model=FinnhubSourceStatus)
@@ -60,8 +60,8 @@ def finnhub_configure(request: FinnhubConnectorConfigRequest) -> FinnhubSourceSt
 
 
 @router.get("/okx/status", response_model=OkxSourceStatus)
-def okx_status() -> OkxSourceStatus:
-    return okx_service().source_status()
+def okx_status(probe: bool = Query(default=False)) -> OkxSourceStatus:
+    return okx_service().source_status(probe=probe)
 
 
 @router.get("/filesystem/connectors", response_model=list[FilesystemConnectorStatus])
