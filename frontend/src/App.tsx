@@ -147,6 +147,19 @@ function deriveDashboardTotalPnl(netWorth: number | null, netContributionsUsd: n
   return netWorth - netContributionsUsd;
 }
 
+function derivePnlPct(pnl: number | null | undefined, basis: number | null | undefined) {
+  if (
+    pnl == null
+    || Number.isNaN(pnl)
+    || basis == null
+    || Number.isNaN(basis)
+    || basis <= 0
+  ) {
+    return null;
+  }
+  return (pnl / basis) * 100;
+}
+
 function deriveDashboardTotalPnlFromSourceContributions(summaries: AccountSourceSummary[]) {
   const netWorthContributors = summaries.filter((summary) => summary.netWorth != null && !Number.isNaN(summary.netWorth));
   if (!netWorthContributors.length) {
@@ -161,6 +174,37 @@ function deriveDashboardTotalPnlFromSourceContributions(summaries: AccountSource
   const totalNetWorth = netWorthContributors.reduce((total, summary) => total + (summary.netWorth ?? 0), 0);
   const totalNetContributions = contributionContributors.reduce((total, summary) => total + (summary.netContributions ?? 0), 0);
   return totalNetWorth - totalNetContributions;
+}
+
+function deriveDashboardContributionBasisFromSources(summaries: AccountSourceSummary[]) {
+  const netWorthContributors = summaries.filter((summary) => summary.netWorth != null && !Number.isNaN(summary.netWorth));
+  if (!netWorthContributors.length) {
+    return null;
+  }
+  const contributionContributors = netWorthContributors.filter(
+    (summary) => summary.netContributions != null && !Number.isNaN(summary.netContributions),
+  );
+  if (contributionContributors.length !== netWorthContributors.length) {
+    return null;
+  }
+  return contributionContributors.reduce((total, summary) => total + (summary.netContributions ?? 0), 0);
+}
+
+function deriveAggregatePnlPct(
+  summaries: AccountSourceSummary[],
+  valueKey: "totalPnl" | "todayPnl" | "monthlyPnl",
+  basisKey: AccountSourceSummaryPnlBasisKey,
+) {
+  const contributingSources = summaries.filter((summary) => summary[valueKey] != null && !Number.isNaN(summary[valueKey]));
+  if (!contributingSources.length) {
+    return null;
+  }
+  if (contributingSources.some((summary) => summary[basisKey] == null || Number.isNaN(summary[basisKey]))) {
+    return null;
+  }
+  const totalPnl = contributingSources.reduce((total, summary) => total + (summary[valueKey] ?? 0), 0);
+  const totalBasis = contributingSources.reduce((total, summary) => total + (summary[basisKey] ?? 0), 0);
+  return derivePnlPct(totalPnl, totalBasis);
 }
 
 function describeDashboardTotalPnl(
@@ -258,11 +302,18 @@ type AccountConnectorCard = {
 };
 
 type AccountSourceSummaryMetricKey = "totalPnl" | "todayPnl" | "monthlyPnl" | "netWorth" | "netContributions";
+type AccountSourceSummaryPnlBasisKey = "totalPnlPctBasis" | "todayPnlPctBasis" | "monthlyPnlPctBasis";
 
 type AccountSourceSummary = AccountConnectorCard & {
   totalPnl: number | null;
   todayPnl: number | null;
   monthlyPnl: number | null;
+  totalPnlPct: number | null;
+  todayPnlPct: number | null;
+  monthlyPnlPct: number | null;
+  totalPnlPctBasis: number | null;
+  todayPnlPctBasis: number | null;
+  monthlyPnlPctBasis: number | null;
   netWorth: number | null;
   netContributions: number | null;
 };
@@ -479,11 +530,18 @@ function App() {
   function buildIbkrAccountSourceSummary(accountKey: DashboardAccountKey): AccountSourceSummary {
     const connector = buildIbkrConnectorCard(accountKey);
     const ownsRoute = dashboardAccountOwnsRoute(accountKey, routedAccount);
+    const totalPnl = ownsRoute ? sumPositionPnl(positions) + sumOptionPositionPnl(optionPositions) : null;
     return {
       ...connector,
-      totalPnl: ownsRoute ? sumPositionPnl(positions) + sumOptionPositionPnl(optionPositions) : null,
+      totalPnl,
       todayPnl: null,
       monthlyPnl: null,
+      totalPnlPct: null,
+      todayPnlPct: null,
+      monthlyPnlPct: null,
+      totalPnlPctBasis: null,
+      todayPnlPctBasis: null,
+      monthlyPnlPctBasis: null,
       netWorth: ownsRoute ? risk?.account.netLiquidation ?? null : null,
       netContributions: null,
     };
@@ -493,6 +551,11 @@ function App() {
     const portfolio = coinbasePortfolioQuery.data;
     const netWorth = portfolio?.totalUsdValue ?? null;
     const netContributions = portfolio?.netContributions ?? null;
+    const totalPnl = portfolio?.totalPnl ?? deriveDashboardTotalPnl(netWorth, netContributions);
+    const todayPnl = portfolio?.todayPnl ?? null;
+    const monthlyPnl = portfolio?.monthlyPnl ?? null;
+    const todayPnlPctBasis = portfolio?.todayPnlPctBasis ?? null;
+    const monthlyPnlPctBasis = portfolio?.monthlyPnlPctBasis ?? null;
     return {
       id: `coinbase-${accountKey}`,
       title: "Coinbase account",
@@ -501,9 +564,15 @@ function App() {
       tone: coinbaseConnectorTone,
       countsTowardHealth: true,
       icon: <CoinbaseIcon />,
-      totalPnl: portfolio?.totalPnl ?? deriveDashboardTotalPnl(netWorth, netContributions),
-      todayPnl: portfolio?.todayPnl ?? null,
-      monthlyPnl: portfolio?.monthlyPnl ?? null,
+      totalPnl,
+      todayPnl,
+      monthlyPnl,
+      totalPnlPct: derivePnlPct(totalPnl, netContributions),
+      todayPnlPct: derivePnlPct(todayPnl, todayPnlPctBasis),
+      monthlyPnlPct: derivePnlPct(monthlyPnl, monthlyPnlPctBasis),
+      totalPnlPctBasis: netContributions,
+      todayPnlPctBasis,
+      monthlyPnlPctBasis,
       netWorth,
       netContributions,
     };
@@ -549,14 +618,28 @@ function App() {
     const netWorth = status.connectorId === CSV_FOLDER_CONNECTOR_ID ? portfolio?.totalValue ?? null : null;
     const netContributions = status.connectorId === CSV_FOLDER_CONNECTOR_ID ? portfolio?.netContributions ?? null : null;
     const derivedTotalPnl = deriveDashboardTotalPnl(netWorth, netContributions);
-    return {
-      ...connector,
-      totalPnl: derivedTotalPnl ??
+    const totalPnl = portfolio?.totalPnl
+      ?? derivedTotalPnl
+      ?? (
         status.connectorId === CSV_FOLDER_CONNECTOR_ID
           ? portfolio?.holdings.reduce((total, holding) => total + (holding.gainLoss ?? 0), 0) ?? null
-          : null,
-      todayPnl: null,
-      monthlyPnl: null,
+          : null
+      );
+    const todayPnl = status.connectorId === CSV_FOLDER_CONNECTOR_ID ? portfolio?.todayPnl ?? null : null;
+    const monthlyPnl = status.connectorId === CSV_FOLDER_CONNECTOR_ID ? portfolio?.monthlyPnl ?? null : null;
+    const todayPnlPctBasis = status.connectorId === CSV_FOLDER_CONNECTOR_ID ? portfolio?.todayPnlPctBasis ?? null : null;
+    const monthlyPnlPctBasis = status.connectorId === CSV_FOLDER_CONNECTOR_ID ? portfolio?.monthlyPnlPctBasis ?? null : null;
+    return {
+      ...connector,
+      totalPnl,
+      todayPnl,
+      monthlyPnl,
+      totalPnlPct: derivePnlPct(totalPnl, netContributions),
+      todayPnlPct: derivePnlPct(todayPnl, todayPnlPctBasis),
+      monthlyPnlPct: derivePnlPct(monthlyPnl, monthlyPnlPctBasis),
+      totalPnlPctBasis: netContributions,
+      todayPnlPctBasis,
+      monthlyPnlPctBasis,
       netWorth,
       netContributions,
     };
@@ -588,8 +671,19 @@ function App() {
   const dashboardMonthlyPnl = sumAccountSourceMetric(accountSourceSummaries, "monthlyPnl");
   const dashboardNetWorth = sumAccountSourceMetric(accountSourceSummaries, "netWorth");
   const dashboardSourceDerivedTotalPnl = deriveDashboardTotalPnlFromSourceContributions(accountSourceSummaries);
+  const dashboardSourceContributionBasis = deriveDashboardContributionBasisFromSources(accountSourceSummaries);
   const dashboardDerivedTotalPnl = deriveDashboardTotalPnl(dashboardNetWorth, selectedDashboardAccount.netContributionsUsd);
   const dashboardTotalPnl = dashboardSourceDerivedTotalPnl ?? dashboardDerivedTotalPnl ?? dashboardReportedTotalPnl;
+  const dashboardTotalPnlPct =
+    (dashboardSourceDerivedTotalPnl != null
+      ? derivePnlPct(dashboardSourceDerivedTotalPnl, dashboardSourceContributionBasis)
+      : null)
+    ?? (dashboardDerivedTotalPnl != null
+      ? derivePnlPct(dashboardDerivedTotalPnl, selectedDashboardAccount.netContributionsUsd)
+      : null)
+    ?? deriveAggregatePnlPct(accountSourceSummaries, "totalPnl", "totalPnlPctBasis");
+  const dashboardTodayPnlPct = deriveAggregatePnlPct(accountSourceSummaries, "todayPnl", "todayPnlPctBasis");
+  const dashboardMonthlyPnlPct = deriveAggregatePnlPct(accountSourceSummaries, "monthlyPnl", "monthlyPnlPctBasis");
   const dashboardTotalPnlHint = describeDashboardTotalPnl(
     accountSourceSummaries,
     dashboardSourceDerivedTotalPnl,
@@ -660,9 +754,12 @@ function App() {
 
   function renderCoinbasePanelContent() {
     const coinbaseNetWorth = coinbasePortfolioQuery.data?.totalUsdValue ?? null;
-    const coinbaseTotalPnl = coinbasePortfolioQuery.data?.totalPnl ?? null;
-    const coinbaseTodayPnl = coinbasePortfolioQuery.data?.todayPnl ?? null;
-    const coinbaseMonthlyPnl = coinbasePortfolioQuery.data?.monthlyPnl ?? null;
+    const coinbaseTotalPnl = coinbaseAccountSourceSummary?.totalPnl ?? null;
+    const coinbaseTodayPnl = coinbaseAccountSourceSummary?.todayPnl ?? null;
+    const coinbaseMonthlyPnl = coinbaseAccountSourceSummary?.monthlyPnl ?? null;
+    const coinbaseTotalPnlPct = coinbaseAccountSourceSummary?.totalPnlPct ?? null;
+    const coinbaseTodayPnlPct = coinbaseAccountSourceSummary?.todayPnlPct ?? null;
+    const coinbaseMonthlyPnlPct = coinbaseAccountSourceSummary?.monthlyPnlPct ?? null;
     return coinbaseStatusQuery.isLoading ? (
       <div className="grid gap-4">
         <AccountSourceSummaryCards monthlyPnl={null} netWorth={null} todayPnl={null} totalPnl={null} />
@@ -698,9 +795,12 @@ function App() {
       <div className="grid gap-4">
         <AccountSourceSummaryCards
           monthlyPnl={coinbaseMonthlyPnl}
+          monthlyPnlPct={coinbaseMonthlyPnlPct}
           netWorth={coinbaseNetWorth}
           todayPnl={coinbaseTodayPnl}
+          todayPnlPct={coinbaseTodayPnlPct}
           totalPnl={coinbaseTotalPnl}
+          totalPnlPct={coinbaseTotalPnlPct}
         />
         {coinbasePortfolioQuery.data.sourceNotice ? (
           <div
@@ -1169,12 +1269,15 @@ function App() {
         portfolioError={portfolioError}
         portfolioLoading={portfolioLoading}
         monthlyPnl={summary?.monthlyPnl ?? null}
+        monthlyPnlPct={summary?.monthlyPnlPct ?? null}
         netWorth={summary?.netWorth ?? null}
         status={status}
         statusesError={filesystemConnectorStatusesError}
         statusesLoading={filesystemConnectorStatusesQuery.isLoading}
         todayPnl={summary?.todayPnl ?? null}
+        todayPnlPct={summary?.todayPnlPct ?? null}
         totalPnl={summary?.totalPnl ?? null}
+        totalPnlPct={summary?.totalPnlPct ?? null}
       />
     );
   }
@@ -1183,12 +1286,15 @@ function App() {
     <>
       <AccountSourceSummaryCards
         monthlyPnl={dashboardMonthlyPnl}
+        monthlyPnlPct={dashboardMonthlyPnlPct}
         monthlyPnlHint={dashboardMonthlyPnlHint}
         netWorth={dashboardNetWorth}
         netWorthHint={dashboardNetWorthHint}
         todayPnl={dashboardTodayPnl}
+        todayPnlPct={dashboardTodayPnlPct}
         todayPnlHint={dashboardTodayPnlHint}
         totalPnl={dashboardTotalPnl}
+        totalPnlPct={dashboardTotalPnlPct}
         totalPnlHint={dashboardTotalPnlHint}
       />
 
@@ -1359,9 +1465,12 @@ function App() {
         <div className="grid gap-6">
           <AccountSourceSummaryCards
             monthlyPnl={ibkrAccountSourceSummary?.monthlyPnl ?? null}
+            monthlyPnlPct={ibkrAccountSourceSummary?.monthlyPnlPct ?? null}
             netWorth={ibkrAccountSourceSummary?.netWorth ?? null}
             todayPnl={ibkrAccountSourceSummary?.todayPnl ?? null}
+            todayPnlPct={ibkrAccountSourceSummary?.todayPnlPct ?? null}
             totalPnl={ibkrAccountSourceSummary?.totalPnl ?? null}
+            totalPnlPct={ibkrAccountSourceSummary?.totalPnlPct ?? null}
           />
 
           <div className="grid gap-6 xl:grid-cols-2">

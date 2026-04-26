@@ -767,6 +767,8 @@ export interface CoinbasePortfolioResponse {
   totalPnl: number | null;
   todayPnl: number | null;
   monthlyPnl: number | null;
+  todayPnlPctBasis: number | null;
+  monthlyPnlPctBasis: number | null;
   netContributions: number | null;
   visibleHoldingsCount: number;
   totalAccountsCount: number;
@@ -831,6 +833,11 @@ export interface FilesystemConnectorPortfolioResponse {
   latestCsvPath: string | null;
   historyCsvPath: string | null;
   totalValue: number;
+  totalPnl: number | null;
+  todayPnl: number | null;
+  monthlyPnl: number | null;
+  todayPnlPctBasis: number | null;
+  monthlyPnlPctBasis: number | null;
   netContributions: number | null;
   investmentAccountsCount: number;
   holdingsCount: number;

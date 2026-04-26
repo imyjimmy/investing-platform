@@ -53,6 +53,8 @@ class CoinbaseBrokeragePortfolioSummary:
 class CoinbasePeriodPnlSummary:
     today_pnl: float | None
     monthly_pnl: float | None
+    today_pnl_pct_basis: float | None
+    monthly_pnl_pct_basis: float | None
     notices: list[str] = field(default_factory=list)
 
 
@@ -291,6 +293,8 @@ class CoinbaseService:
             totalPnl=total_pnl,
             todayPnl=period_pnl_summary.today_pnl if period_pnl_summary is not None else None,
             monthlyPnl=period_pnl_summary.monthly_pnl if period_pnl_summary is not None else None,
+            todayPnlPctBasis=period_pnl_summary.today_pnl_pct_basis if period_pnl_summary is not None else None,
+            monthlyPnlPctBasis=period_pnl_summary.monthly_pnl_pct_basis if period_pnl_summary is not None else None,
             netContributions=round(contribution_summary.net_contributions, 2) if contribution_summary is not None else None,
             visibleHoldingsCount=len(holdings),
             totalAccountsCount=len(accounts),
@@ -553,7 +557,7 @@ class CoinbaseService:
         notices: list[str] = []
         price_cache: dict[tuple[str, str], float | None] = {}
 
-        today_pnl, today_notice = self._calculate_period_pnl(
+        today_pnl, today_pnl_pct_basis, today_notice = self._calculate_period_pnl(
             track_accounts=track_accounts,
             credentials=credentials,
             current_quantities_by_asset=current_quantities_by_asset,
@@ -565,7 +569,7 @@ class CoinbaseService:
         if today_notice:
             notices.append(f"Today's PnL: {today_notice}")
 
-        monthly_pnl, monthly_notice = self._calculate_period_pnl(
+        monthly_pnl, monthly_pnl_pct_basis, monthly_notice = self._calculate_period_pnl(
             track_accounts=track_accounts,
             credentials=credentials,
             current_quantities_by_asset=current_quantities_by_asset,
@@ -584,6 +588,8 @@ class CoinbaseService:
         return CoinbasePeriodPnlSummary(
             today_pnl=today_pnl,
             monthly_pnl=monthly_pnl,
+            today_pnl_pct_basis=round(today_pnl_pct_basis, 2) if today_pnl_pct_basis is not None else None,
+            monthly_pnl_pct_basis=round(monthly_pnl_pct_basis, 2) if monthly_pnl_pct_basis is not None else None,
             notices=notices,
         )
 
@@ -596,7 +602,7 @@ class CoinbaseService:
         current_total_usd_value: float,
         period_start: datetime,
         price_cache: dict[tuple[str, str], float | None],
-    ) -> tuple[float | None, str | None]:
+    ) -> tuple[float | None, float | None, str | None]:
         period_start_utc = period_start.astimezone(UTC)
         starting_quantities: dict[str, float] = dict(current_quantities_by_asset)
         external_flows_usd = 0.0
@@ -643,10 +649,10 @@ class CoinbaseService:
 
         if missing_assets:
             unresolved = ", ".join(sorted(set(missing_assets)))
-            return None, f"historical USD prices were unavailable for {unresolved}"
+            return None, None, f"historical USD prices were unavailable for {unresolved}"
 
         period_pnl = current_total_usd_value - starting_net_worth - external_flows_usd
-        return round(period_pnl, 2), None
+        return round(period_pnl, 2), round(starting_net_worth, 2), None
 
     def _lookup_historic_usd_price(self, asset: str, as_of: datetime, cash_like: bool) -> float | None:
         if asset == "USD" or cash_like:

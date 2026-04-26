@@ -52,6 +52,9 @@ interface FilesystemAccountSourceContentProps {
   totalPnl: number | null;
   todayPnl: number | null;
   monthlyPnl: number | null;
+  totalPnlPct: number | null;
+  todayPnlPct: number | null;
+  monthlyPnlPct: number | null;
   netWorth: number | null;
 }
 
@@ -70,6 +73,9 @@ export function FilesystemAccountSourceContent({
   totalPnl,
   todayPnl,
   monthlyPnl,
+  totalPnlPct,
+  todayPnlPct,
+  monthlyPnlPct,
   netWorth,
 }: FilesystemAccountSourceContentProps) {
   const connector = status ? getConnectorCatalogEntry(status.connectorId as ConnectorCatalogId) : null;
@@ -77,7 +83,7 @@ export function FilesystemAccountSourceContent({
   if (localBackendUnavailable) {
     return (
       <div className="grid gap-4">
-        <AccountSourceSummaryCards monthlyPnl={monthlyPnl} netWorth={netWorth} todayPnl={todayPnl} totalPnl={totalPnl} />
+        <AccountSourceSummaryCards monthlyPnl={monthlyPnl} monthlyPnlPct={monthlyPnlPct} netWorth={netWorth} todayPnl={todayPnl} todayPnlPct={todayPnlPct} totalPnl={totalPnl} totalPnlPct={totalPnlPct} />
         <ErrorState message={localBackendError ?? statusesError ?? portfolioError ?? documentFolderError ?? "The local backend is unavailable."} />
       </div>
     );
@@ -86,7 +92,7 @@ export function FilesystemAccountSourceContent({
   if (statusesLoading) {
     return (
       <div className="grid gap-4">
-        <AccountSourceSummaryCards monthlyPnl={monthlyPnl} netWorth={netWorth} todayPnl={todayPnl} totalPnl={totalPnl} />
+        <AccountSourceSummaryCards monthlyPnl={monthlyPnl} monthlyPnlPct={monthlyPnlPct} netWorth={netWorth} todayPnl={todayPnl} todayPnlPct={todayPnlPct} totalPnl={totalPnl} totalPnlPct={totalPnlPct} />
         <div className="text-sm text-muted">Checking filesystem connectors...</div>
       </div>
     );
@@ -95,7 +101,7 @@ export function FilesystemAccountSourceContent({
   if (!status) {
     return (
       <div className="grid gap-4">
-        <AccountSourceSummaryCards monthlyPnl={monthlyPnl} netWorth={netWorth} todayPnl={todayPnl} totalPnl={totalPnl} />
+        <AccountSourceSummaryCards monthlyPnl={monthlyPnl} monthlyPnlPct={monthlyPnlPct} netWorth={netWorth} todayPnl={todayPnl} todayPnlPct={todayPnlPct} totalPnl={totalPnl} totalPnlPct={totalPnlPct} />
         <ErrorState message="This filesystem connector source could not be found." />
       </div>
     );
@@ -104,7 +110,7 @@ export function FilesystemAccountSourceContent({
   if (!status.available) {
     return (
       <div className="grid gap-4">
-        <AccountSourceSummaryCards monthlyPnl={monthlyPnl} netWorth={netWorth} todayPnl={todayPnl} totalPnl={totalPnl} />
+        <AccountSourceSummaryCards monthlyPnl={monthlyPnl} monthlyPnlPct={monthlyPnlPct} netWorth={netWorth} todayPnl={todayPnl} todayPnlPct={todayPnlPct} totalPnl={totalPnl} totalPnlPct={totalPnlPct} />
         <div className="grid gap-4 md:grid-cols-3">
           <MetricCard label="Connector" value="Not configured" />
           <MetricCard label="Provider" value={connector?.provider ?? "Filesystem"} />
@@ -118,7 +124,7 @@ export function FilesystemAccountSourceContent({
   if (!status.connected) {
     return (
       <div className="grid gap-4">
-        <AccountSourceSummaryCards monthlyPnl={monthlyPnl} netWorth={netWorth} todayPnl={todayPnl} totalPnl={totalPnl} />
+        <AccountSourceSummaryCards monthlyPnl={monthlyPnl} monthlyPnlPct={monthlyPnlPct} netWorth={netWorth} todayPnl={todayPnl} todayPnlPct={todayPnlPct} totalPnl={totalPnl} totalPnlPct={totalPnlPct} />
         <div className="grid gap-4 md:grid-cols-3">
           <MetricCard label="Connector" value={status.displayName ?? connector?.dashboardTitle ?? "CSV Folder"} />
           <MetricCard label="Provider" value={connector?.provider ?? "Filesystem"} />
@@ -137,9 +143,12 @@ export function FilesystemAccountSourceContent({
         documentFolderLoading={documentFolderLoading}
         fallbackTitle={connector?.dashboardTitle ?? "PDF Folder"}
         monthlyPnl={monthlyPnl}
+        monthlyPnlPct={monthlyPnlPct}
         netWorth={netWorth}
         todayPnl={todayPnl}
+        todayPnlPct={todayPnlPct}
         totalPnl={totalPnl}
+        totalPnlPct={totalPnlPct}
       />
     );
   }
@@ -148,12 +157,15 @@ export function FilesystemAccountSourceContent({
     <FilesystemHoldings
       fallbackTitle={connector?.dashboardTitle ?? "CSV Folder"}
       monthlyPnl={monthlyPnl}
+      monthlyPnlPct={monthlyPnlPct}
       netWorth={netWorth}
       portfolio={portfolio}
       portfolioError={portfolioError}
       portfolioLoading={portfolioLoading}
       todayPnl={todayPnl}
+      todayPnlPct={todayPnlPct}
       totalPnl={totalPnl}
+      totalPnlPct={totalPnlPct}
     />
   );
 }
@@ -166,6 +178,9 @@ function FilesystemDocumentLibrary({
   totalPnl,
   todayPnl,
   monthlyPnl,
+  totalPnlPct,
+  todayPnlPct,
+  monthlyPnlPct,
   netWorth,
 }: {
   documentFolder: FilesystemDocumentFolderResponse | undefined;
@@ -175,12 +190,15 @@ function FilesystemDocumentLibrary({
   totalPnl: number | null;
   todayPnl: number | null;
   monthlyPnl: number | null;
+  totalPnlPct: number | null;
+  todayPnlPct: number | null;
+  monthlyPnlPct: number | null;
   netWorth: number | null;
 }) {
   if (documentFolderLoading) {
     return (
       <div className="grid gap-4">
-        <AccountSourceSummaryCards monthlyPnl={monthlyPnl} netWorth={netWorth} todayPnl={todayPnl} totalPnl={totalPnl} />
+        <AccountSourceSummaryCards monthlyPnl={monthlyPnl} monthlyPnlPct={monthlyPnlPct} netWorth={netWorth} todayPnl={todayPnl} todayPnlPct={todayPnlPct} totalPnl={totalPnl} totalPnlPct={totalPnlPct} />
         <div className="text-sm text-muted">Loading PDF library...</div>
       </div>
     );
@@ -189,7 +207,7 @@ function FilesystemDocumentLibrary({
   if (documentFolderError) {
     return (
       <div className="grid gap-4">
-        <AccountSourceSummaryCards monthlyPnl={monthlyPnl} netWorth={netWorth} todayPnl={todayPnl} totalPnl={totalPnl} />
+        <AccountSourceSummaryCards monthlyPnl={monthlyPnl} monthlyPnlPct={monthlyPnlPct} netWorth={netWorth} todayPnl={todayPnl} todayPnlPct={todayPnlPct} totalPnl={totalPnl} totalPnlPct={totalPnlPct} />
         <ErrorState message={documentFolderError} />
       </div>
     );
@@ -198,7 +216,7 @@ function FilesystemDocumentLibrary({
   if (!documentFolder) {
     return (
       <div className="grid gap-4">
-        <AccountSourceSummaryCards monthlyPnl={monthlyPnl} netWorth={netWorth} todayPnl={todayPnl} totalPnl={totalPnl} />
+        <AccountSourceSummaryCards monthlyPnl={monthlyPnl} monthlyPnlPct={monthlyPnlPct} netWorth={netWorth} todayPnl={todayPnl} todayPnlPct={todayPnlPct} totalPnl={totalPnl} totalPnlPct={totalPnlPct} />
         <ErrorState message="PDF files are unavailable." />
       </div>
     );
@@ -206,7 +224,7 @@ function FilesystemDocumentLibrary({
 
   return (
     <div className="grid gap-4">
-      <AccountSourceSummaryCards monthlyPnl={monthlyPnl} netWorth={netWorth} todayPnl={todayPnl} totalPnl={totalPnl} />
+      <AccountSourceSummaryCards monthlyPnl={monthlyPnl} monthlyPnlPct={monthlyPnlPct} netWorth={netWorth} todayPnl={todayPnl} todayPnlPct={todayPnlPct} totalPnl={totalPnl} totalPnlPct={totalPnlPct} />
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <MetricCard label="PDFs" value={fmtNumber(documentFolder.pdfFilesCount)} />
         <MetricCard label="Folder" value={documentFolder.displayName ?? fallbackTitle} />
@@ -258,6 +276,9 @@ function FilesystemHoldings({
   totalPnl,
   todayPnl,
   monthlyPnl,
+  totalPnlPct,
+  todayPnlPct,
+  monthlyPnlPct,
   netWorth,
   portfolio,
   portfolioError,
@@ -267,6 +288,9 @@ function FilesystemHoldings({
   totalPnl: number | null;
   todayPnl: number | null;
   monthlyPnl: number | null;
+  totalPnlPct: number | null;
+  todayPnlPct: number | null;
+  monthlyPnlPct: number | null;
   netWorth: number | null;
   portfolio: FilesystemConnectorPortfolioResponse | undefined;
   portfolioError: string | null;
@@ -275,7 +299,7 @@ function FilesystemHoldings({
   if (portfolioLoading) {
     return (
       <div className="grid gap-4">
-        <AccountSourceSummaryCards monthlyPnl={monthlyPnl} netWorth={netWorth} todayPnl={todayPnl} totalPnl={totalPnl} />
+        <AccountSourceSummaryCards monthlyPnl={monthlyPnl} monthlyPnlPct={monthlyPnlPct} netWorth={netWorth} todayPnl={todayPnl} todayPnlPct={todayPnlPct} totalPnl={totalPnl} totalPnlPct={totalPnlPct} />
         <div className="text-sm text-muted">Loading CSV holdings...</div>
       </div>
     );
@@ -284,7 +308,7 @@ function FilesystemHoldings({
   if (portfolioError) {
     return (
       <div className="grid gap-4">
-        <AccountSourceSummaryCards monthlyPnl={monthlyPnl} netWorth={netWorth} todayPnl={todayPnl} totalPnl={totalPnl} />
+        <AccountSourceSummaryCards monthlyPnl={monthlyPnl} monthlyPnlPct={monthlyPnlPct} netWorth={netWorth} todayPnl={todayPnl} todayPnlPct={todayPnlPct} totalPnl={totalPnl} totalPnlPct={totalPnlPct} />
         <ErrorState message={portfolioError} />
       </div>
     );
@@ -293,7 +317,7 @@ function FilesystemHoldings({
   if (!portfolio) {
     return (
       <div className="grid gap-4">
-        <AccountSourceSummaryCards monthlyPnl={monthlyPnl} netWorth={netWorth} todayPnl={todayPnl} totalPnl={totalPnl} />
+        <AccountSourceSummaryCards monthlyPnl={monthlyPnl} monthlyPnlPct={monthlyPnlPct} netWorth={netWorth} todayPnl={todayPnl} todayPnlPct={todayPnlPct} totalPnl={totalPnl} totalPnlPct={totalPnlPct} />
         <ErrorState message="CSV holdings are unavailable." />
       </div>
     );
@@ -303,7 +327,7 @@ function FilesystemHoldings({
 
   return (
     <div className="grid gap-4">
-      <AccountSourceSummaryCards monthlyPnl={monthlyPnl} netWorth={netWorth} todayPnl={todayPnl} totalPnl={totalPnl} />
+      <AccountSourceSummaryCards monthlyPnl={monthlyPnl} monthlyPnlPct={monthlyPnlPct} netWorth={netWorth} todayPnl={todayPnl} todayPnlPct={todayPnlPct} totalPnl={totalPnl} totalPnlPct={totalPnlPct} />
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <MetricCard label="Net contributions" value={fmtCurrency(portfolio.netContributions)} />
         <MetricCard label="Accounts" value={fmtNumber(portfolio.investmentAccountsCount)} />

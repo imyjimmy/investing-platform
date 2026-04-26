@@ -975,6 +975,8 @@ class CoinbasePortfolioResponse(DashboardModel):
     totalPnl: float | None = None
     todayPnl: float | None = None
     monthlyPnl: float | None = None
+    todayPnlPctBasis: float | None = None
+    monthlyPnlPctBasis: float | None = None
     netContributions: float | None = None
     visibleHoldingsCount: int
     totalAccountsCount: int
@@ -1039,6 +1041,11 @@ class FilesystemConnectorPortfolioResponse(DashboardModel):
     latestCsvPath: str | None = None
     historyCsvPath: str | None = None
     totalValue: float
+    totalPnl: float | None = None
+    todayPnl: float | None = None
+    monthlyPnl: float | None = None
+    todayPnlPctBasis: float | None = None
+    monthlyPnlPctBasis: float | None = None
     netContributions: float | None = None
     investmentAccountsCount: int
     holdingsCount: int

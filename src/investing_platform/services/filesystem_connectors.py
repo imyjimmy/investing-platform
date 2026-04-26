@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import csv
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 import io
 import json
 from pathlib import Path
+import re
 import threading
 
 from investing_platform.config import DashboardSettings
@@ -38,6 +39,8 @@ HEADER_ALIASES: dict[str, tuple[str, ...]] = {
 CSV_FOLDER_CONNECTOR_ID = "csvFolder"
 PDF_FOLDER_CONNECTOR_ID = "pdfFolder"
 HISTORY_FILE_GLOB = "*History_for_Account*.csv"
+SNAPSHOT_FILE_GLOB = "Portfolio_Positions*.csv"
+SNAPSHOT_DATE_PATTERN = re.compile(r"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-(\d{2})-(\d{4})", re.IGNORECASE)
 
 EXTERNAL_CASH_FLOW_ACTION_MARKERS = (
     "DIRECT DEPOSIT",
@@ -67,6 +70,23 @@ class DerivedNetContributions:
     matched_rows: int
     max_run_date: date | None
     source_path: Path
+
+
+@dataclass(slots=True)
+class SnapshotValuation:
+    snapshot_date: date
+    total_value: float
+    source_path: Path
+
+
+@dataclass(slots=True)
+class SnapshotPeriodPnl:
+    total_pnl: float | None
+    today_pnl: float | None
+    monthly_pnl: float | None
+    today_pnl_pct_basis: float | None
+    monthly_pnl_pct_basis: float | None
+    notices: list[str]
 
 
 class FilesystemConnectorService:
@@ -325,6 +345,14 @@ class FilesystemConnectorService:
         accounts = list(accounts_by_id.values())
         total_value = round(sum(account.currentBalance or 0.0 for account in accounts), 2)
         derived_contributions = _derive_net_contributions(directory, [account.accountId for account in accounts], history_csv_path)
+        period_pnl = _derive_snapshot_period_pnl(
+            directory=directory,
+            latest_csv=latest_csv,
+            latest_total_value=total_value,
+            detect_footer=record.detect_footer,
+            explicit_history_csv_path=history_csv_path,
+            total_net_contributions=derived_contributions.net_contributions if derived_contributions is not None else None,
+        )
 
         notices: list[str] = []
         if source_notice:
@@ -336,6 +364,7 @@ class FilesystemConnectorService:
                 f"Derived net contributions of ${derived_contributions.net_contributions:,.2f} from "
                 f"{derived_contributions.matched_rows} transfer rows in {derived_contributions.source_path.name}."
             )
+        notices.extend(period_pnl.notices)
         if not holdings:
             notices.append("The latest CSV was found, but no holdings could be parsed from it.")
 
@@ -352,6 +381,11 @@ class FilesystemConnectorService:
             latestCsvPath=str(latest_csv),
             historyCsvPath=str(derived_contributions.source_path) if derived_contributions is not None else str(history_csv_path) if history_csv_path is not None else None,
             totalValue=total_value,
+            totalPnl=period_pnl.total_pnl,
+            todayPnl=period_pnl.today_pnl,
+            monthlyPnl=period_pnl.monthly_pnl,
+            todayPnlPctBasis=period_pnl.today_pnl_pct_basis,
+            monthlyPnlPctBasis=period_pnl.monthly_pnl_pct_basis,
             netContributions=round(derived_contributions.net_contributions, 2) if derived_contributions is not None else None,
             investmentAccountsCount=len(accounts),
             holdingsCount=len(holdings),
@@ -528,16 +562,95 @@ def _derive_net_contributions(
     directory: Path,
     account_ids: list[str],
     explicit_history_csv_path: Path | None = None,
+    *,
+    start_date: date | None = None,
+    end_date: date | None = None,
 ) -> DerivedNetContributions | None:
     candidates = [explicit_history_csv_path] if explicit_history_csv_path is not None else _find_history_csv_candidates(directory, account_ids)
     best_summary: DerivedNetContributions | None = None
     for candidate in candidates:
-        summary = _parse_history_net_contributions(candidate)
+        summary = _parse_history_net_contributions(candidate, start_date=start_date, end_date=end_date)
         if summary is None:
             continue
         if best_summary is None or _history_summary_sort_key(summary) > _history_summary_sort_key(best_summary):
             best_summary = summary
     return best_summary
+
+
+def _derive_snapshot_period_pnl(
+    directory: Path,
+    latest_csv: Path,
+    latest_total_value: float,
+    detect_footer: bool,
+    explicit_history_csv_path: Path | None,
+    total_net_contributions: float | None,
+) -> SnapshotPeriodPnl:
+    notices: list[str] = []
+    latest_snapshot_date = _extract_snapshot_date(latest_csv)
+    total_pnl = round(latest_total_value - total_net_contributions, 2) if total_net_contributions is not None else None
+    if latest_snapshot_date is None:
+        notices.append("Could not parse a snapshot date from the latest CSV, so day and month PnL are unavailable.")
+        return SnapshotPeriodPnl(
+            total_pnl=total_pnl,
+            today_pnl=None,
+            monthly_pnl=None,
+            today_pnl_pct_basis=None,
+            monthly_pnl_pct_basis=None,
+            notices=notices,
+        )
+
+    historical_snapshots = _load_snapshot_valuations(directory=directory, detect_footer=detect_footer, latest_csv=latest_csv)
+    previous_snapshot = _latest_snapshot_before(historical_snapshots, latest_snapshot_date)
+
+    today_pnl: float | None = None
+    today_pnl_pct_basis: float | None = None
+    if previous_snapshot is not None:
+        today_flows = _derive_net_contributions(
+            directory,
+            [],
+            explicit_history_csv_path,
+            start_date=previous_snapshot.snapshot_date + timedelta(days=1),
+            end_date=latest_snapshot_date,
+        )
+        today_pnl = round(latest_total_value - previous_snapshot.total_value - (today_flows.net_contributions if today_flows is not None else 0.0), 2)
+        today_pnl_pct_basis = round(previous_snapshot.total_value, 2)
+        notices.append(
+            f"Today's PnL uses the latest snapshot date {latest_snapshot_date.strftime('%b %-d, %Y')} versus "
+            f"{previous_snapshot.snapshot_date.strftime('%b %-d, %Y')}."
+        )
+    else:
+        today_pnl = 0.0
+        today_pnl_pct_basis = round(latest_total_value, 2)
+        notices.append("Today's PnL is flat because no earlier snapshot was available for comparison.")
+
+    month_start_snapshot = _month_start_snapshot(historical_snapshots, latest_snapshot_date)
+    monthly_pnl: float | None = None
+    monthly_pnl_pct_basis: float | None = None
+    if month_start_snapshot is not None:
+        monthly_flows = _derive_net_contributions(
+            directory,
+            [],
+            explicit_history_csv_path,
+            start_date=month_start_snapshot.snapshot_date + timedelta(days=1),
+            end_date=latest_snapshot_date,
+        )
+        monthly_pnl = round(latest_total_value - month_start_snapshot.total_value - (monthly_flows.net_contributions if monthly_flows is not None else 0.0), 2)
+        monthly_pnl_pct_basis = round(month_start_snapshot.total_value, 2)
+        notices.append(
+            f"Month PnL uses the latest snapshot date {latest_snapshot_date.strftime('%b %-d, %Y')} versus "
+            f"{month_start_snapshot.snapshot_date.strftime('%b %-d, %Y')}."
+        )
+    else:
+        notices.append("Month PnL is unavailable because no comparable month-start snapshot was found.")
+
+    return SnapshotPeriodPnl(
+        total_pnl=total_pnl,
+        today_pnl=today_pnl,
+        monthly_pnl=monthly_pnl,
+        today_pnl_pct_basis=today_pnl_pct_basis,
+        monthly_pnl_pct_basis=monthly_pnl_pct_basis,
+        notices=notices,
+    )
 
 
 def _find_history_csv_candidates(directory: Path, account_ids: list[str]) -> list[Path]:
@@ -557,7 +670,12 @@ def _find_history_csv_candidates(directory: Path, account_ids: list[str]) -> lis
     return candidates
 
 
-def _parse_history_net_contributions(path: Path) -> DerivedNetContributions | None:
+def _parse_history_net_contributions(
+    path: Path,
+    *,
+    start_date: date | None = None,
+    end_date: date | None = None,
+) -> DerivedNetContributions | None:
     lines = [line for line in path.read_text(encoding="utf-8-sig").splitlines() if line.strip()]
     if not lines:
         return None
@@ -577,6 +695,13 @@ def _parse_history_net_contributions(path: Path) -> DerivedNetContributions | No
         if amount is None:
             continue
         run_date = _parse_history_date(row.get("Run Date"))
+        if start_date is not None or end_date is not None:
+            if run_date is None:
+                continue
+            if start_date is not None and run_date < start_date:
+                continue
+            if end_date is not None and run_date > end_date:
+                continue
         if run_date is not None and (max_run_date is None or run_date > max_run_date):
             max_run_date = run_date
         net_contributions += amount
@@ -604,6 +729,109 @@ def _history_summary_sort_key(summary: DerivedNetContributions) -> tuple[date, i
 def _is_external_cash_flow_action(action: str) -> bool:
     normalized = action.strip().upper()
     return any(marker in normalized for marker in EXTERNAL_CASH_FLOW_ACTION_MARKERS)
+
+
+def _load_snapshot_valuations(directory: Path, detect_footer: bool, latest_csv: Path) -> list[SnapshotValuation]:
+    snapshots_by_date: dict[date, SnapshotValuation] = {}
+    for candidate in _find_snapshot_candidates(directory):
+        if candidate == latest_csv:
+            continue
+        summary = _snapshot_valuation(candidate, detect_footer=detect_footer)
+        if summary is None:
+            continue
+        existing = snapshots_by_date.get(summary.snapshot_date)
+        if existing is None or candidate.stat().st_mtime > existing.source_path.stat().st_mtime:
+            snapshots_by_date[summary.snapshot_date] = summary
+    return sorted(snapshots_by_date.values(), key=lambda snapshot: (snapshot.snapshot_date, snapshot.source_path.stat().st_mtime))
+
+
+def _find_snapshot_candidates(directory: Path) -> list[Path]:
+    candidate_directories: list[Path] = []
+    for candidate_directory in (directory, directory.parent):
+        if candidate_directory not in candidate_directories and candidate_directory.exists() and candidate_directory.is_dir():
+            candidate_directories.append(candidate_directory)
+
+    candidates: list[Path] = []
+    seen_paths: set[Path] = set()
+    for candidate_directory in candidate_directories:
+        for path in sorted(candidate_directory.glob(SNAPSHOT_FILE_GLOB)):
+            if not path.is_file() or path in seen_paths:
+                continue
+            seen_paths.add(path)
+            candidates.append(path)
+    return candidates
+
+
+def _snapshot_valuation(path: Path, *, detect_footer: bool) -> SnapshotValuation | None:
+    snapshot_date = _extract_snapshot_date(path)
+    if snapshot_date is None:
+        return None
+
+    rows, _ = _read_snapshot_rows(path, detect_footer=detect_footer)
+    total_value = 0.0
+    has_values = False
+    for row in rows:
+        normalized = _normalize_row(row)
+        symbol = normalized.get("symbol")
+        raw_name = normalized.get("name") or symbol
+        if not any(
+            item is not None and item != ""
+            for item in (symbol, raw_name, normalized.get("value"), normalized.get("quantity"), normalized.get("cost_basis"))
+        ):
+            continue
+        name = raw_name or "Holding"
+        if name.strip().lower() in {"account total", "totals", "total"}:
+            continue
+        value = _parse_number(normalized.get("value"))
+        if value is None:
+            continue
+        total_value += value
+        has_values = True
+
+    if not has_values:
+        return None
+
+    return SnapshotValuation(
+        snapshot_date=snapshot_date,
+        total_value=round(total_value, 2),
+        source_path=path,
+    )
+
+
+def _latest_snapshot_before(snapshots: list[SnapshotValuation], target_date: date) -> SnapshotValuation | None:
+    eligible = [snapshot for snapshot in snapshots if snapshot.snapshot_date < target_date]
+    if not eligible:
+        return None
+    return max(eligible, key=lambda snapshot: (snapshot.snapshot_date, snapshot.source_path.stat().st_mtime))
+
+
+def _month_start_snapshot(snapshots: list[SnapshotValuation], latest_snapshot_date: date) -> SnapshotValuation | None:
+    month_start = latest_snapshot_date.replace(day=1)
+    on_or_before = [snapshot for snapshot in snapshots if snapshot.snapshot_date <= month_start]
+    if on_or_before:
+        return max(on_or_before, key=lambda snapshot: (snapshot.snapshot_date, snapshot.source_path.stat().st_mtime))
+
+    in_month = [
+        snapshot
+        for snapshot in snapshots
+        if snapshot.snapshot_date.year == latest_snapshot_date.year
+        and snapshot.snapshot_date.month == latest_snapshot_date.month
+        and snapshot.snapshot_date <= latest_snapshot_date
+    ]
+    if in_month:
+        return min(in_month, key=lambda snapshot: (snapshot.snapshot_date, snapshot.source_path.stat().st_mtime))
+    return None
+
+
+def _extract_snapshot_date(path: Path) -> date | None:
+    matches = SNAPSHOT_DATE_PATTERN.findall(path.name)
+    if not matches:
+        return None
+    month_text, day_text, year_text = matches[-1]
+    try:
+        return datetime.strptime(f"{month_text.title()}-{day_text}-{year_text}", "%b-%d-%Y").date()
+    except ValueError:
+        return None
 
 
 def _read_snapshot_rows(path: Path, *, detect_footer: bool = True) -> tuple[list[dict[str, str]], str | None]:
