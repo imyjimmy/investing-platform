@@ -192,11 +192,20 @@ The FastAPI service exposes the requested MVP endpoints:
 
 ## Helper scripts
 
+Backend test suite:
+
+```bash
+./scripts/venv.sh run -- python -m pytest
+```
+
 IB Gateway smoke test:
 
 ```bash
 ./scripts/venv.sh run -- python scripts/test_ib_gateway.py
 ```
+
+The backend test suite covers deterministic application behavior.
+The IB Gateway script remains a separate live smoke test because it depends on a running external gateway session and real runtime connectivity.
 
 NVDA chain fetch example:
 
