@@ -74,7 +74,18 @@ INVESTING_PLATFORM_EDGAR_USER_AGENT=Your Name your_email@example.com
 INVESTING_PLATFORM_EDGAR_MAX_REQUESTS_PER_SECOND=5
 ```
 
-Account tabs and account-to-route mappings are configured in `frontend/src/config/dashboardAccounts.json`. For local builds, you can also provide a JSON array through `VITE_DASHBOARD_ACCOUNTS_JSON` in the frontend environment.
+Company PDF discovery can optionally fall back to a local rendered-HTML browser for public investor pages that require JavaScript. It is disabled by default. To try Scrapling, Lightpanda, or Obscura, install the browser tool and set:
+
+```env
+INVESTING_PLATFORM_INVESTOR_BROWSER_PROVIDER=scrapling
+INVESTING_PLATFORM_INVESTOR_BROWSER_TIMEOUT_SECONDS=30
+```
+
+For Scrapling, run `.venv/bin/scrapling install` once after installing requirements so Playwright's browser runtime is available locally.
+
+Use `INVESTING_PLATFORM_INVESTOR_BROWSER_COMMAND` only when you want to override the default command with a wrapper that prints rendered HTML to stdout or writes it to an `{output}` file. The platform does not enable stealth, proxy rotation, CAPTCHA handling, or fingerprint override flags in this path.
+
+Account tabs and account-to-route mappings are configured in `frontend/src/config/dashboardAccounts.json`. For local builds, you can also provide a JSON array through `VITE_DASHBOARD_ACCOUNTS_JSON` in the frontend environment. Each dashboard account can also include an optional `netContributionsUsd` fallback baseline, which is only used when attached sources do not expose contribution history.
 
 For Coinbase account access, either add a CDP Ed25519 key id + secret, a bearer token, or a PEM-style key:
 

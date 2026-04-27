@@ -27,6 +27,7 @@ from investing_platform.models import (
     InvestorPdfDownloadResponse,
     InvestorPdfSourceStatus,
 )
+from investing_platform.services.browser_fetcher import BrowserPageFetcher, RenderedPage
 
 
 COMPANY_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
@@ -47,9 +48,11 @@ PDF_EXPORT_FIELDS = [
     "savedPath",
 ]
 BLOCKED_RESULT_HOST_SUFFIXES = (
+    "annualreports.com",
     "seekingalpha.com",
     "scribd.com",
     "slideshare.net",
+    "stocklight.com",
     "finance.yahoo.com",
     "yahoo.com",
     "marketbeat.com",
@@ -70,8 +73,6 @@ BLOCKED_RESULT_HOST_SUFFIXES = (
     "wikipedia.org",
 )
 KNOWN_PUBLIC_PDF_HOST_SUFFIXES = (
-    "annualreports.com",
-    "stocklight.com",
     "q4cdn.com",
     "gcs-web.com",
     "cdn-website.com",
@@ -87,9 +88,10 @@ COMPANY_SITE_SEARCH_QUERIES: tuple[str, ...] = (
 RESULT_LIMIT_PER_QUERY = 8
 MAX_CRAWL_PAGES = 8
 MAX_COMPANY_SITE_ENTRYPOINTS = 12
-MAX_COMPANY_SITE_PAGES = 16
+MAX_COMPANY_SITE_PAGES = 32
 MAX_COMPANY_SITE_DEPTH = 3
-MAX_INTERNAL_LINKS_PER_PAGE = 12
+MAX_INTERNAL_LINKS_PER_PAGE = 24
+MIN_EXACT_SEED_PDF_MATCHES_TO_STOP = 10
 DISCOVERY_CACHE_SCHEMA_VERSION = 1
 DISCOVERY_CACHE_POSITIVE_TTL_DAYS = 90
 DISCOVERY_CACHE_EMPTY_TTL_DAYS = 7
@@ -102,12 +104,16 @@ COMPANY_SITE_PRIORITY_FORMS = {"8-K", "10-K", "10-Q", "6-K", "20-F"}
 COMPANY_SITE_FILING_INSPECTION_LIMIT = 18
 COMPANY_SITE_HINT_PATHS = (
     "",
+    "/overview",
     "/investor",
     "/investors",
     "/investor-relations",
     "/ir",
     "/financials",
     "/financial-results",
+    "/financials/quarterly-results",
+    "/financials/annual-reports",
+    "/financials/sec-filings",
     "/results",
     "/reports",
     "/presentations",
@@ -231,6 +237,7 @@ class InvestorPdfDownloader:
 
     def __init__(self, settings: DashboardSettings) -> None:
         self._settings = settings
+        self._browser_fetcher = BrowserPageFetcher(settings)
         self._company_lookup_cache: list[dict[str, Any]] | None = None
         self._company_lookup_lock = threading.Lock()
         self._limiters: dict[str, GenericRateLimiter] = {}
@@ -244,6 +251,9 @@ class InvestorPdfDownloader:
             stocksRootPath=str(self._settings.stocks_root),
             pdfFolderName="pdfs",
             timeoutSeconds=self._settings.edgar_timeout_seconds,
+            browserProvider=self._browser_fetcher.provider,
+            browserRenderingEnabled=self._browser_fetcher.enabled,
+            browserTimeoutSeconds=self._browser_fetcher.timeout_seconds,
         )
 
     def download(self, request: InvestorPdfDownloadRequest) -> InvestorPdfDownloadResponse:
@@ -506,6 +516,7 @@ class InvestorPdfDownloader:
             "categories": sorted(self._enabled_categories(request)),
             "startDate": start_date.isoformat(),
             "endDate": end_date.isoformat(),
+            "seedUrl": self._cache_seed_url(request),
         }
 
     def _cache_scope_covers(
@@ -523,7 +534,15 @@ class InvestorPdfDownloader:
             cached_end_date = date.fromisoformat(str(cached_scope.get("endDate") or ""))
         except ValueError:
             return False
+        cached_seed_url = str(cached_scope.get("seedUrl") or "")
+        if cached_seed_url != self._cache_seed_url(request):
+            return False
         return cached_start_date <= start_date and cached_end_date >= end_date
+
+    def _cache_seed_url(self, request: InvestorPdfDownloadRequest) -> str:
+        if not request.seedUrl:
+            return ""
+        return self._normalize_page_url(request.seedUrl)
 
     def _enabled_categories(self, request: InvestorPdfDownloadRequest) -> set[InvestorPdfCategory]:
         categories = self._enabled_public_categories(request)
@@ -608,65 +627,6 @@ class InvestorPdfDownloader:
             candidates.setdefault(key, candidate)
         return list(candidates.values())
 
-    def _discover_stocklight_annual_reports(
-        self,
-        resolved: ResolvedIssuer,
-        slug: str,
-        options: InvestorPdfRuntimeOptions,
-    ) -> list[PdfCandidate]:
-        candidates: dict[str, PdfCandidate] = {}
-        for exchange in ("nasdaq", "nyse", "amex", "otc"):
-            url = f"https://stocklight.com/stocks/us/{exchange}-{resolved.ticker.lower()}/{slug}/annual-reports"
-            try:
-                response = self._web_request("GET", url, options)
-            except RuntimeError:
-                continue
-            try:
-                soup = BeautifulSoup(response.text, "html.parser")
-            finally:
-                response.close()
-            for anchor in soup.select("a[href$='.pdf']"):
-                href = str(anchor.get("href") or "").strip()
-                if not href:
-                    continue
-                pdf_url = urljoin(url, href)
-                candidate = self._candidate_from_url(
-                    category="annual-report",
-                    source_label=f"Stocklight {exchange.upper()} annual reports",
-                    url=pdf_url,
-                    title=anchor.get_text(" ", strip=True) or Path(urlparse(pdf_url).path).name,
-                )
-                candidates.setdefault(candidate.source_url, candidate)
-            if candidates:
-                break
-        return list(candidates.values())
-
-    def _discover_annualreports_archive(self, slug: str, options: InvestorPdfRuntimeOptions) -> list[PdfCandidate]:
-        url = f"https://www.annualreports.com/Company/{slug}"
-        try:
-            response = self._web_request("GET", url, options)
-        except RuntimeError:
-            return []
-        try:
-            soup = BeautifulSoup(response.text, "html.parser")
-        finally:
-            response.close()
-
-        candidates: dict[str, PdfCandidate] = {}
-        for anchor in soup.select("a[href$='.pdf']"):
-            href = str(anchor.get("href") or "").strip()
-            if not href:
-                continue
-            pdf_url = urljoin(url, href)
-            candidate = self._candidate_from_url(
-                category="annual-report",
-                source_label="AnnualReports archive",
-                url=pdf_url,
-                title=anchor.get_text(" ", strip=True) or Path(urlparse(pdf_url).path).name,
-            )
-            candidates.setdefault(candidate.source_url, candidate)
-        return list(candidates.values())
-
     def _discover_search_candidates(
         self,
         resolved: ResolvedIssuer,
@@ -742,7 +702,7 @@ class InvestorPdfDownloader:
         if not enabled_categories:
             return []
 
-        entrypoints = self._discover_company_site_entrypoints(resolved, options)
+        entrypoints = self._discover_company_site_entrypoints(resolved, request, options)
         if not entrypoints:
             return []
 
@@ -761,6 +721,10 @@ class InvestorPdfDownloader:
                 continue
             queued_keys.add(page_key)
             priority = max(1, self._page_relevance_score(page_url, source_label))
+            if self._is_exact_user_seed_source(source_label):
+                priority += 100
+            elif self._is_user_seed_source(source_label):
+                priority += 40
             heapq.heappush(queue, (-priority, 0, sequence, page_url, source_label))
             sequence += 1
 
@@ -771,21 +735,14 @@ class InvestorPdfDownloader:
             page_key = self._page_visit_key(page_url)
             if not page_key or page_key in visited_keys:
                 continue
-            try:
-                response = self._web_request("GET", page_url, options)
-            except RuntimeError:
+            page = self._fetch_company_site_page(page_url, options)
+            if page is None:
                 continue
-            try:
-                canonical_url = self._normalize_page_url(response.url or page_url) or page_url
-                canonical_key = self._page_visit_key(canonical_url)
-                if canonical_key and canonical_key in visited_keys:
-                    continue
-                content_type = response.headers.get("content-type", "")
-                if "html" not in content_type and not response.text.lstrip().startswith("<"):
-                    continue
-                soup = BeautifulSoup(response.text, "html.parser")
-            finally:
-                response.close()
+            canonical_url = self._normalize_page_url(page.url or page_url) or page_url
+            canonical_key = self._page_visit_key(canonical_url)
+            if canonical_key and canonical_key in visited_keys:
+                continue
+            soup = BeautifulSoup(page.html, "html.parser")
 
             visited_keys.add(page_key)
             if canonical_key:
@@ -794,12 +751,13 @@ class InvestorPdfDownloader:
             pages_crawled += 1
 
             page_heading = self._page_heading_text(soup)
-            if depth == 0 and not self._page_matches_issuer(canonical_url, page_heading, soup, resolved):
+            if depth == 0 and not self._is_user_seed_source(source_label) and not self._page_matches_issuer(canonical_url, page_heading, soup, resolved):
                 continue
             page_context = " ".join(
                 part for part in (page_url, canonical_url, page_heading, source_label) if part
             ).strip()
             discovered_links: list[tuple[int, str, str]] = []
+            direct_candidate_count_before = len(candidates)
 
             for anchor in soup.select("a[href]"):
                 href = str(anchor.get("href") or "").strip()
@@ -807,7 +765,7 @@ class InvestorPdfDownloader:
                     continue
                 absolute_url = urljoin(canonical_url, href)
                 if self._is_direct_pdf_like_url(absolute_url):
-                    link_text = anchor.get_text(" ", strip=True)
+                    link_text = self._anchor_text(anchor)
                     category = self._classify_company_site_pdf(
                         page_context=page_context,
                         page_url=canonical_url,
@@ -842,7 +800,7 @@ class InvestorPdfDownloader:
                     continue
                 if not self._is_company_site_page(next_url, site_keys):
                     continue
-                link_text = anchor.get_text(" ", strip=True)
+                link_text = self._anchor_text(anchor)
                 region_text = self._anchor_region_text(anchor)
                 score = self._link_relevance_score(
                     current_url=canonical_url,
@@ -854,6 +812,12 @@ class InvestorPdfDownloader:
                 if score <= 0:
                     continue
                 discovered_links.append((score, next_url, link_text))
+
+            if (
+                self._is_exact_user_seed_source(source_label)
+                and len(candidates) - direct_candidate_count_before >= MIN_EXACT_SEED_PDF_MATCHES_TO_STOP
+            ):
+                return list(candidates.values())
 
             for score, next_url, link_text in sorted(discovered_links, key=lambda item: (-item[0], item[1]))[
                 :MAX_INTERNAL_LINKS_PER_PAGE
@@ -870,6 +834,7 @@ class InvestorPdfDownloader:
     def _discover_company_site_entrypoints(
         self,
         resolved: ResolvedIssuer,
+        request: InvestorPdfDownloadRequest,
         options: InvestorPdfRuntimeOptions,
     ) -> dict[str, str]:
         payloads = [resolved.submissions_payload]
@@ -881,6 +846,9 @@ class InvestorPdfDownloader:
 
         filings = self._build_filing_rows(payloads, resolved)
         entrypoints: dict[str, str] = {}
+        for expanded, is_exact in self._request_seed_entrypoints(request):
+            label = "User start URL" if is_exact else "User start URL site hint"
+            entrypoints.setdefault(expanded, label)
         inspected_filings = 0
         for filing in filings:
             if str(filing.get("form") or "").upper() not in COMPANY_SITE_PRIORITY_FORMS:
@@ -920,6 +888,17 @@ class InvestorPdfDownloader:
                     continue
                 entrypoints.setdefault(normalized_url, f"Search result: {result.title}")
         return self._prune_company_site_entrypoints(entrypoints, resolved)
+
+    def _request_seed_entrypoints(self, request: InvestorPdfDownloadRequest) -> list[tuple[str, bool]]:
+        if not request.seedUrl:
+            return []
+        seed_url = self._normalize_page_url(request.seedUrl)
+        if not seed_url:
+            return []
+        host = self._hostname(seed_url).lower()
+        if not host or self._is_blocked_result_host(host):
+            return []
+        return self._expand_company_site_urls(seed_url)
 
     def _enabled_public_categories(self, request: InvestorPdfDownloadRequest) -> set[InvestorPdfCategory]:
         categories: set[InvestorPdfCategory] = set()
@@ -1055,7 +1034,7 @@ class InvestorPdfDownloader:
         if any(term in lowered_region for term in ("header", "nav", "navigation", "menu", "drawer", "mega-menu")):
             score += 3
         if "footer" in lowered_region:
-            score += 1
+            score += 4
         parsed = urlparse(next_url)
         if (parsed.path or "").strip("/") == "":
             score += 1
@@ -1115,6 +1094,8 @@ class InvestorPdfDownloader:
             score = self._page_relevance_score(normalized_url, source_label)
             if host.startswith(("investor.", "investors.", "ir.")):
                 score += 8
+            if source_label.lower().startswith("user start url"):
+                score += 40
             if "https://" in normalized_url:
                 score += 1
             path = urlparse(normalized_url).path or "/"
@@ -1179,6 +1160,37 @@ class InvestorPdfDownloader:
                     parts.append(" ".join(str(value) for value in classes))
         return " ".join(parts)
 
+    def _anchor_text(self, anchor: Any) -> str:
+        parts = [
+            anchor.get_text(" ", strip=True),
+            str(anchor.get("aria-label") or "").strip() if hasattr(anchor, "get") else "",
+            str(anchor.get("title") or "").strip() if hasattr(anchor, "get") else "",
+        ]
+        return " ".join(part for part in parts if part)
+
+    def _is_user_seed_source(self, source_label: str) -> bool:
+        return source_label.lower().startswith("user start url")
+
+    def _is_exact_user_seed_source(self, source_label: str) -> bool:
+        return source_label.lower() == "user start url"
+
+    def _fetch_company_site_page(self, url: str, options: InvestorPdfRuntimeOptions) -> RenderedPage | None:
+        try:
+            response = self._web_request("GET", url, options)
+        except RuntimeError:
+            return self._browser_fetcher.render(url)
+        try:
+            content_type = response.headers.get("content-type", "")
+            if "html" not in content_type and not response.text.lstrip().startswith("<"):
+                return None
+            return RenderedPage(
+                url=self._normalize_page_url(response.url or url) or url,
+                html=response.text,
+                provider="disabled",
+            )
+        finally:
+            response.close()
+
     def _crawl_for_pdf_links(
         self,
         *,
@@ -1209,7 +1221,7 @@ class InvestorPdfDownloader:
                 continue
             if not self._is_direct_pdf_like_url(absolute_url):
                 continue
-            title = anchor.get_text(" ", strip=True) or Path(urlparse(absolute_url).path).name
+            title = self._anchor_text(anchor) or Path(urlparse(absolute_url).path).name
             candidate = self._candidate_from_url(
                 category=category,
                 source_label=f"Crawled: {url}",

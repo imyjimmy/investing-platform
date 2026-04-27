@@ -84,6 +84,7 @@ export function buildInvestorPdfDownloadRequest({
   lookupMode,
   outputDir,
   resume,
+  seedUrl,
   startDate,
   ticker,
 }: {
@@ -100,6 +101,7 @@ export function buildInvestorPdfDownloadRequest({
   lookupMode: StockIntelLookupMode;
   outputDir?: string;
   resume: boolean;
+  seedUrl?: string;
   startDate?: string;
   ticker: string;
 }): InvestorPdfDownloadRequest {
@@ -131,6 +133,9 @@ export function buildInvestorPdfDownloadRequest({
   }
   if (outputDir) {
     request.outputDir = outputDir;
+  }
+  if (seedUrl) {
+    request.seedUrl = seedUrl;
   }
   return request;
 }

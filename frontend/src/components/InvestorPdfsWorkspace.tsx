@@ -63,6 +63,7 @@ export function InvestorPdfsWorkspace({
   const [includeSecExhibits, setIncludeSecExhibits] = useState(true);
   const [resume, setResume] = useState(true);
   const [forceRefresh, setForceRefresh] = useState(false);
+  const [seedUrl, setSeedUrl] = useState("");
   const [stockFolderTemplate, setStockFolderTemplate] = useState("");
 
   useEffect(() => {
@@ -92,7 +93,10 @@ export function InvestorPdfsWorkspace({
   const effectiveEndDate = endDate;
   const dateRangeValid = !(effectiveStartDate && effectiveEndDate) || effectiveStartDate <= effectiveEndDate;
   const dateRangeError = dateRangeValid ? null : "Start date must be on or before end date.";
-  const formValidationError = windowMode === "rolling" ? lookbackYearsError : dateRangeError;
+  const normalizedSeedUrl = seedUrl.trim();
+  const seedUrlValid = !normalizedSeedUrl || /^https?:\/\/\S+$/i.test(normalizedSeedUrl);
+  const seedUrlError = seedUrlValid ? null : "Start URL must begin with http:// or https://.";
+  const formValidationError = (windowMode === "rolling" ? lookbackYearsError : dateRangeError) ?? seedUrlError;
 
   const request = buildInvestorPdfDownloadRequest({
     cik: normalizedCik,
@@ -108,6 +112,7 @@ export function InvestorPdfsWorkspace({
     lookupMode,
     outputDir: derivedOutputDir,
     resume,
+    seedUrl: normalizedSeedUrl || undefined,
     startDate: effectiveStartDate || undefined,
     ticker: normalizedTicker,
   });
@@ -115,7 +120,7 @@ export function InvestorPdfsWorkspace({
   const lastSyncQuery = useQuery({
     queryKey: queryKeys.sources.investorPdfLastSync(request),
     queryFn: () => sourceApi.investorPdfLastSync(request),
-    enabled: Boolean(status?.available) && Boolean(identifierValue) && !syncing && stockTemplateValid && !formValidationError,
+    enabled: Boolean(status?.available) && Boolean(identifierValue) && !normalizedSeedUrl && !syncing && stockTemplateValid && !formValidationError,
     staleTime: 30_000,
     retry: false,
   });
@@ -225,6 +230,19 @@ export function InvestorPdfsWorkspace({
                     />
                   ) : null}
                 </div>
+              </section>
+
+              <section className="border-b border-line/70 pb-6">
+                <div className="mb-2 text-[11px] uppercase tracking-[0.22em] text-muted">Start URL</div>
+                <input
+                  className={inputClassName}
+                  onChange={(event) => setSeedUrl(event.target.value)}
+                  placeholder="https://investors.company.com/financials/quarterly-results"
+                  spellCheck={false}
+                  type="url"
+                  value={seedUrl}
+                />
+                {seedUrlError ? <p className="mt-2 text-sm text-danger">{seedUrlError}</p> : null}
               </section>
 
               <section className="border-b border-line/70 pb-6">
