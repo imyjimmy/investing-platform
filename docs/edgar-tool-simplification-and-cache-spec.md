@@ -186,12 +186,24 @@ Recommended phase 1 policy:
 
 - domestic issuers:
   - `10-K`
+  - `10-K/A`
   - `10-Q`
+  - `10-Q/A`
   - `8-K`
+  - `8-K/A`
 - foreign/private issuers when applicable:
   - `20-F`
+  - `20-F/A`
   - `40-F`
+  - `40-F/A`
   - `6-K`
+  - `6-K/A`
+
+Amendment rule:
+
+- amended variants of the covered filing families are included by default
+- amendments are high-signal events and should be treated as priority filings for sync, indexing, and answer freshness
+- when an amended filing supersedes or materially corrects an earlier filing, the answer path should prefer the amended filing while still preserving the original artifact locally when available
 
 Optional phase 2 additions:
 
@@ -223,14 +235,21 @@ Recommended smart working set:
 - the most recent `3` annual filings of the primary annual form
 - the most recent `12` quarter-equivalent filings where applicable
 - the most recent `24` months of current-report filings such as `8-K` or `6-K`
+- any amendments to filings already covered by the smart working set
 - any newer accession numbers discovered since the last ticker sync
 - any older filings explicitly needed for a requested comparison or answer path
+
+Amendment priority rule:
+
+- if a newly discovered accession is an amendment to a covered filing family, the backend should prioritize body download and reindex even when the original filing is already cached
+- amendment-driven refreshes should be treated as freshness-relevant because they may materially change a previously grounded answer
 
 Why:
 
 - this keeps the local corpus useful for research
 - it prevents the default sync from ballooning on ticker histories with very large current-report volume
 - it still allows deeper history to be hydrated on demand later
+- it treats amended filings as correctness-sensitive, high-signal events rather than optional duplicates
 
 ## UX Copy Rules
 
@@ -255,8 +274,8 @@ Prohibited copy direction:
 
 1. user enters issuer query
 2. backend resolves issuer from the global issuer registry cache
-3. backend ensures the global metadata cache is fresh enough
-4. backend imports ticker metadata into the ticker workspace
+3. backend ensures the global metadata baseline is fresh enough and performs a live per-issuer submissions check when freshness matters
+4. backend merges any newly discovered same-day accessions into the local metadata cache and ticker workspace state
 5. backend downloads the smart working set of raw filing bodies
 6. backend returns sync status and local readiness
 7. backend queues or performs corpus/index build for filing Q and A
@@ -266,19 +285,22 @@ Prohibited copy direction:
 1. user opens an existing ticker workspace
 2. UI shows last metadata refresh, last body refresh, and last index refresh
 3. user clicks `Refresh filings` or the app auto-refreshes in the background
-4. backend checks for new accession numbers since last seen
-5. backend downloads only missing filing bodies required by policy
-6. backend reindexes only the new or changed filings
+4. backend consults the global metadata baseline and the live per-issuer submissions overlay for new accession numbers since last seen
+5. any newly discovered same-day accessions are merged immediately into the local metadata cache
+6. backend downloads only missing filing bodies required by policy
+7. backend reindexes only the new or changed filings
 
 ## Flow 3: Ask a Filing Question
 
 1. user asks a question in the EDGAR workspace
-2. backend checks whether the ticker metadata and local corpus are fresh enough
-3. backend performs a lightweight incremental sync if new accession numbers are available
-4. backend downloads any newly required raw filing bodies
-5. backend updates the ticker’s filing corpus/index incrementally
-6. backend retrieves filing chunks and calls the local Qwen model through oMLX
-7. backend returns a grounded answer with citations
+2. backend checks whether the ticker metadata and local corpus are fresh enough, consulting the live per-issuer submissions overlay when freshness matters
+3. backend performs a lightweight live per-issuer submissions check if freshness matters
+4. any newly discovered same-day accessions are merged immediately into the local metadata cache
+5. backend performs a lightweight incremental sync if new accession numbers are available
+6. backend downloads any newly required raw filing bodies
+7. backend updates the ticker’s filing corpus/index incrementally
+8. backend retrieves filing chunks and calls the local Qwen model through oMLX
+9. backend returns a grounded answer with citations
 
 This question flow is expanded further in the companion intelligence spec and must stay aligned with it.
 
@@ -307,6 +329,12 @@ Purpose:
 - resolve ticker, company name, and CIK quickly and locally
 - avoid repeated live issuer lookup work
 
+Scope rule:
+
+- this cache is app-global
+- it lives in one canonical configured cache root chosen by application settings
+- per-request `outputDir` does not create or select a different issuer-registry cache
+
 Recommended source:
 
 - SEC issuer registry data such as `company_tickers.json`
@@ -314,7 +342,7 @@ Recommended source:
 Recommended storage:
 
 ```text
-[research root]/
+[configured app-global cache root]/
   .sec/
     issuer-registry/
       company_tickers.json
@@ -333,11 +361,19 @@ Recommended behavior:
 Purpose:
 
 - keep the app aware of the filing universe without downloading all raw filing bodies
-- make ticker refreshes cheap because new accession discovery is already local
+- make most ticker refreshes cheap because baseline accession discovery is already local before any live freshness overlay check
+
+Scope rule:
+
+- this cache is app-global
+- it lives in the same canonical configured cache root as the issuer registry cache
+- per-request `outputDir` does not create, fork, or namespace the filing metadata cache
+- freshness, warming, import jobs, and reuse are owned by this one app-global metadata cache
 
 Recommended source:
 
-- the SEC nightly submissions bulk archive
+- the SEC nightly submissions bulk archive as the baseline metadata corpus
+- the SEC per-issuer submissions API as the live freshness overlay for active tickers
 
 Optional secondary source:
 
@@ -346,7 +382,7 @@ Optional secondary source:
 Recommended storage:
 
 ```text
-[research root]/
+[configured app-global cache root]/
   .sec/
     filing-metadata/
       submissions.zip
@@ -363,11 +399,21 @@ Recommended behavior:
 - check `Last-Modified` before pulling a new bulk artifact when possible
 - store the compressed bulk archive plus a normalized local query store
 - keep file-count low by importing into SQLite rather than exploding every JSON file into the filesystem
+- treat the nightly bulk import as the baseline metadata layer, not the sole freshness mechanism
+
+Freshness overlay rule:
+
+- nightly bulk metadata is the baseline
+- live per-issuer submissions fetch is the freshness path for active tickers
+- any new same-day accessions found live are merged into the local metadata cache immediately
+- refresh and ask flows consult that live overlay when freshness matters
+- if the live check fails, the system reports `stale` or `degraded` instead of pretending the cache is fresh
 
 Important rule:
 
 - this cache is universe-wide metadata only
 - it is not permission to hydrate all raw filings for all issuers
+- it is shared across all ticker workspaces in the app, even when a ticker sync writes filings under a non-default `outputDir`
 
 ## 3. Per-Ticker Filing-Body Cache
 
@@ -379,7 +425,7 @@ Purpose:
 Recommended location:
 
 ```text
-[research root]/
+[ticker workspace root selected by `outputDir` or default research root]/
   stocks/
     [ticker]/
       [raw filing files]
@@ -398,26 +444,54 @@ Rules:
 
 ## 4. Incremental Refresh Strategy
 
-The app should think in terms of accession deltas.
+The app should think in terms of accession-set reconciliation, not just latest-accession watermarks.
 
 Per ticker, track:
 
 - `lastMetadataRefreshAt`
+- `lastLiveOverlayCheckAt`
 - `lastBodyRefreshAt`
 - `lastIndexRefreshAt`
-- `latestKnownAccession`
-- `latestBodyCachedAccession`
-- `latestIndexedAccession`
+
+Per ticker, maintain an accession table keyed by accession number.
+
+Minimum fields per accession:
+
+- `accessionNumber`
+- `form`
+- `filingDate`
+- `isAmendment`
+- `discoveredVia` (`bulk` or `live`)
+- `bodyStatus` (`pending`, `cached`, `failed`, `skipped`, `invalidated`)
+- `indexStatus` (`pending`, `indexed`, `failed`, `invalidated`)
+- `contentHash` or artifact fingerprint
+- `selectedByPolicyVersion`
+
+Per ticker, also track processing versions:
+
+- `bodyCoveragePolicyVersion`
+- `indexSchemaVersion`
+- `chunkingVersion`
+- `embeddingModelVersion`
+
+Operational rule:
+
+- `latestKnownAccession`, `latestBodyCachedAccession`, and `latestIndexedAccession` may still be retained as convenience stats
+- they must not be treated as the source of truth for sync correctness
+- the source of truth is accession membership plus per-accession body and index state under the current processing versions
 
 Refresh algorithm:
 
 1. resolve issuer
-2. consult the global metadata cache for that issuer
-3. compare the issuer’s newest accession numbers against local ticker state
-4. create a delta set of unseen accessions
-5. apply the smart body-coverage policy to that delta set
-6. download only the missing raw filing bodies
-7. index only the newly added or changed local documents
+2. consult the global metadata cache for that issuer and the live per-issuer submissions overlay when freshness matters
+3. reconcile issuer accession membership into the ticker’s accession table
+4. identify the accession set required under the current `bodyCoveragePolicyVersion`, including amendments and any older backfills required by the answer path
+5. mark newly required, missing, or invalidated accessions as `pending` for body download
+6. download only the raw filing bodies whose body state is missing, failed, or invalidated
+7. recompute `contentHash` or artifact fingerprints for newly downloaded or changed filings
+8. mark filings as `pending` for reindex whenever content changed or any of `indexSchemaVersion`, `chunkingVersion`, or `embeddingModelVersion` changed
+9. index only filings whose index state is pending, failed, or invalidated
+10. update convenience watermarks and timestamps after successful reconciliation
 
 ## 5. Background Warming
 
@@ -467,8 +541,21 @@ Recommended public routes:
 
 - `GET /api/sources/edgar/status`
 - `POST /api/sources/edgar/sync`
-- `GET /api/sources/edgar/workspace`
+- `POST /api/sources/edgar/workspace`
+- `GET /api/sources/edgar/intelligence/status`
+- `POST /api/sources/edgar/intelligence/index`
 - `POST /api/sources/edgar/intelligence/ask`
+- `POST /api/sources/edgar/intelligence/compare`
+
+Selector contract:
+
+- `POST /api/sources/edgar/sync` accepts an unresolved issuer input such as `issuerQuery`
+- all post-sync ticker-scoped routes accept a resolved `ticker` plus optional `outputDir`
+- if `outputDir` is omitted, the backend uses the configured research root for ticker-scoped artifacts
+- `outputDir` only selects where ticker-scoped artifacts live under `stocks/[ticker]`
+- app-global caches under `.sec/` always live in the canonical configured cache root and do not vary with `outputDir`
+- if a non-default `outputDir` was used for sync, the same `outputDir` must be supplied on follow-up workspace and intelligence routes so the backend can resolve the same ticker workspace
+- `POST /api/sources/edgar/workspace` is the source of truth for current ticker-scoped metadata, body-cache, and intelligence readiness state
 
 Recommended `sync` request shape:
 
@@ -488,6 +575,10 @@ Recommended `sync` response shape:
   "resolvedTicker": "NVDA",
   "resolvedCompanyName": "NVIDIA CORP",
   "resolvedCik": "0001045810",
+  "workspace": {
+    "ticker": "NVDA",
+    "outputDir": "/optional/research/root"
+  },
   "metadataState": {
     "status": "fresh",
     "lastRefreshedAt": "2026-04-26T20:00:00Z",
@@ -499,11 +590,37 @@ Recommended `sync` response shape:
     "skippedFilings": 18
   },
   "intelligenceState": {
-    "status": "indexing",
-    "lastIndexedAt": "2026-04-26T19:42:00Z"
+    "status": "queued",
+    "lastIndexedAt": "2026-04-26T19:42:00Z",
+    "jobId": "edgar-index-nvda-20260426-01",
+    "polledVia": "/api/sources/edgar/intelligence/status?ticker=NVDA&outputDir=%2Foptional%2Fresearch%2Froot&jobId=edgar-index-nvda-20260426-01"
   }
 }
 ```
+
+Recommended `workspace` request shape:
+
+```json
+{
+  "ticker": "NVDA",
+  "outputDir": "/optional/research/root"
+}
+```
+
+Recommended `workspace` response responsibilities:
+
+- return the current ticker-scoped metadata freshness state
+- return the current body-cache state
+- return the current intelligence readiness state
+- return last-sync summary and resolved storage paths for the selected ticker workspace
+
+Async indexing rule:
+
+- `sync` may perform small index updates inline or queue background indexing work
+- if `intelligenceState.status` is `queued` or `indexing`, the response must include `jobId`
+- the recommended poll selector is `ticker + outputDir + jobId`
+- job progress and readiness are polled through `GET /api/sources/edgar/intelligence/status`
+- `sync` must not report background indexing without a pollable route contract
 
 Backward-compatibility recommendation:
 
@@ -594,7 +711,7 @@ Implementation contract between specs:
 - a new user can sync a company’s SEC filings without selecting form types or file-save modes
 - the EDGAR UI contains no references to company-site PDFs
 - the backend can resolve issuer identity through a global local cache
-- the backend can detect new accession numbers without live per-ticker discovery work every time
+- the backend can detect new accession numbers cheaply from cached baseline metadata and use live per-ticker submissions checks when freshness matters
 - raw filing-body downloads remain ticker-scoped rather than universe-wide
 - a filing question can trigger a bounded incremental refresh and then flow into the local Qwen/oMLX answer path
 - this spec and the companion intelligence spec describe one coherent end-to-end system

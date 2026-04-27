@@ -536,6 +536,11 @@ Suggested response shape:
 
 Extend `src/investing_platform/api/routes/research.py`.
 
+This intelligence API extends the ticker-scoped EDGAR surface defined in `docs/edgar-tool-simplification-and-cache-spec.md`, including:
+
+- `POST /api/sources/edgar/sync`
+- `POST /api/sources/edgar/workspace`
+
 New routes:
 
 - `GET /api/sources/edgar/intelligence/status`
@@ -550,6 +555,26 @@ Purpose:
 - report whether the local model server is reachable
 - report configured model ids
 - report whether a ticker has an index
+- report current ticker-scoped intelligence readiness for the selected workspace
+- report active background indexing job state when `jobId` is supplied or when one is active for the selected ticker
+
+Selector fields:
+
+- `ticker`
+- `outputDir`
+- optional `jobId`
+
+Selector rule:
+
+- `outputDir` selects the ticker-scoped workspace under `stocks/[ticker]`
+- app-global EDGAR caches under `.sec/` remain anchored to the canonical configured cache root defined in `docs/edgar-tool-simplification-and-cache-spec.md`
+
+Status contract:
+
+- this route is the poll target for background indexing initiated by `sync` or `intelligence/index`
+- the recommended poll selector is `ticker + outputDir + jobId`
+- if background indexing is queued or in progress, the response must include the current job state for the selected ticker workspace
+- if no job is active, the response still reports readiness, freshness, and model availability for the selected ticker workspace
 
 ### Index Route
 
@@ -564,6 +589,13 @@ Request fields:
 - `rebuild`
 - `forms`
 - `includeExhibits`
+
+Response contract:
+
+- the route may complete inline for small updates or queue a background indexing job
+- if the route returns `queued` or `indexing`, it must include `jobId`
+- queued or running work is polled through `GET /api/sources/edgar/intelligence/status`
+- the route must operate against the same ticker and `outputDir` selector model used by `POST /api/sources/edgar/workspace`
 
 ### Ask Route
 
