@@ -87,12 +87,12 @@ export function EdgarWorkspace({
   }
 
   const header = (
-    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between" data-testid="edgar-workspace-header">
       <div>
         <div className={workspaceEyebrowClassName}>Stocks</div>
         <div className="flex flex-wrap items-center gap-3">
           <h1 className={workspaceTitleClassName}>EDGAR Filings</h1>
-          <div className="inline-flex items-center rounded-full border border-line bg-panelSoft px-4 py-1 text-sm font-medium text-text">
+          <div className="inline-flex items-center rounded-full border border-line bg-panelSoft px-4 py-1 text-sm font-medium text-text" data-testid="edgar-source-status">
             {status?.available ? "Ready" : statusLoading ? "Checking" : "Needs config"}
           </div>
         </div>
@@ -103,6 +103,7 @@ export function EdgarWorkspace({
       <div className="flex flex-col items-start gap-3 lg:items-end">
         <button
           className="rounded-full border border-accent/35 bg-accent/10 px-4 py-2 text-sm font-medium text-accent transition hover:border-accent/50 hover:text-white disabled:cursor-default disabled:opacity-45"
+          data-testid="edgar-sync-button"
           disabled={!canRun}
           onClick={handleRun}
           type="button"
@@ -120,7 +121,7 @@ export function EdgarWorkspace({
 
   return (
     <WorkspaceFrame bodyClassName={null} header={header}>
-      <section className={workspaceBodyClassName}>
+      <section className={workspaceBodyClassName} data-testid="edgar-workspace">
         <div className="grid gap-6 xl:grid-cols-[1.1fr,0.9fr]">
           <section className="grid content-start gap-5">
             <div>
@@ -135,6 +136,7 @@ export function EdgarWorkspace({
               <span className="text-xs uppercase tracking-[0.18em] text-muted">Company</span>
               <input
                 className={inputClassName}
+                data-testid="edgar-company-input"
                 onChange={(event) => setIssuerQuery(event.target.value)}
                 onKeyDown={(event) => {
                   if (event.key === "Enter") {
@@ -182,16 +184,19 @@ export function EdgarWorkspace({
             </div>
 
             <StateBlock
+              testId="edgar-state-metadata"
               title="Metadata"
               state={metadataState}
               emptyDetail="Run the first EDGAR sync to build the local issuer workspace."
             />
             <StateBlock
+              testId="edgar-state-body-cache"
               title="Filing bodies"
               state={bodyCacheState}
               emptyDetail="The working set of filing bodies will be cached locally after sync."
             />
             <StateBlock
+              testId="edgar-state-intelligence"
               title="Local filing Q&A"
               state={intelligenceState}
               emptyDetail="The intelligence layer is not enabled yet in this build."
@@ -211,12 +216,12 @@ export function EdgarWorkspace({
         </div>
 
         {activeWorkspace ? (
-          <div className="grid gap-4 xl:grid-cols-[1.04fr,0.96fr]">
+          <div className="grid gap-4 xl:grid-cols-[1.04fr,0.96fr]" data-testid="edgar-workspace-details">
             <div className="grid gap-4">
               <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                <StatItem label="Matched filings" value={String(activeWorkspace.bodyCacheState.matchedFilings)} />
-                <StatItem label="Cached filings" value={String(activeWorkspace.bodyCacheState.cachedFilings)} />
-                <StatItem label="New accessions" value={String(activeWorkspace.metadataState.newAccessions)} />
+                <StatItem label="Matched filings" testId="edgar-stat-matched-filings" value={String(activeWorkspace.bodyCacheState.matchedFilings)} />
+                <StatItem label="Cached filings" testId="edgar-stat-cached-filings" value={String(activeWorkspace.bodyCacheState.cachedFilings)} />
+                <StatItem label="New accessions" testId="edgar-stat-new-accessions" value={String(activeWorkspace.metadataState.newAccessions)} />
               </div>
               <div className="rounded-[18px] border border-line bg-panelSoft/55 px-4 py-4 text-sm leading-6 text-muted">
                 <div className="font-medium text-text">{activeWorkspace.companyName}</div>
@@ -241,7 +246,7 @@ export function EdgarWorkspace({
         ) : workspaceQuery.isLoading ? (
           <div className="px-2 py-8 text-center text-sm text-muted">Looking for a saved EDGAR workspace…</div>
         ) : (
-          <div className="rounded-[18px] border border-dashed border-line px-5 py-8 text-center text-sm text-muted">
+          <div className="rounded-[18px] border border-dashed border-line px-5 py-8 text-center text-sm text-muted" data-testid="edgar-workspace-empty">
             No simplified EDGAR workspace is recorded for this company yet. Run `Sync SEC filings` to create the local filing library.
           </div>
         )}
@@ -254,15 +259,17 @@ function StateBlock({
   title,
   state,
   emptyDetail,
+  testId,
 }: {
   title: string;
   state: EdgarMetadataState | EdgarBodyCacheState | EdgarIntelligenceState | undefined;
   emptyDetail: string;
+  testId?: string;
 }) {
   const detail = state ? describeState(state) : emptyDetail;
   const label = state ? state.status : "idle";
   return (
-    <div className="rounded-[18px] border border-line bg-panelSoft/55 px-4 py-4">
+    <div className="rounded-[18px] border border-line bg-panelSoft/55 px-4 py-4" data-testid={testId}>
       <div className="flex items-center justify-between gap-3">
         <div className="text-sm font-medium text-text">{title}</div>
         <StatusPill status={label} />
@@ -303,9 +310,9 @@ function PathField({ label, value }: { label: string; value: string }) {
   );
 }
 
-function StatItem({ label, value }: { label: string; value: string }) {
+function StatItem({ label, value, testId }: { label: string; value: string; testId?: string }) {
   return (
-    <div className="rounded-[16px] border border-line bg-panelSoft/55 px-4 py-4">
+    <div className="rounded-[16px] border border-line bg-panelSoft/55 px-4 py-4" data-testid={testId}>
       <div className="text-xs uppercase tracking-[0.16em] text-muted">{label}</div>
       <div className="mt-2 text-2xl font-semibold text-text">{value}</div>
     </div>
