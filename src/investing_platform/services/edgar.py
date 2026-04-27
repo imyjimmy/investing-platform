@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 import csv
 import hashlib
 import json
@@ -17,7 +17,19 @@ from typing import Any
 import requests
 
 from investing_platform.config import DashboardSettings
-from investing_platform.models import EdgarDownloadRequest, EdgarDownloadResponse, EdgarSourceStatus
+from investing_platform.models import (
+    EdgarBodyCacheState,
+    EdgarDownloadRequest,
+    EdgarDownloadResponse,
+    EdgarIntelligenceState,
+    EdgarMetadataState,
+    EdgarSourceStatus,
+    EdgarSyncRequest,
+    EdgarSyncResponse,
+    EdgarWorkspaceRequest,
+    EdgarWorkspaceResponse,
+    EdgarWorkspaceSelector,
+)
 
 
 COMPANY_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
@@ -49,6 +61,10 @@ FILING_EXPORT_FIELDS = [
     "primaryDocumentUrl",
 ]
 EXHIBIT_NAME_RE = re.compile(r"(?i)(?:^|[/_-])(?:ex(?:hibit)?|xex)\d")
+BODY_COVERAGE_POLICY_VERSION = "phase1-default-v1"
+INDEX_SCHEMA_VERSION = "pending-v1"
+CHUNKING_VERSION = "pending-v1"
+EMBEDDING_MODEL_VERSION = "pending-v1"
 
 
 @dataclass(slots=True)
@@ -74,6 +90,22 @@ class DownloadCounters:
     downloaded_files: int = 0
     skipped_files: int = 0
     failed_files: int = 0
+
+
+@dataclass(slots=True)
+class WorkspacePaths:
+    output_root: Path
+    stock_root: Path
+    edgar_root: Path
+    metadata_dir: Path
+    submissions_dir: Path
+    exports_dir: Path
+    manifests_dir: Path
+    intelligence_dir: Path
+    manifest_path: Path
+    last_sync_path: Path
+    workspace_path: Path
+    accession_state_path: Path
 
 
 class SecRateLimiter:
@@ -221,6 +253,7 @@ class EdgarDownloader:
         )
         manifest["lastRun"] = response.model_dump(mode="json")
         self._save_manifest(manifest_path, manifest)
+        self._persist_workspace_snapshot_from_download_response(response)
         return response
 
     def last_sync(self, request: EdgarDownloadRequest) -> EdgarDownloadResponse | None:
@@ -246,13 +279,805 @@ class EdgarDownloader:
             return None
         return EdgarDownloadResponse.model_validate(payload)
 
-    def _resolve_company(self, request: EdgarDownloadRequest, options: EdgarRuntimeOptions) -> ResolvedCompany:
+    def sync(self, request: EdgarSyncRequest) -> EdgarSyncResponse:
+        options = self._default_runtime_options()
+        if not options.user_agent:
+            raise ValueError("A descriptive SEC User-Agent is required.")
+
+        output_root = Path(request.outputDir).expanduser() if request.outputDir else self._settings.research_root
+        output_root.mkdir(parents=True, exist_ok=True)
+
+        resolved = self._resolve_issuer_query(request.issuerQuery, options, force_refresh=request.forceRefresh)
+        paths = self._workspace_paths(output_root, resolved.ticker)
+        self._ensure_workspace_dirs(paths)
+
+        manifest = self._load_manifest(paths.manifest_path)
+        counters = DownloadCounters()
+        previous_metadata_snapshot = self._load_global_metadata_snapshot(resolved.cik10)
+        previous_accessions = self._snapshot_accessions(previous_metadata_snapshot)
+        previous_accession_state = self._load_accession_state(paths.accession_state_path)
+        metadata_status = "fresh"
+        metadata_message: str | None = None
+        metadata_refreshed_at: datetime | None = None
+        metadata_live_checked_at: datetime | None = None
+
+        try:
+            payloads = self._fetch_submission_payloads(
+                resolved=resolved,
+                options=options,
+                submissions_dir=paths.submissions_dir,
+                manifest=manifest,
+                edgar_root=paths.edgar_root,
+                counters=counters,
+                previous_metadata_snapshot=previous_metadata_snapshot,
+                force_refresh=request.forceRefresh,
+            )
+            current_filings = self._build_filing_rows(payloads, resolved)
+            all_filings = self._merge_cached_filing_rows(current_filings, previous_metadata_snapshot)
+            metadata_snapshot = self._persist_global_metadata_snapshot(resolved, all_filings)
+            metadata_refreshed_at = self._parse_datetime(metadata_snapshot.get("lastRefreshedAt"))
+            metadata_live_checked_at = self._parse_datetime(metadata_snapshot.get("lastLiveCheckedAt"))
+        except RuntimeError as exc:
+            cached_filings = previous_metadata_snapshot.get("filings") if previous_metadata_snapshot else None
+            if isinstance(cached_filings, list) and cached_filings:
+                all_filings = [filing for filing in cached_filings if isinstance(filing, dict)]
+                metadata_status = "degraded"
+                metadata_message = f"Live SEC metadata refresh failed. Using cached issuer metadata. {exc}"
+                metadata_refreshed_at = self._parse_datetime(previous_metadata_snapshot.get("lastRefreshedAt")) if previous_metadata_snapshot else None
+                metadata_live_checked_at = self._parse_datetime(previous_metadata_snapshot.get("lastLiveCheckedAt")) if previous_metadata_snapshot else None
+            else:
+                raise
+
+        latest_submission_url = SUBMISSIONS_URL_TEMPLATE.format(cik10=resolved.cik10)
+        self._write_json_artifact(paths.exports_dir / "all-filings.json", all_filings, latest_submission_url, manifest, paths.edgar_root)
+        self._write_csv_artifact(paths.exports_dir / "all-filings.csv", all_filings, manifest, paths.edgar_root)
+
+        selected_filings = self._select_smart_working_set(all_filings)
+        self._write_json_artifact(paths.exports_dir / "matched-filings.json", selected_filings, latest_submission_url, manifest, paths.edgar_root)
+        self._write_csv_artifact(paths.exports_dir / "matched-filings.csv", selected_filings, manifest, paths.edgar_root)
+
+        download_request = EdgarDownloadRequest(
+            ticker=resolved.ticker,
+            outputDir=str(output_root),
+            downloadMode="primary-document",
+            includeExhibits=False,
+            resume=not request.forceRefresh,
+        )
+        cached_accessions: set[str] = set()
+        downloaded_accessions: set[str] = set()
+        skipped_accessions: set[str] = set()
+        failed_accessions: set[str] = set()
+        for filing in selected_filings:
+            accession = str(filing.get("accessionNumber") or "")
+            before_downloaded = counters.downloaded_files
+            before_skipped = counters.skipped_files
+            try:
+                self._download_filing_assets(
+                    filing=filing,
+                    request=download_request,
+                    options=options,
+                    filings_dir=paths.stock_root,
+                    edgar_root=paths.edgar_root,
+                        manifest=manifest,
+                        counters=counters,
+                )
+            except RuntimeError:
+                counters.failed_files += 1
+                if accession:
+                    failed_accessions.add(accession)
+            else:
+                if accession:
+                    if counters.downloaded_files > before_downloaded:
+                        downloaded_accessions.add(accession)
+                    elif counters.skipped_files > before_skipped:
+                        skipped_accessions.add(accession)
+            if self._filing_is_cached(paths.stock_root, filing):
+                if accession:
+                    cached_accessions.add(accession)
+
+        synced_at = datetime.now(UTC)
+        metadata_state = EdgarMetadataState(
+            status=metadata_status,
+            lastRefreshedAt=metadata_refreshed_at or synced_at,
+            lastLiveCheckedAt=metadata_live_checked_at or synced_at,
+            newAccessions=len({str(filing.get("accessionNumber") or "") for filing in all_filings} - previous_accessions),
+            message=metadata_message,
+        )
+        body_cache_state = self._build_body_cache_state(
+            counters=counters,
+            matched_filings=len(selected_filings),
+            cached_filings=len({accession for accession in cached_accessions if accession}),
+            last_refreshed_at=synced_at,
+        )
+        self._persist_accession_state(
+            path=paths.accession_state_path,
+            ticker=resolved.ticker,
+            cik10=resolved.cik10,
+            stock_root=paths.stock_root,
+            all_filings=all_filings,
+            selected_filings=selected_filings,
+            cached_accessions=cached_accessions,
+            downloaded_accessions=downloaded_accessions,
+            skipped_accessions=skipped_accessions,
+            failed_accessions=failed_accessions,
+            previous_state=previous_accession_state,
+            refreshed_at=synced_at,
+        )
+        intelligence_state = self._build_intelligence_state(paths)
+
+        legacy_response = EdgarDownloadResponse(
+            companyName=resolved.company_name,
+            ticker=resolved.ticker,
+            cik=resolved.cik10,
+            totalFilingsConsidered=len(all_filings),
+            matchedFilings=len(selected_filings),
+            metadataFilesSynced=counters.metadata_files_synced,
+            downloadedFiles=counters.downloaded_files,
+            skippedFiles=counters.skipped_files,
+            failedFiles=counters.failed_files,
+            downloadMode=download_request.downloadMode,
+            includeExhibits=download_request.includeExhibits,
+            resume=download_request.resume,
+            researchRootPath=str(output_root),
+            stockPath=str(paths.stock_root),
+            filingsPath=str(paths.stock_root),
+            edgarPath=str(paths.edgar_root),
+            exportsJsonPath=str(paths.exports_dir / "matched-filings.json"),
+            exportsCsvPath=str(paths.exports_dir / "matched-filings.csv"),
+            manifestPath=str(paths.manifest_path),
+            syncedAt=synced_at,
+        )
+        self._write_json_artifact(paths.last_sync_path, legacy_response.model_dump(mode="json"), "generated://edgar-last-sync", manifest, paths.edgar_root)
+        manifest["lastRun"] = legacy_response.model_dump(mode="json")
+        self._save_manifest(paths.manifest_path, manifest)
+        self._persist_workspace_snapshot_from_download_response(legacy_response, metadata_state=metadata_state, intelligence_state=intelligence_state)
+
+        return EdgarSyncResponse(
+            issuerQuery=request.issuerQuery,
+            resolvedTicker=resolved.ticker,
+            resolvedCompanyName=resolved.company_name,
+            resolvedCik=resolved.cik10,
+            workspace=EdgarWorkspaceSelector(
+                ticker=resolved.ticker,
+                outputDir=str(output_root) if request.outputDir else None,
+            ),
+            metadataState=metadata_state,
+            bodyCacheState=body_cache_state,
+            intelligenceState=intelligence_state,
+        )
+
+    def workspace(self, request: EdgarWorkspaceRequest) -> EdgarWorkspaceResponse | None:
+        output_root = Path(request.outputDir).expanduser() if request.outputDir else self._settings.research_root
+        paths = self._workspace_paths(output_root, request.ticker)
+        if paths.workspace_path.exists():
+            payload = self._load_json_document(paths.workspace_path)
+            if payload:
+                return EdgarWorkspaceResponse.model_validate(payload)
+
+        legacy_request = EdgarDownloadRequest(ticker=request.ticker, outputDir=str(output_root))
+        legacy_response = self.last_sync(legacy_request)
+        if legacy_response is None:
+            return None
+        return self._build_workspace_snapshot_from_download_response(
+            legacy_response,
+            metadata_state=EdgarMetadataState(
+                status="stale",
+                lastRefreshedAt=legacy_response.syncedAt,
+                lastLiveCheckedAt=legacy_response.syncedAt,
+                newAccessions=0,
+                message="This workspace was created before the simplified EDGAR sync state was available.",
+            ),
+            intelligence_state=self._build_intelligence_state(paths),
+        )
+
+    def intelligence_status(self, ticker: str, output_dir: str | None = None, job_id: str | None = None) -> EdgarIntelligenceState:
+        workspace = self.workspace(EdgarWorkspaceRequest(ticker=ticker, outputDir=output_dir))
+        if workspace is None:
+            return EdgarIntelligenceState(
+                status="unavailable",
+                questionAnsweringEnabled=False,
+                detail="No EDGAR workspace exists for this ticker yet.",
+                jobId=job_id,
+            )
+        intelligence_state = workspace.intelligenceState.model_copy()
+        if job_id and not intelligence_state.jobId:
+            intelligence_state.jobId = job_id
+        return intelligence_state
+
+    def _default_runtime_options(self) -> EdgarRuntimeOptions:
+        return EdgarRuntimeOptions(
+            user_agent=self._settings.edgar_user_agent.strip(),
+            max_requests_per_second=self._settings.edgar_max_requests_per_second,
+            timeout_seconds=self._settings.edgar_timeout_seconds,
+            retry_limit=self._settings.edgar_retry_limit,
+        )
+
+    def _resolve_issuer_query(
+        self,
+        issuer_query: str,
+        options: EdgarRuntimeOptions,
+        *,
+        force_refresh: bool = False,
+    ) -> ResolvedCompany:
+        normalized = issuer_query.strip()
+        if normalized.isdigit():
+            return self._resolve_company(EdgarDownloadRequest(cik=normalized), options, force_refresh=force_refresh)
+
+        if re.fullmatch(r"[A-Za-z][A-Za-z0-9.\-]{0,9}", normalized):
+            try:
+                return self._resolve_company(
+                    EdgarDownloadRequest(ticker=normalized.upper()),
+                    options,
+                    force_refresh=force_refresh,
+                )
+            except ValueError:
+                pass
+
+        return self._resolve_company(
+            EdgarDownloadRequest(companyName=normalized),
+            options,
+            force_refresh=force_refresh,
+        )
+
+    def _workspace_paths(self, output_root: Path, ticker: str) -> WorkspacePaths:
+        stock_root = output_root / "stocks" / ticker
+        edgar_root = stock_root / ".edgar"
+        metadata_dir = edgar_root / "metadata"
+        submissions_dir = metadata_dir / "submissions"
+        exports_dir = edgar_root / "exports"
+        manifests_dir = edgar_root / "manifests"
+        intelligence_dir = edgar_root / "intelligence"
+        return WorkspacePaths(
+            output_root=output_root,
+            stock_root=stock_root,
+            edgar_root=edgar_root,
+            metadata_dir=metadata_dir,
+            submissions_dir=submissions_dir,
+            exports_dir=exports_dir,
+            manifests_dir=manifests_dir,
+            intelligence_dir=intelligence_dir,
+            manifest_path=manifests_dir / "download-manifest.json",
+            last_sync_path=manifests_dir / "last-sync.json",
+            workspace_path=manifests_dir / "workspace.json",
+            accession_state_path=metadata_dir / "accession-state.json",
+        )
+
+    def _ensure_workspace_dirs(self, paths: WorkspacePaths) -> None:
+        for directory in (
+            paths.stock_root,
+            paths.metadata_dir,
+            paths.submissions_dir,
+            paths.exports_dir,
+            paths.manifests_dir,
+            paths.intelligence_dir,
+        ):
+            directory.mkdir(parents=True, exist_ok=True)
+
+    def _fetch_submission_payloads(
+        self,
+        *,
+        resolved: ResolvedCompany,
+        options: EdgarRuntimeOptions,
+        submissions_dir: Path,
+        manifest: dict[str, Any],
+        edgar_root: Path,
+        counters: DownloadCounters,
+        previous_metadata_snapshot: dict[str, Any] | None = None,
+        force_refresh: bool = False,
+    ) -> list[dict[str, Any]]:
+        recent_submission_url = SUBMISSIONS_URL_TEMPLATE.format(cik10=resolved.cik10)
+        self._write_json_artifact(
+            submissions_dir / f"CIK{resolved.cik10}.json",
+            resolved.submissions_payload,
+            recent_submission_url,
+            manifest,
+            edgar_root,
+        )
+        counters.metadata_files_synced += 1
+
+        payloads: list[dict[str, Any]] = [resolved.submissions_payload]
+        cached_filings = previous_metadata_snapshot.get("filings") if previous_metadata_snapshot else None
+        should_fetch_full_history = force_refresh or not isinstance(cached_filings, list) or not cached_filings
+        if not should_fetch_full_history:
+            return payloads
+
+        for older_reference in resolved.submissions_payload.get("filings", {}).get("files", []):
+            name = str(older_reference.get("name") or "").strip()
+            if not name:
+                continue
+            older_url = OLDER_SUBMISSIONS_URL_TEMPLATE.format(name=name)
+            older_payload = self._get_json(older_url, options)
+            payloads.append(older_payload)
+            self._write_json_artifact(submissions_dir / name, older_payload, older_url, manifest, edgar_root)
+            counters.metadata_files_synced += 1
+        return payloads
+
+    def _merge_cached_filing_rows(
+        self,
+        current_filings: list[dict[str, Any]],
+        previous_metadata_snapshot: dict[str, Any] | None,
+    ) -> list[dict[str, Any]]:
+        merged: dict[str, dict[str, Any]] = {}
+
+        cached_filings = previous_metadata_snapshot.get("filings") if previous_metadata_snapshot else None
+        if isinstance(cached_filings, list):
+            for filing in cached_filings:
+                if not isinstance(filing, dict):
+                    continue
+                accession = str(filing.get("accessionNumber") or "")
+                if accession:
+                    merged[accession] = filing
+
+        for filing in current_filings:
+            accession = str(filing.get("accessionNumber") or "")
+            if accession:
+                merged[accession] = filing
+
+        return sorted(
+            merged.values(),
+            key=lambda filing: (str(filing.get("filingDate") or ""), str(filing.get("accessionNumber") or "")),
+            reverse=True,
+        )
+
+    def _select_smart_working_set(self, filings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not filings:
+            return []
+
+        selected: dict[str, dict[str, Any]] = {}
+        annual_forms = self._annual_form_family(filings)
+        quarterly_forms = {"10-Q", "10-Q/A"} if any(str(filing.get("form") or "").upper() in {"10-Q", "10-Q/A"} for filing in filings) else set()
+        if annual_forms:
+            self._select_distinct_period_filings(filings, annual_forms, limit=3, selected=selected)
+        if quarterly_forms:
+            self._select_distinct_period_filings(filings, quarterly_forms, limit=12, selected=selected)
+
+        if any(str(filing.get("form") or "").upper() in {"6-K", "6-K/A"} for filing in filings):
+            current_forms = {"6-K", "6-K/A"}
+        elif any(str(filing.get("form") or "").upper() in {"8-K", "8-K/A"} for filing in filings):
+            current_forms = {"8-K", "8-K/A"}
+        else:
+            current_forms = set()
+        if current_forms:
+            self._select_recent_filings(filings, current_forms, max_age=timedelta(days=730), selected=selected)
+
+        if not selected:
+            for filing in filings[:12]:
+                accession = str(filing.get("accessionNumber") or "")
+                if accession:
+                    selected[accession] = filing
+
+        return sorted(
+            selected.values(),
+            key=lambda filing: (str(filing.get("filingDate") or ""), str(filing.get("accessionNumber") or "")),
+            reverse=True,
+        )
+
+    def _annual_form_family(self, filings: list[dict[str, Any]]) -> set[str]:
+        forms = {str(filing.get("form") or "").upper() for filing in filings}
+        if {"20-F", "20-F/A"} & forms:
+            return {"20-F", "20-F/A"}
+        if {"40-F", "40-F/A"} & forms:
+            return {"40-F", "40-F/A"}
+        if {"10-K", "10-K/A"} & forms:
+            return {"10-K", "10-K/A"}
+        return set()
+
+    def _select_distinct_period_filings(
+        self,
+        filings: list[dict[str, Any]],
+        forms: set[str],
+        *,
+        limit: int,
+        selected: dict[str, dict[str, Any]],
+    ) -> None:
+        selected_periods: set[str] = set()
+        for filing in filings:
+            form = str(filing.get("form") or "").upper()
+            if form not in forms:
+                continue
+            period_key = str(filing.get("reportDate") or filing.get("filingDate") or filing.get("accessionNumber") or "")
+            if period_key not in selected_periods and len(selected_periods) >= limit:
+                continue
+            selected_periods.add(period_key)
+            accession = str(filing.get("accessionNumber") or "")
+            if accession:
+                selected[accession] = filing
+
+    def _select_recent_filings(
+        self,
+        filings: list[dict[str, Any]],
+        forms: set[str],
+        *,
+        max_age: timedelta,
+        selected: dict[str, dict[str, Any]],
+    ) -> None:
+        cutoff = datetime.now(UTC).date() - max_age
+        for filing in filings:
+            form = str(filing.get("form") or "").upper()
+            if form not in forms:
+                continue
+            filing_date = str(filing.get("filingDate") or "").strip()
+            if not filing_date:
+                continue
+            try:
+                parsed = date.fromisoformat(filing_date)
+            except ValueError:
+                continue
+            if parsed < cutoff:
+                continue
+            accession = str(filing.get("accessionNumber") or "")
+            if accession:
+                selected[accession] = filing
+
+    def _app_global_cache_root(self) -> Path:
+        return self._settings.research_root
+
+    def _issuer_registry_json_path(self) -> Path:
+        return self._app_global_cache_root() / ".sec" / "issuer-registry" / "company_tickers.json"
+
+    def _issuer_registry_freshness_path(self) -> Path:
+        return self._app_global_cache_root() / ".sec" / "issuer-registry" / "freshness.json"
+
+    def _global_metadata_snapshot_path(self, cik10: str) -> Path:
+        return self._app_global_cache_root() / ".sec" / "filing-metadata" / "issuers" / f"CIK{cik10}.json"
+
+    def _load_global_metadata_snapshot(self, cik10: str) -> dict[str, Any] | None:
+        return self._load_json_document(self._global_metadata_snapshot_path(cik10))
+
+    def _persist_global_metadata_snapshot(self, resolved: ResolvedCompany, filings: list[dict[str, Any]]) -> dict[str, Any]:
+        captured_at = datetime.now(UTC)
+        payload = {
+            "schemaVersion": 1,
+            "ticker": resolved.ticker,
+            "companyName": resolved.company_name,
+            "cik": resolved.cik10,
+            "lastRefreshedAt": captured_at.isoformat(),
+            "lastLiveCheckedAt": captured_at.isoformat(),
+            "latestKnownAccession": str(filings[0].get("accessionNumber") or "") if filings else None,
+            "filings": filings,
+        }
+        path = self._global_metadata_snapshot_path(resolved.cik10)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+        return payload
+
+    def _snapshot_accessions(self, snapshot: dict[str, Any] | None) -> set[str]:
+        if snapshot is None:
+            return set()
+        filings = snapshot.get("filings")
+        if not isinstance(filings, list):
+            return set()
+        return {
+            str(filing.get("accessionNumber") or "")
+            for filing in filings
+            if isinstance(filing, dict) and str(filing.get("accessionNumber") or "")
+        }
+
+    def _load_accession_state(self, path: Path) -> dict[str, Any] | None:
+        return self._load_json_document(path)
+
+    def _persist_accession_state(
+        self,
+        *,
+        path: Path,
+        ticker: str,
+        cik10: str,
+        stock_root: Path,
+        all_filings: list[dict[str, Any]],
+        selected_filings: list[dict[str, Any]],
+        cached_accessions: set[str],
+        downloaded_accessions: set[str],
+        skipped_accessions: set[str],
+        failed_accessions: set[str],
+        previous_state: dict[str, Any] | None,
+        refreshed_at: datetime,
+    ) -> None:
+        previous_records = previous_state.get("accessions") if previous_state else None
+        if not isinstance(previous_records, dict):
+            previous_records = {}
+
+        previous_versions = previous_state.get("processingVersions") if previous_state else None
+        if not isinstance(previous_versions, dict):
+            previous_versions = {}
+
+        selected_accessions = {
+            str(filing.get("accessionNumber") or "")
+            for filing in selected_filings
+            if str(filing.get("accessionNumber") or "")
+        }
+        live_accessions = {
+            str(filing.get("accessionNumber") or "")
+            for filing in all_filings[: min(len(all_filings), 256)]
+            if str(filing.get("accessionNumber") or "")
+        }
+
+        reconciled: dict[str, dict[str, Any]] = {}
+        for filing in all_filings:
+            accession = str(filing.get("accessionNumber") or "")
+            if not accession:
+                continue
+
+            previous_record = previous_records.get(accession)
+            if not isinstance(previous_record, dict):
+                previous_record = {}
+
+            selected_by_policy = accession in selected_accessions
+            cached_now = accession in cached_accessions
+            downloaded_now = accession in downloaded_accessions
+            failed_now = accession in failed_accessions
+            skipped_now = accession in skipped_accessions
+            previous_body_status = str(previous_record.get("bodyStatus") or "")
+            previous_index_status = str(previous_record.get("indexStatus") or "")
+
+            if selected_by_policy:
+                if failed_now and not cached_now:
+                    body_status = "failed"
+                elif downloaded_now or cached_now:
+                    body_status = "cached"
+                elif previous_body_status in {"cached", "failed", "invalidated"}:
+                    body_status = previous_body_status
+                elif skipped_now:
+                    body_status = "skipped"
+                else:
+                    body_status = "pending"
+            else:
+                body_status = previous_body_status if previous_body_status in {"cached", "failed", "skipped", "invalidated"} else "skipped"
+
+            content_hash = previous_record.get("contentHash")
+            if cached_now:
+                content_hash = self._filing_artifact_fingerprint(stock_root, filing)
+
+            if selected_by_policy and cached_now:
+                if previous_index_status == "indexed" and self._processing_versions_match(previous_versions):
+                    index_status = "indexed"
+                elif previous_index_status == "failed":
+                    index_status = "failed"
+                elif previous_index_status == "invalidated":
+                    index_status = "invalidated"
+                else:
+                    index_status = "pending"
+            elif selected_by_policy:
+                index_status = "invalidated" if previous_index_status == "indexed" else "pending"
+            else:
+                index_status = previous_index_status if previous_index_status in {"indexed", "failed", "invalidated"} else "pending"
+
+            reconciled[accession] = {
+                "accessionNumber": accession,
+                "form": str(filing.get("form") or "").upper(),
+                "filingDate": str(filing.get("filingDate") or ""),
+                "isAmendment": str(filing.get("form") or "").upper().endswith("/A"),
+                "discoveredVia": "live" if accession in live_accessions else str(previous_record.get("discoveredVia") or "bulk"),
+                "bodyStatus": body_status,
+                "indexStatus": index_status,
+                "contentHash": content_hash,
+                "selectedByPolicyVersion": BODY_COVERAGE_POLICY_VERSION if selected_by_policy else None,
+            }
+
+        payload = {
+            "schemaVersion": 1,
+            "ticker": ticker,
+            "cik": cik10,
+            "lastMetadataRefreshAt": refreshed_at.isoformat(),
+            "lastLiveOverlayCheckAt": refreshed_at.isoformat(),
+            "lastBodyRefreshAt": refreshed_at.isoformat(),
+            "lastIndexRefreshAt": previous_state.get("lastIndexRefreshAt") if previous_state else None,
+            "processingVersions": {
+                "bodyCoveragePolicyVersion": BODY_COVERAGE_POLICY_VERSION,
+                "indexSchemaVersion": previous_versions.get("indexSchemaVersion") or INDEX_SCHEMA_VERSION,
+                "chunkingVersion": previous_versions.get("chunkingVersion") or CHUNKING_VERSION,
+                "embeddingModelVersion": previous_versions.get("embeddingModelVersion") or EMBEDDING_MODEL_VERSION,
+            },
+            "latestKnownAccession": next(
+                (str(filing.get("accessionNumber") or "") for filing in all_filings if str(filing.get("accessionNumber") or "")),
+                None,
+            ),
+            "latestBodyCachedAccession": next(
+                (
+                    str(filing.get("accessionNumber") or "")
+                    for filing in all_filings
+                    if str(filing.get("accessionNumber") or "") in cached_accessions
+                ),
+                None,
+            ),
+            "latestIndexedAccession": next(
+                (
+                    str(filing.get("accessionNumber") or "")
+                    for filing in all_filings
+                    if reconciled.get(str(filing.get("accessionNumber") or ""), {}).get("indexStatus") == "indexed"
+                ),
+                None,
+            ),
+            "accessions": reconciled,
+        }
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+    def _processing_versions_match(self, versions: dict[str, Any]) -> bool:
+        return (
+            str(versions.get("indexSchemaVersion") or "") == INDEX_SCHEMA_VERSION
+            and str(versions.get("chunkingVersion") or "") == CHUNKING_VERSION
+            and str(versions.get("embeddingModelVersion") or "") == EMBEDDING_MODEL_VERSION
+        )
+
+    def _filing_artifact_fingerprint(self, stock_root: Path, filing: dict[str, Any]) -> str | None:
+        filing_dir = stock_root / self._filing_folder_name(filing)
+        if not filing_dir.exists():
+            return None
+
+        digest = hashlib.sha256()
+        file_found = False
+        for artifact_path in sorted(path for path in filing_dir.rglob("*") if path.is_file()):
+            file_found = True
+            relative_name = artifact_path.relative_to(filing_dir).as_posix()
+            digest.update(relative_name.encode("utf-8"))
+            digest.update(str(artifact_path.stat().st_size).encode("utf-8"))
+            with artifact_path.open("rb") as handle:
+                digest.update(handle.read())
+        return digest.hexdigest() if file_found else None
+
+    def _build_body_cache_state(
+        self,
+        *,
+        counters: DownloadCounters,
+        matched_filings: int,
+        cached_filings: int,
+        last_refreshed_at: datetime,
+    ) -> EdgarBodyCacheState:
+        if matched_filings == 0:
+            status = "missing"
+            message = "No filings matched the current default EDGAR coverage policy."
+        elif counters.failed_files and cached_filings:
+            status = "partial"
+            message = "Some filing bodies were updated, but one or more downloads failed."
+        elif counters.failed_files and not cached_filings:
+            status = "degraded"
+            message = "Filing-body download failed for the current working set."
+        elif counters.downloaded_files:
+            status = "updated"
+            message = "Recent filing bodies were refreshed locally."
+        else:
+            status = "ready" if cached_filings else "missing"
+            message = "Local filing bodies are already current for the default working set." if cached_filings else "No filing bodies are cached locally yet."
+
+        return EdgarBodyCacheState(
+            status=status,
+            lastRefreshedAt=last_refreshed_at,
+            matchedFilings=matched_filings,
+            cachedFilings=cached_filings,
+            downloadedFilings=counters.downloaded_files,
+            skippedFilings=counters.skipped_files,
+            failedFilings=counters.failed_files,
+            message=message,
+        )
+
+    def _build_intelligence_state(self, paths: WorkspacePaths) -> EdgarIntelligenceState:
+        last_index_path = paths.intelligence_dir / "jobs" / "last-index.json"
+        last_index_payload = self._load_json_document(last_index_path)
+        last_indexed_at = self._parse_datetime(last_index_payload.get("lastIndexedAt")) if last_index_payload else None
+        indexed_filings = int(last_index_payload.get("indexedFilings") or 0) if last_index_payload else 0
+        if indexed_filings > 0:
+            return EdgarIntelligenceState(
+                status="not-ready",
+                questionAnsweringEnabled=False,
+                detail="Indexed filing artifacts are present, but local filing Q&A is not enabled in this build yet.",
+                lastIndexedAt=last_indexed_at,
+                indexedFilings=indexed_filings,
+            )
+        return EdgarIntelligenceState(
+            status="unavailable",
+            questionAnsweringEnabled=False,
+            detail="Local filing Q&A will be enabled after the EDGAR intelligence layer is implemented.",
+            lastIndexedAt=last_indexed_at,
+            indexedFilings=indexed_filings,
+        )
+
+    def _persist_workspace_snapshot_from_download_response(
+        self,
+        response: EdgarDownloadResponse,
+        *,
+        metadata_state: EdgarMetadataState | None = None,
+        intelligence_state: EdgarIntelligenceState | None = None,
+    ) -> None:
+        output_root = Path(response.researchRootPath).expanduser()
+        paths = self._workspace_paths(output_root, response.ticker)
+        workspace_response = self._build_workspace_snapshot_from_download_response(
+            response,
+            metadata_state=metadata_state
+            or EdgarMetadataState(
+                status="fresh",
+                lastRefreshedAt=response.syncedAt,
+                lastLiveCheckedAt=response.syncedAt,
+                newAccessions=0,
+                message="This workspace snapshot was produced by the legacy EDGAR downloader contract.",
+            ),
+            intelligence_state=intelligence_state or self._build_intelligence_state(paths),
+        )
+        paths.workspace_path.parent.mkdir(parents=True, exist_ok=True)
+        paths.workspace_path.write_text(json.dumps(workspace_response.model_dump(mode="json"), indent=2, sort_keys=True), encoding="utf-8")
+
+    def _build_workspace_snapshot_from_download_response(
+        self,
+        response: EdgarDownloadResponse,
+        *,
+        metadata_state: EdgarMetadataState,
+        intelligence_state: EdgarIntelligenceState,
+    ) -> EdgarWorkspaceResponse:
+        body_cache_state = self._build_body_cache_state(
+            counters=DownloadCounters(
+                metadata_files_synced=response.metadataFilesSynced,
+                downloaded_files=response.downloadedFiles,
+                skipped_files=response.skippedFiles,
+                failed_files=response.failedFiles,
+            ),
+            matched_filings=response.matchedFilings,
+            cached_filings=max(response.matchedFilings - response.failedFiles, 0),
+            last_refreshed_at=response.syncedAt,
+        )
+        return EdgarWorkspaceResponse(
+            ticker=response.ticker,
+            companyName=response.companyName,
+            cik=response.cik,
+            workspace=EdgarWorkspaceSelector(
+                ticker=response.ticker,
+                outputDir=response.researchRootPath if Path(response.researchRootPath) != self._settings.research_root else None,
+            ),
+            stockPath=response.stockPath,
+            edgarPath=response.edgarPath,
+            exportsJsonPath=response.exportsJsonPath,
+            exportsCsvPath=response.exportsCsvPath,
+            manifestPath=response.manifestPath,
+            lastSyncedAt=response.syncedAt,
+            metadataState=metadata_state,
+            bodyCacheState=body_cache_state,
+            intelligenceState=intelligence_state,
+        )
+
+    def _filing_is_cached(self, stock_root: Path, filing: dict[str, Any]) -> bool:
+        filing_dir = stock_root / self._filing_folder_name(filing)
+        primary_document = str(filing.get("primaryDocument") or "").strip()
+        if primary_document and (filing_dir / "primary" / primary_document).exists():
+            return True
+        return filing_dir.exists() and any(filing_dir.rglob("*"))
+
+    def _load_json_document(self, path: Path) -> dict[str, Any] | None:
+        if not path.exists():
+            return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    def _parse_datetime(self, value: Any) -> datetime | None:
+        if not isinstance(value, str) or not value.strip():
+            return None
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+
+    def _freshness_is_usable(self, freshness_path: Path, *, max_age: timedelta) -> bool:
+        payload = self._load_json_document(freshness_path)
+        if payload is None:
+            return False
+        refreshed_at = self._parse_datetime(payload.get("lastRefreshedAt"))
+        if refreshed_at is None:
+            return False
+        return datetime.now(UTC) - refreshed_at <= max_age
+
+    def _resolve_company(
+        self,
+        request: EdgarDownloadRequest,
+        options: EdgarRuntimeOptions,
+        *,
+        force_refresh: bool = False,
+    ) -> ResolvedCompany:
         if request.cik:
             cik10 = request.cik.zfill(10)
             submissions_payload = self._get_json(SUBMISSIONS_URL_TEMPLATE.format(cik10=cik10), options)
             return self._resolved_company_from_payload(submissions_payload, fallback_ticker=request.ticker)
 
-        company_lookup = self._load_company_lookup(options)
+        company_lookup = self._load_company_lookup(options, force_refresh=force_refresh)
         if request.ticker:
             matches = [item for item in company_lookup if str(item.get("ticker", "")).upper() == request.ticker]
             if not matches:
@@ -300,13 +1125,44 @@ class EdgarDownloader:
             submissions_payload=payload,
         )
 
-    def _load_company_lookup(self, options: EdgarRuntimeOptions) -> list[dict[str, Any]]:
+    def _load_company_lookup(self, options: EdgarRuntimeOptions, *, force_refresh: bool = False) -> list[dict[str, Any]]:
+        registry_json_path = self._issuer_registry_json_path()
+        freshness_path = self._issuer_registry_freshness_path()
         with self._company_lookup_lock:
-            if self._company_lookup_cache is None:
+            if self._company_lookup_cache is not None and not force_refresh:
+                return self._company_lookup_cache
+
+            cached_payload = self._load_json_document(registry_json_path)
+            cached_is_fresh = self._freshness_is_usable(freshness_path, max_age=timedelta(hours=24))
+            if cached_payload and cached_is_fresh and not force_refresh:
+                self._company_lookup_cache = list(cached_payload.values()) if isinstance(cached_payload, dict) else None
+                if self._company_lookup_cache is not None:
+                    return self._company_lookup_cache
+
+            try:
                 payload = self._get_json(COMPANY_TICKERS_URL, options)
-                if not isinstance(payload, dict):
-                    raise ValueError("Unexpected SEC company_tickers.json payload.")
-                self._company_lookup_cache = list(payload.values())
+            except RuntimeError:
+                if cached_payload and isinstance(cached_payload, dict):
+                    self._company_lookup_cache = list(cached_payload.values())
+                    return self._company_lookup_cache
+                raise
+            if not isinstance(payload, dict):
+                raise ValueError("Unexpected SEC company_tickers.json payload.")
+            registry_json_path.parent.mkdir(parents=True, exist_ok=True)
+            registry_json_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+            freshness_path.parent.mkdir(parents=True, exist_ok=True)
+            freshness_path.write_text(
+                json.dumps(
+                    {
+                        "lastRefreshedAt": datetime.now(UTC).isoformat(),
+                        "sourceUrl": COMPANY_TICKERS_URL,
+                    },
+                    indent=2,
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+            self._company_lookup_cache = list(payload.values())
             return self._company_lookup_cache
 
     def _build_filing_rows(self, payloads: list[dict[str, Any]], resolved: ResolvedCompany) -> list[dict[str, Any]]:

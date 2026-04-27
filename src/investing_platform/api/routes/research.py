@@ -8,6 +8,11 @@ from investing_platform.models import (
     EdgarDownloadRequest,
     EdgarDownloadResponse,
     EdgarSourceStatus,
+    EdgarSyncRequest,
+    EdgarSyncResponse,
+    EdgarIntelligenceState,
+    EdgarWorkspaceRequest,
+    EdgarWorkspaceResponse,
     InvestorPdfDownloadRequest,
     InvestorPdfDownloadResponse,
     InvestorPdfSourceStatus,
@@ -38,6 +43,36 @@ def edgar_download(request: EdgarDownloadRequest) -> EdgarDownloadResponse:
 def edgar_last_sync(request: EdgarDownloadRequest) -> EdgarDownloadResponse | None:
     try:
         return edgar_service().last_sync(request)
+    except ValueError as exc:
+        bad_request(exc)
+    except RuntimeError as exc:
+        upstream_error(exc)
+
+
+@router.post("/edgar/sync", response_model=EdgarSyncResponse)
+def edgar_sync(request: EdgarSyncRequest) -> EdgarSyncResponse:
+    try:
+        return edgar_service().sync(request)
+    except ValueError as exc:
+        bad_request(exc)
+    except RuntimeError as exc:
+        upstream_error(exc)
+
+
+@router.post("/edgar/workspace", response_model=EdgarWorkspaceResponse | None)
+def edgar_workspace(request: EdgarWorkspaceRequest) -> EdgarWorkspaceResponse | None:
+    try:
+        return edgar_service().workspace(request)
+    except ValueError as exc:
+        bad_request(exc)
+    except RuntimeError as exc:
+        upstream_error(exc)
+
+
+@router.get("/edgar/intelligence/status", response_model=EdgarIntelligenceState)
+def edgar_intelligence_status(ticker: str, outputDir: str | None = None, jobId: str | None = None) -> EdgarIntelligenceState:
+    try:
+        return edgar_service().intelligence_status(ticker=ticker, output_dir=outputDir, job_id=jobId)
     except ValueError as exc:
         bad_request(exc)
     except RuntimeError as exc:

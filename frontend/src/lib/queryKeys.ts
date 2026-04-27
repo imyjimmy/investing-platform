@@ -28,6 +28,7 @@ export const queryKeys = {
         ? (["filesystem-connector-documents", accountKey, sourceId] as const)
         : (["filesystem-connector-documents", accountKey] as const),
     edgarStatus: ["edgar-status"] as const,
+    edgarWorkspace: (request: unknown) => ["edgar-workspace", request] as const,
     edgarLastSync: (request: unknown) => ["edgar-last-sync", request] as const,
     investorPdfStatus: ["investor-pdf-status"] as const,
     investorPdfLastSync: (request: unknown) => ["investor-pdfs-last-sync", request] as const,

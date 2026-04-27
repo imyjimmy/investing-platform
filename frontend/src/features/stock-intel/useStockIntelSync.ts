@@ -15,7 +15,7 @@ export function useStockIntelSync() {
     investorPdfStatusQuery,
     investorPdfSyncing,
   } = useStockIntelSourceStatus();
-  const { edgarSyncError, edgarSyncResult, runEdgarDownload } = useEdgarSync();
+  const { edgarSyncError, edgarSyncResult, runEdgarSync } = useEdgarSync();
   const { investorPdfSyncError, investorPdfSyncResult, runInvestorPdfDownload } = useInvestorPdfSync();
 
   return {
@@ -30,7 +30,7 @@ export function useStockIntelSync() {
     investorPdfSyncError,
     investorPdfSyncing,
     investorPdfSyncResult,
-    runEdgarDownload,
+    runEdgarSync,
     runInvestorPdfDownload,
     setActiveStockIntelTab,
   };

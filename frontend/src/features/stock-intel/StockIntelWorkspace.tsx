@@ -21,7 +21,7 @@ export function StockIntelWorkspace({ defaultTicker }: StockIntelWorkspaceProps)
     investorPdfSyncError,
     investorPdfSyncing,
     investorPdfSyncResult,
-    runEdgarDownload,
+    runEdgarSync,
     runInvestorPdfDownload,
     setActiveStockIntelTab,
   } = useStockIntelSync();
@@ -38,7 +38,7 @@ export function StockIntelWorkspace({ defaultTicker }: StockIntelWorkspaceProps)
         <EdgarWorkspace
           defaultTicker={defaultTicker}
           onRun={(request) => {
-            void runEdgarDownload(request);
+            void runEdgarSync(request);
           }}
           status={edgarStatusQuery.data}
           statusLoading={edgarStatusQuery.isLoading}

@@ -3,7 +3,12 @@ import type {
   CoinbaseSourceStatus,
   EdgarDownloadRequest,
   EdgarDownloadResponse,
+  EdgarIntelligenceState,
   EdgarSourceStatus,
+  EdgarSyncRequest,
+  EdgarSyncResponse,
+  EdgarWorkspaceRequest,
+  EdgarWorkspaceResponse,
   FilesystemConnectorConfigRequest,
   FilesystemConnectorPortfolioResponse,
   FilesystemConnectorStatus,
@@ -58,6 +63,14 @@ export const sourceApi = {
       withAccountKey(`/api/sources/filesystem/sources/${encodeURIComponent(sourceId)}/documents`, accountKey),
     ),
   edgarStatus: () => fetchJson<EdgarSourceStatus>("/api/sources/edgar/status"),
+  edgarSync: (request: EdgarSyncRequest) => postJson<EdgarSyncResponse>("/api/sources/edgar/sync", request),
+  edgarWorkspace: (request: EdgarWorkspaceRequest) => postJson<EdgarWorkspaceResponse | null>("/api/sources/edgar/workspace", request),
+  edgarIntelligenceStatus: (request: EdgarWorkspaceRequest, jobId?: string) =>
+    fetchJson<EdgarIntelligenceState>(
+      `/api/sources/edgar/intelligence/status?ticker=${encodeURIComponent(request.ticker)}${
+        request.outputDir ? `&outputDir=${encodeURIComponent(request.outputDir)}` : ""
+      }${jobId ? `&jobId=${encodeURIComponent(jobId)}` : ""}`,
+    ),
   edgarDownload: (request: EdgarDownloadRequest) => postJson<EdgarDownloadResponse>("/api/sources/edgar/download", request),
   edgarLastSync: (request: EdgarDownloadRequest) => postJson<EdgarDownloadResponse | null>("/api/sources/edgar/last-sync", request),
   investorPdfStatus: () => fetchJson<InvestorPdfSourceStatus>("/api/sources/investor-pdfs/status"),

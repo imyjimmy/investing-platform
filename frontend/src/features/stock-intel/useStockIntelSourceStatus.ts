@@ -15,7 +15,7 @@ export function useStockIntelSourceStatus() {
     queryFn: sourceApi.investorPdfStatus,
   });
 
-  const edgarSyncing = useIsMutating({ mutationKey: stockIntelMutationKeys.edgarDownload }) > 0;
+  const edgarSyncing = useIsMutating({ mutationKey: stockIntelMutationKeys.edgarSync }) > 0;
   const investorPdfSyncing = useIsMutating({ mutationKey: stockIntelMutationKeys.investorPdfDownload }) > 0;
 
   return {

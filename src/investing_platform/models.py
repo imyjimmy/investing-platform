@@ -1190,6 +1190,94 @@ class EdgarDownloadResponse(DashboardModel):
     syncedAt: datetime
 
 
+class EdgarSyncRequest(DashboardModel):
+    issuerQuery: str
+    outputDir: str | None = None
+    forceRefresh: bool = False
+
+    @field_validator("issuerQuery")
+    @classmethod
+    def _normalize_issuer_query(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Provide a ticker, company name, or CIK.")
+        return normalized
+
+
+class EdgarWorkspaceRequest(DashboardModel):
+    ticker: str
+    outputDir: str | None = None
+
+    @field_validator("ticker")
+    @classmethod
+    def _normalize_workspace_ticker(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if not normalized:
+            raise ValueError("Provide a ticker.")
+        return normalized
+
+
+class EdgarWorkspaceSelector(DashboardModel):
+    ticker: str
+    outputDir: str | None = None
+
+
+class EdgarMetadataState(DashboardModel):
+    status: Literal["fresh", "stale", "degraded"]
+    lastRefreshedAt: datetime | None = None
+    lastLiveCheckedAt: datetime | None = None
+    newAccessions: int = 0
+    message: str | None = None
+
+
+class EdgarBodyCacheState(DashboardModel):
+    status: Literal["missing", "updated", "ready", "partial", "degraded"]
+    lastRefreshedAt: datetime | None = None
+    matchedFilings: int = 0
+    cachedFilings: int = 0
+    downloadedFilings: int = 0
+    skippedFilings: int = 0
+    failedFilings: int = 0
+    message: str | None = None
+
+
+class EdgarIntelligenceState(DashboardModel):
+    status: Literal["unavailable", "not-ready", "queued", "indexing", "ready"]
+    questionAnsweringEnabled: bool = False
+    detail: str | None = None
+    lastIndexedAt: datetime | None = None
+    indexedFilings: int = 0
+    jobId: str | None = None
+    polledVia: str | None = None
+
+
+class EdgarSyncResponse(DashboardModel):
+    issuerQuery: str
+    resolvedTicker: str
+    resolvedCompanyName: str
+    resolvedCik: str
+    workspace: EdgarWorkspaceSelector
+    metadataState: EdgarMetadataState
+    bodyCacheState: EdgarBodyCacheState
+    intelligenceState: EdgarIntelligenceState
+
+
+class EdgarWorkspaceResponse(DashboardModel):
+    ticker: str
+    companyName: str
+    cik: str
+    workspace: EdgarWorkspaceSelector
+    stockPath: str
+    edgarPath: str
+    exportsJsonPath: str | None = None
+    exportsCsvPath: str | None = None
+    manifestPath: str | None = None
+    lastSyncedAt: datetime | None = None
+    metadataState: EdgarMetadataState
+    bodyCacheState: EdgarBodyCacheState
+    intelligenceState: EdgarIntelligenceState
+
+
 class InvestorPdfSourceStatus(DashboardModel):
     available: bool
     status: Literal["ready", "degraded"]

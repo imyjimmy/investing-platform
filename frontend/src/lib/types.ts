@@ -930,6 +930,78 @@ export interface EdgarDownloadResponse {
   syncedAt: string;
 }
 
+export interface EdgarSyncRequest {
+  issuerQuery: string;
+  outputDir?: string;
+  forceRefresh?: boolean;
+}
+
+export interface EdgarWorkspaceRequest {
+  ticker: string;
+  outputDir?: string;
+}
+
+export interface EdgarWorkspaceSelector {
+  ticker: string;
+  outputDir?: string | null;
+}
+
+export interface EdgarMetadataState {
+  status: "fresh" | "stale" | "degraded";
+  lastRefreshedAt?: string | null;
+  lastLiveCheckedAt?: string | null;
+  newAccessions: number;
+  message?: string | null;
+}
+
+export interface EdgarBodyCacheState {
+  status: "missing" | "updated" | "ready" | "partial" | "degraded";
+  lastRefreshedAt?: string | null;
+  matchedFilings: number;
+  cachedFilings: number;
+  downloadedFilings: number;
+  skippedFilings: number;
+  failedFilings: number;
+  message?: string | null;
+}
+
+export interface EdgarIntelligenceState {
+  status: "unavailable" | "not-ready" | "queued" | "indexing" | "ready";
+  questionAnsweringEnabled: boolean;
+  detail?: string | null;
+  lastIndexedAt?: string | null;
+  indexedFilings: number;
+  jobId?: string | null;
+  polledVia?: string | null;
+}
+
+export interface EdgarSyncResponse {
+  issuerQuery: string;
+  resolvedTicker: string;
+  resolvedCompanyName: string;
+  resolvedCik: string;
+  workspace: EdgarWorkspaceSelector;
+  metadataState: EdgarMetadataState;
+  bodyCacheState: EdgarBodyCacheState;
+  intelligenceState: EdgarIntelligenceState;
+}
+
+export interface EdgarWorkspaceResponse {
+  ticker: string;
+  companyName: string;
+  cik: string;
+  workspace: EdgarWorkspaceSelector;
+  stockPath: string;
+  edgarPath: string;
+  exportsJsonPath?: string | null;
+  exportsCsvPath?: string | null;
+  manifestPath?: string | null;
+  lastSyncedAt?: string | null;
+  metadataState: EdgarMetadataState;
+  bodyCacheState: EdgarBodyCacheState;
+  intelligenceState: EdgarIntelligenceState;
+}
+
 export interface InvestorPdfSourceStatus {
   available: boolean;
   status: "ready" | "degraded";
