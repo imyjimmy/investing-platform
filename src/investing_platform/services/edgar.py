@@ -1,8 +1,7 @@
-"""SEC EDGAR downloader and source status helpers."""
+"""SEC EDGAR raw artifact helpers and service facade."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 import csv
 import hashlib
@@ -30,100 +29,28 @@ from investing_platform.models import (
     EdgarWorkspaceResponse,
     EdgarWorkspaceSelector,
 )
-
-
-COMPANY_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
-SUBMISSIONS_URL_TEMPLATE = "https://data.sec.gov/submissions/CIK{cik10}.json"
-OLDER_SUBMISSIONS_URL_TEMPLATE = "https://data.sec.gov/submissions/{name}"
-ARCHIVE_BASE_URL_TEMPLATE = "https://www.sec.gov/Archives/edgar/data/{cik}/{accession}"
-RETRYABLE_STATUS_CODES = {403, 429, 500, 502, 503, 504}
-FILING_EXPORT_FIELDS = [
-    "ticker",
-    "companyName",
-    "cik",
-    "cik10",
-    "form",
-    "filingDate",
-    "reportDate",
-    "acceptanceDateTime",
-    "accessionNumber",
-    "accessionNumberNoDashes",
-    "primaryDocument",
-    "primaryDocDescription",
-    "items",
-    "act",
-    "fileNumber",
-    "filmNumber",
-    "size",
-    "isXBRL",
-    "isInlineXBRL",
-    "archiveBaseUrl",
-    "primaryDocumentUrl",
-]
-EXHIBIT_NAME_RE = re.compile(r"(?i)(?:^|[/_-])(?:ex(?:hibit)?|xex)\d")
-BODY_COVERAGE_POLICY_VERSION = "phase1-default-v1"
-INDEX_SCHEMA_VERSION = "pending-v1"
-CHUNKING_VERSION = "pending-v1"
-EMBEDDING_MODEL_VERSION = "pending-v1"
-
-
-@dataclass(slots=True)
-class EdgarRuntimeOptions:
-    user_agent: str
-    max_requests_per_second: float
-    timeout_seconds: float
-    retry_limit: int
-
-
-@dataclass(slots=True)
-class ResolvedCompany:
-    cik: str
-    cik10: str
-    ticker: str
-    company_name: str
-    submissions_payload: dict[str, Any]
-
-
-@dataclass(slots=True)
-class DownloadCounters:
-    metadata_files_synced: int = 0
-    downloaded_files: int = 0
-    skipped_files: int = 0
-    failed_files: int = 0
-
-
-@dataclass(slots=True)
-class WorkspacePaths:
-    output_root: Path
-    stock_root: Path
-    edgar_root: Path
-    metadata_dir: Path
-    submissions_dir: Path
-    exports_dir: Path
-    manifests_dir: Path
-    intelligence_dir: Path
-    manifest_path: Path
-    last_sync_path: Path
-    workspace_path: Path
-    accession_state_path: Path
-
-
-class SecRateLimiter:
-    """Conservative per-process SEC request limiter."""
-
-    def __init__(self, max_requests_per_second: float) -> None:
-        self._interval = 1.0 / max(max_requests_per_second, 0.1)
-        self._lock = threading.Lock()
-        self._last_request_at = 0.0
-
-    def wait(self) -> None:
-        with self._lock:
-            now = time.monotonic()
-            sleep_for = self._interval - (now - self._last_request_at)
-            if sleep_for > 0:
-                time.sleep(sleep_for)
-                now = time.monotonic()
-            self._last_request_at = now
+from investing_platform.services.edgar_common import (
+    ARCHIVE_BASE_URL_TEMPLATE,
+    BODY_COVERAGE_POLICY_VERSION,
+    CHUNKING_VERSION,
+    COMPANY_TICKERS_URL,
+    DownloadCounters,
+    EMBEDDING_MODEL_VERSION,
+    EXHIBIT_NAME_RE,
+    FILING_EXPORT_FIELDS,
+    INDEX_SCHEMA_VERSION,
+    OLDER_SUBMISSIONS_URL_TEMPLATE,
+    RETRYABLE_STATUS_CODES,
+    ResolvedCompany,
+    SecRateLimiter,
+    SUBMISSIONS_URL_TEMPLATE,
+    WorkspacePaths,
+    EdgarRuntimeOptions,
+)
+from investing_platform.services.edgar_intelligence import EdgarIntelligenceService
+from investing_platform.services.edgar_metadata_cache import EdgarMetadataCacheService
+from investing_platform.services.edgar_resolver import EdgarResolverService
+from investing_platform.services.edgar_sync import EdgarSyncService
 
 
 class EdgarDownloader:
@@ -135,6 +62,16 @@ class EdgarDownloader:
         self._company_lookup_lock = threading.Lock()
         self._limiters: dict[float, SecRateLimiter] = {}
         self._limiters_lock = threading.Lock()
+        self._resolver_service = EdgarResolverService(settings, get_json=self._get_json)
+        self._metadata_cache_service = EdgarMetadataCacheService(settings, request=self._request)
+        self._intelligence_service = EdgarIntelligenceService()
+        self._sync_service = EdgarSyncService(
+            settings,
+            resolver=self._resolver_service,
+            metadata_cache=self._metadata_cache_service,
+            artifact_store=self,
+            intelligence=self._intelligence_service,
+        )
 
     def source_status(self) -> EdgarSourceStatus:
         user_agent = self._settings.edgar_user_agent.strip()
@@ -149,7 +86,12 @@ class EdgarDownloader:
             timeoutSeconds=self._settings.edgar_timeout_seconds,
         )
 
-    def download(self, request: EdgarDownloadRequest) -> EdgarDownloadResponse:
+    def download(
+        self,
+        request: EdgarDownloadRequest,
+        *,
+        resolver: EdgarResolverService | None = None,
+    ) -> EdgarDownloadResponse:
         options = EdgarRuntimeOptions(
             user_agent=(request.userAgent or self._settings.edgar_user_agent).strip(),
             max_requests_per_second=request.maxRequestsPerSecond or self._settings.edgar_max_requests_per_second,
@@ -162,7 +104,7 @@ class EdgarDownloader:
         output_root = Path(request.outputDir).expanduser() if request.outputDir else self._settings.research_root
         output_root.mkdir(parents=True, exist_ok=True)
 
-        resolved = self._resolve_company(request, options)
+        resolved = (resolver or self._resolver_service).resolve_download_request(request, options)
         stock_root = output_root / "stocks" / resolved.ticker
         edgar_root = stock_root / ".edgar"
         filings_dir = stock_root
@@ -256,7 +198,12 @@ class EdgarDownloader:
         self._persist_workspace_snapshot_from_download_response(response)
         return response
 
-    def last_sync(self, request: EdgarDownloadRequest) -> EdgarDownloadResponse | None:
+    def last_sync(
+        self,
+        request: EdgarDownloadRequest,
+        *,
+        resolver: EdgarResolverService | None = None,
+    ) -> EdgarDownloadResponse | None:
         output_root = Path(request.outputDir).expanduser() if request.outputDir else self._settings.research_root
         if request.ticker:
             ticker = request.ticker.strip().upper()
@@ -269,7 +216,7 @@ class EdgarDownloader:
             )
             if not options.user_agent:
                 return None
-            ticker = self._resolve_company(request, options).ticker
+            ticker = (resolver or self._resolver_service).resolve_download_request(request, options).ticker
 
         last_sync_path = output_root / "stocks" / ticker / ".edgar" / "manifests" / "last-sync.json"
         if not last_sync_path.exists():
@@ -280,209 +227,13 @@ class EdgarDownloader:
         return EdgarDownloadResponse.model_validate(payload)
 
     def sync(self, request: EdgarSyncRequest) -> EdgarSyncResponse:
-        options = self._default_runtime_options()
-        if not options.user_agent:
-            raise ValueError("A descriptive SEC User-Agent is required.")
-
-        output_root = Path(request.outputDir).expanduser() if request.outputDir else self._settings.research_root
-        output_root.mkdir(parents=True, exist_ok=True)
-
-        resolved = self._resolve_issuer_query(request.issuerQuery, options, force_refresh=request.forceRefresh)
-        paths = self._workspace_paths(output_root, resolved.ticker)
-        self._ensure_workspace_dirs(paths)
-
-        manifest = self._load_manifest(paths.manifest_path)
-        counters = DownloadCounters()
-        previous_metadata_snapshot = self._load_global_metadata_snapshot(resolved.cik10)
-        previous_accessions = self._snapshot_accessions(previous_metadata_snapshot)
-        previous_accession_state = self._load_accession_state(paths.accession_state_path)
-        metadata_status = "fresh"
-        metadata_message: str | None = None
-        metadata_refreshed_at: datetime | None = None
-        metadata_live_checked_at: datetime | None = None
-
-        try:
-            payloads = self._fetch_submission_payloads(
-                resolved=resolved,
-                options=options,
-                submissions_dir=paths.submissions_dir,
-                manifest=manifest,
-                edgar_root=paths.edgar_root,
-                counters=counters,
-                previous_metadata_snapshot=previous_metadata_snapshot,
-                force_refresh=request.forceRefresh,
-            )
-            current_filings = self._build_filing_rows(payloads, resolved)
-            all_filings = self._merge_cached_filing_rows(current_filings, previous_metadata_snapshot)
-            metadata_snapshot = self._persist_global_metadata_snapshot(resolved, all_filings)
-            metadata_refreshed_at = self._parse_datetime(metadata_snapshot.get("lastRefreshedAt"))
-            metadata_live_checked_at = self._parse_datetime(metadata_snapshot.get("lastLiveCheckedAt"))
-        except RuntimeError as exc:
-            cached_filings = previous_metadata_snapshot.get("filings") if previous_metadata_snapshot else None
-            if isinstance(cached_filings, list) and cached_filings:
-                all_filings = [filing for filing in cached_filings if isinstance(filing, dict)]
-                metadata_status = "degraded"
-                metadata_message = f"Live SEC metadata refresh failed. Using cached issuer metadata. {exc}"
-                metadata_refreshed_at = self._parse_datetime(previous_metadata_snapshot.get("lastRefreshedAt")) if previous_metadata_snapshot else None
-                metadata_live_checked_at = self._parse_datetime(previous_metadata_snapshot.get("lastLiveCheckedAt")) if previous_metadata_snapshot else None
-            else:
-                raise
-
-        latest_submission_url = SUBMISSIONS_URL_TEMPLATE.format(cik10=resolved.cik10)
-        self._write_json_artifact(paths.exports_dir / "all-filings.json", all_filings, latest_submission_url, manifest, paths.edgar_root)
-        self._write_csv_artifact(paths.exports_dir / "all-filings.csv", all_filings, manifest, paths.edgar_root)
-
-        selected_filings = self._select_smart_working_set(all_filings)
-        self._write_json_artifact(paths.exports_dir / "matched-filings.json", selected_filings, latest_submission_url, manifest, paths.edgar_root)
-        self._write_csv_artifact(paths.exports_dir / "matched-filings.csv", selected_filings, manifest, paths.edgar_root)
-
-        download_request = EdgarDownloadRequest(
-            ticker=resolved.ticker,
-            outputDir=str(output_root),
-            downloadMode="primary-document",
-            includeExhibits=False,
-            resume=not request.forceRefresh,
-        )
-        cached_accessions: set[str] = set()
-        downloaded_accessions: set[str] = set()
-        skipped_accessions: set[str] = set()
-        failed_accessions: set[str] = set()
-        for filing in selected_filings:
-            accession = str(filing.get("accessionNumber") or "")
-            before_downloaded = counters.downloaded_files
-            before_skipped = counters.skipped_files
-            try:
-                self._download_filing_assets(
-                    filing=filing,
-                    request=download_request,
-                    options=options,
-                    filings_dir=paths.stock_root,
-                    edgar_root=paths.edgar_root,
-                        manifest=manifest,
-                        counters=counters,
-                )
-            except RuntimeError:
-                counters.failed_files += 1
-                if accession:
-                    failed_accessions.add(accession)
-            else:
-                if accession:
-                    if counters.downloaded_files > before_downloaded:
-                        downloaded_accessions.add(accession)
-                    elif counters.skipped_files > before_skipped:
-                        skipped_accessions.add(accession)
-            if self._filing_is_cached(paths.stock_root, filing):
-                if accession:
-                    cached_accessions.add(accession)
-
-        synced_at = datetime.now(UTC)
-        metadata_state = EdgarMetadataState(
-            status=metadata_status,
-            lastRefreshedAt=metadata_refreshed_at or synced_at,
-            lastLiveCheckedAt=metadata_live_checked_at or synced_at,
-            newAccessions=len({str(filing.get("accessionNumber") or "") for filing in all_filings} - previous_accessions),
-            message=metadata_message,
-        )
-        body_cache_state = self._build_body_cache_state(
-            counters=counters,
-            matched_filings=len(selected_filings),
-            cached_filings=len({accession for accession in cached_accessions if accession}),
-            last_refreshed_at=synced_at,
-        )
-        self._persist_accession_state(
-            path=paths.accession_state_path,
-            ticker=resolved.ticker,
-            cik10=resolved.cik10,
-            stock_root=paths.stock_root,
-            all_filings=all_filings,
-            selected_filings=selected_filings,
-            cached_accessions=cached_accessions,
-            downloaded_accessions=downloaded_accessions,
-            skipped_accessions=skipped_accessions,
-            failed_accessions=failed_accessions,
-            previous_state=previous_accession_state,
-            refreshed_at=synced_at,
-        )
-        intelligence_state = self._build_intelligence_state(paths)
-
-        legacy_response = EdgarDownloadResponse(
-            companyName=resolved.company_name,
-            ticker=resolved.ticker,
-            cik=resolved.cik10,
-            totalFilingsConsidered=len(all_filings),
-            matchedFilings=len(selected_filings),
-            metadataFilesSynced=counters.metadata_files_synced,
-            downloadedFiles=counters.downloaded_files,
-            skippedFiles=counters.skipped_files,
-            failedFiles=counters.failed_files,
-            downloadMode=download_request.downloadMode,
-            includeExhibits=download_request.includeExhibits,
-            resume=download_request.resume,
-            researchRootPath=str(output_root),
-            stockPath=str(paths.stock_root),
-            filingsPath=str(paths.stock_root),
-            edgarPath=str(paths.edgar_root),
-            exportsJsonPath=str(paths.exports_dir / "matched-filings.json"),
-            exportsCsvPath=str(paths.exports_dir / "matched-filings.csv"),
-            manifestPath=str(paths.manifest_path),
-            syncedAt=synced_at,
-        )
-        self._write_json_artifact(paths.last_sync_path, legacy_response.model_dump(mode="json"), "generated://edgar-last-sync", manifest, paths.edgar_root)
-        manifest["lastRun"] = legacy_response.model_dump(mode="json")
-        self._save_manifest(paths.manifest_path, manifest)
-        self._persist_workspace_snapshot_from_download_response(legacy_response, metadata_state=metadata_state, intelligence_state=intelligence_state)
-
-        return EdgarSyncResponse(
-            issuerQuery=request.issuerQuery,
-            resolvedTicker=resolved.ticker,
-            resolvedCompanyName=resolved.company_name,
-            resolvedCik=resolved.cik10,
-            workspace=EdgarWorkspaceSelector(
-                ticker=resolved.ticker,
-                outputDir=str(output_root) if request.outputDir else None,
-            ),
-            metadataState=metadata_state,
-            bodyCacheState=body_cache_state,
-            intelligenceState=intelligence_state,
-        )
+        return self._sync_service.sync(request)
 
     def workspace(self, request: EdgarWorkspaceRequest) -> EdgarWorkspaceResponse | None:
-        output_root = Path(request.outputDir).expanduser() if request.outputDir else self._settings.research_root
-        paths = self._workspace_paths(output_root, request.ticker)
-        if paths.workspace_path.exists():
-            payload = self._load_json_document(paths.workspace_path)
-            if payload:
-                return EdgarWorkspaceResponse.model_validate(payload)
-
-        legacy_request = EdgarDownloadRequest(ticker=request.ticker, outputDir=str(output_root))
-        legacy_response = self.last_sync(legacy_request)
-        if legacy_response is None:
-            return None
-        return self._build_workspace_snapshot_from_download_response(
-            legacy_response,
-            metadata_state=EdgarMetadataState(
-                status="stale",
-                lastRefreshedAt=legacy_response.syncedAt,
-                lastLiveCheckedAt=legacy_response.syncedAt,
-                newAccessions=0,
-                message="This workspace was created before the simplified EDGAR sync state was available.",
-            ),
-            intelligence_state=self._build_intelligence_state(paths),
-        )
+        return self._sync_service.workspace(request)
 
     def intelligence_status(self, ticker: str, output_dir: str | None = None, job_id: str | None = None) -> EdgarIntelligenceState:
-        workspace = self.workspace(EdgarWorkspaceRequest(ticker=ticker, outputDir=output_dir))
-        if workspace is None:
-            return EdgarIntelligenceState(
-                status="unavailable",
-                questionAnsweringEnabled=False,
-                detail="No EDGAR workspace exists for this ticker yet.",
-                jobId=job_id,
-            )
-        intelligence_state = workspace.intelligenceState.model_copy()
-        if job_id and not intelligence_state.jobId:
-            intelligence_state.jobId = job_id
-        return intelligence_state
+        return self._sync_service.intelligence_status(ticker=ticker, output_dir=output_dir, job_id=job_id)
 
     def _default_runtime_options(self) -> EdgarRuntimeOptions:
         return EdgarRuntimeOptions(

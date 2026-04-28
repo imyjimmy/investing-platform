@@ -111,7 +111,8 @@ def test_sync_writes_workspace_state_and_uses_app_global_cache_for_non_default_o
     resolved = _sample_resolved_company()
     filings = _sample_filings()
 
-    monkeypatch.setattr(service, "_resolve_issuer_query", lambda issuer_query, options, force_refresh=False: resolved)
+    monkeypatch.setattr(service._resolver_service, "resolve_issuer_query", lambda issuer_query, options, force_refresh=False: resolved)
+    monkeypatch.setattr(service._metadata_cache_service, "ensure_bulk_baseline", lambda options, force_refresh=False: {"status": "ready", "artifacts": {}})
     monkeypatch.setattr(
         service,
         "_fetch_submission_payloads",
