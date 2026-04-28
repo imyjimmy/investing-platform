@@ -83,6 +83,7 @@ This spec does not attempt to:
 - push the full filing corpus into one prompt
 - guarantee frontier-level factual recall without retrieval
 - fine-tune a custom financial model in phase 1
+- cache generated filing answers in phase 1
 
 ## Hardware Target
 
@@ -207,6 +208,30 @@ Important rules:
 - retrieval happens before generation every time
 - filing freshness and filing intelligence are separate checks, but they run in one backend-owned flow
 
+## Ask-Time Work Budget
+
+Phase 1 question answering must have hard maintenance limits so a normal question cannot turn into an unbounded sync or indexing job.
+
+Ask-time incremental maintenance budget:
+
+- maximum wall-clock budget before retrieval starts: `30s`
+- maximum live EDGAR metadata refresh calls: `1` issuer submissions refresh
+- maximum newly downloaded filing bodies: `5`
+- maximum newly indexed primary documents: `5`
+- maximum embedding chunks generated inline: `250`
+- maximum inline index build time: `20s`
+- maximum local model generation time: `60s`
+
+Fallback behavior:
+
+- if the metadata live check fails but a usable local workspace exists, continue with stale or degraded freshness metadata and include a `freshness` limitation in the answer
+- if more than `5` filing bodies are newly required, download and index the newest `5` eligible primary documents inline, queue the remainder for background indexing, and set `maintenanceState.status` to `partial`
+- if inline indexing exceeds `20s`, stop adding new documents, answer from the last ready index when possible, and return `maintenanceState.status: "deferred"`
+- if no ready index exists after the budget is exhausted, return `409` with `code: "index_not_ready"` and include the queued `jobId`
+- if the question is explicitly freshness-sensitive, such as asking about "today", "latest", "new filing", or "recent 8-K", and the live check fails, return `409` with `code: "freshness_unavailable"` unless the user explicitly allows stale answers
+
+These budgets are phase 1 defaults, not user preferences. They can become settings later, but the API contract should not depend on unbounded work.
+
 ## Component Boundaries
 
 ### 1. EDGAR Acquisition Layer
@@ -327,8 +352,6 @@ Derived intelligence artifacts should live under:
             embeddings.f16.npy
             embeddings.meta.json
             retrieval.sqlite3
-          cache/
-            ask-cache.json
           jobs/
             last-index.json
 ```
@@ -339,6 +362,7 @@ Rules:
 - intelligence artifacts are fully disposable and rebuildable
 - all derived paths remain ticker-scoped
 - no model weights live inside the ticker workspace root
+- phase 1 must not persist generated answers; repeated questions rerun retrieval and generation against the current index
 
 ## Filing Eligibility Rules
 
@@ -595,6 +619,11 @@ Request fields:
 - `forms`
 - `includeExhibits`
 
+Phase 1 rule:
+
+- `includeExhibits` must default to `false`
+- if `includeExhibits` is `true` in phase 1, return `400` with `code: "exhibits_not_supported"`
+
 Response contract:
 
 - the route may complete inline for small updates or queue a background indexing job
@@ -618,12 +647,14 @@ Execution contract:
 Request fields:
 
 - `ticker`
+- `outputDir`
 - `question`
 - `forms`
 - `startDate`
 - `endDate`
 - `maxChunks`
 - `maxAnswerTokens`
+- `allowStale`
 
 Minimum execution steps:
 
@@ -658,6 +689,7 @@ Phase 1 request shape:
 - `comparisonMode`
 - `question`
 - `outputDir`
+- `allowStale`
 
 Phase 1 execution rule:
 
@@ -676,6 +708,346 @@ Add new Pydantic models in `src/investing_platform/models.py`:
 - `EdgarQuestionResponse`
 - `EdgarComparisonRequest`
 - `EdgarComparisonResponse`
+
+Contract rules:
+
+- all timestamps are ISO 8601 UTC strings
+- fields shown as `null` are required but nullable
+- route implementations may add fields later, but phase 1 clients must be able to rely on every field below
+- errors from these routes use the same `detail` envelope shown in `Error Response Shape`
+
+Shared enum values:
+
+- `modelState.status`: `ready`, `unavailable`, `degraded`
+- `freshnessState.status`: `fresh`, `stale`, `degraded`, `unknown`
+- `freshnessState.liveCheckStatus`: `not_needed`, `succeeded`, `failed`, `skipped`
+- `indexState.status`: `missing`, `queued`, `indexing`, `ready`, `stale`, `degraded`, `failed`
+- `EdgarIntelligenceIndexResponse.status`: `completed`, `queued`, `indexing`, `failed`
+- `EdgarIntelligenceIndexResponse.mode`: `inline`, `background`
+- `job.status`: `idle`, `queued`, `indexing`, `partial`, `deferred`, `completed`, `failed`, `cancelled`
+- `job.kind`: `none`, `index`, `ask_maintenance`, `sync_triggered_index`
+- `maintenanceState.status`: `none`, `completed`, `partial`, `deferred`, `failed`
+- `comparisonMode`: `latest-annual-vs-prior-annual`, `latest-quarter-vs-prior-quarter`, `recent-current-reports-by-topic`
+- `confidence`: `low`, `medium`, `high`
+
+### `EdgarIntelligenceStatus`
+
+Response for `GET /api/sources/edgar/intelligence/status`:
+
+```json
+{
+  "ticker": "AAPL",
+  "outputDir": "/Users/imyjimmy/Documents/Investing",
+  "workspaceRoot": "/Users/imyjimmy/Documents/Investing",
+  "generatedAt": "2026-04-28T20:15:30Z",
+  "readyForAsk": true,
+  "modelState": {
+    "status": "ready",
+    "provider": "omlx",
+    "baseUrl": "http://127.0.0.1:8000/v1",
+    "chatModel": "mlx-community/Qwen3.6-35B-A3B-4bit",
+    "embeddingModel": "mlx-community/nomicai-modernbert-embed-base-4bit",
+    "rerankerModel": "mlx-community/mxbai-rerank-large-v2",
+    "lastCheckedAt": "2026-04-28T20:15:28Z",
+    "message": null
+  },
+  "freshnessState": {
+    "status": "fresh",
+    "liveCheckStatus": "succeeded",
+    "lastMetadataRefreshAt": "2026-04-28T20:15:10Z",
+    "lastLiveCheckAt": "2026-04-28T20:15:10Z",
+    "message": null
+  },
+  "indexState": {
+    "status": "ready",
+    "indexVersion": "edgar-intelligence-index-v1",
+    "corpusVersion": "primary-documents-v1",
+    "chunkingVersion": "chunk-v1",
+    "embeddingModel": "mlx-community/nomicai-modernbert-embed-base-4bit",
+    "eligibleAccessions": 36,
+    "indexedAccessions": 36,
+    "indexedChunks": 4280,
+    "staleAccessions": [],
+    "lastIndexedAt": "2026-04-28T20:12:00Z",
+    "limitations": []
+  },
+  "job": {
+    "jobId": null,
+    "kind": "none",
+    "status": "idle",
+    "startedAt": null,
+    "updatedAt": "2026-04-28T20:15:30Z",
+    "completedAt": null,
+    "progress": {
+      "documentsTotal": 0,
+      "documentsCompleted": 0,
+      "chunksTotal": 0,
+      "chunksCompleted": 0
+    },
+    "message": null
+  },
+  "limitations": []
+}
+```
+
+### `EdgarIntelligenceIndexRequest`
+
+Request for `POST /api/sources/edgar/intelligence/index`:
+
+```json
+{
+  "ticker": "AAPL",
+  "outputDir": "/Users/imyjimmy/Documents/Investing",
+  "rebuild": false,
+  "forms": ["10-K", "10-Q", "8-K", "10-K/A", "10-Q/A", "8-K/A"],
+  "includeExhibits": false
+}
+```
+
+### `EdgarIntelligenceIndexResponse`
+
+Response for `POST /api/sources/edgar/intelligence/index`:
+
+```json
+{
+  "ticker": "AAPL",
+  "outputDir": "/Users/imyjimmy/Documents/Investing",
+  "status": "queued",
+  "mode": "background",
+  "jobId": "edgar-index-AAPL-20260428T201530Z",
+  "pollSelector": {
+    "ticker": "AAPL",
+    "outputDir": "/Users/imyjimmy/Documents/Investing",
+    "jobId": "edgar-index-AAPL-20260428T201530Z"
+  },
+  "indexState": {
+    "status": "queued",
+    "indexVersion": "edgar-intelligence-index-v1",
+    "corpusVersion": "primary-documents-v1",
+    "chunkingVersion": "chunk-v1",
+    "embeddingModel": "mlx-community/nomicai-modernbert-embed-base-4bit",
+    "eligibleAccessions": 36,
+    "indexedAccessions": 31,
+    "indexedChunks": 3710,
+    "staleAccessions": ["0000320193-26-000001"],
+    "lastIndexedAt": "2026-04-27T20:12:00Z",
+    "limitations": []
+  },
+  "job": {
+    "jobId": "edgar-index-AAPL-20260428T201530Z",
+    "kind": "index",
+    "status": "queued",
+    "startedAt": null,
+    "updatedAt": "2026-04-28T20:15:30Z",
+    "completedAt": null,
+    "progress": {
+      "documentsTotal": 5,
+      "documentsCompleted": 0,
+      "chunksTotal": 0,
+      "chunksCompleted": 0
+    },
+    "message": "Index build queued."
+  },
+  "message": "Index build queued."
+}
+```
+
+### `EdgarQuestionRequest`
+
+Request for `POST /api/sources/edgar/intelligence/ask`:
+
+```json
+{
+  "ticker": "AAPL",
+  "outputDir": "/Users/imyjimmy/Documents/Investing",
+  "question": "What changed in risk factors versus the prior 10-K?",
+  "forms": ["10-K", "10-K/A"],
+  "startDate": null,
+  "endDate": null,
+  "maxChunks": 24,
+  "maxAnswerTokens": 1200,
+  "allowStale": false
+}
+```
+
+### `EdgarQuestionCitation`
+
+Citation object used by answer responses:
+
+```json
+{
+  "citationId": "C1",
+  "ticker": "AAPL",
+  "accessionNumber": "0000320193-25-000008",
+  "form": "10-K",
+  "filingDate": "2025-11-01",
+  "documentName": "aapl-20250927.htm",
+  "section": "Risk Factors",
+  "chunkId": "0000320193-25-000008:risk-factors:0007",
+  "textRange": {
+    "startChar": 18420,
+    "endChar": 19780
+  },
+  "snippet": "Short supporting excerpt suitable for display.",
+  "sourcePath": "/Users/imyjimmy/Documents/Investing/stocks/AAPL/2025-11-01_10-K_000032019325000008/primary/aapl-20250927.htm",
+  "secUrl": "https://www.sec.gov/Archives/edgar/data/320193/000032019325000008/aapl-20250927.htm"
+}
+```
+
+### `EdgarQuestionResponse`
+
+Response for `POST /api/sources/edgar/intelligence/ask`:
+
+```json
+{
+  "ticker": "AAPL",
+  "outputDir": "/Users/imyjimmy/Documents/Investing",
+  "question": "What changed in risk factors versus the prior 10-K?",
+  "answer": "Grounded answer text with citation markers such as [C1].",
+  "confidence": "medium",
+  "generatedAt": "2026-04-28T20:16:10Z",
+  "model": {
+    "provider": "omlx",
+    "chatModel": "mlx-community/Qwen3.6-35B-A3B-4bit",
+    "embeddingModel": "mlx-community/nomicai-modernbert-embed-base-4bit",
+    "rerankerModel": "mlx-community/mxbai-rerank-large-v2"
+  },
+  "freshnessState": {
+    "status": "fresh",
+    "liveCheckStatus": "succeeded",
+    "lastMetadataRefreshAt": "2026-04-28T20:15:10Z",
+    "lastLiveCheckAt": "2026-04-28T20:15:10Z",
+    "message": null
+  },
+  "maintenanceState": {
+    "status": "completed",
+    "newAccessionsDiscovered": 0,
+    "filingBodiesDownloaded": 0,
+    "documentsIndexed": 0,
+    "chunksEmbedded": 0,
+    "elapsedMs": 950,
+    "jobId": null,
+    "limitations": []
+  },
+  "retrievalState": {
+    "chunksRetrieved": 24,
+    "chunksUsed": 8,
+    "eligibleAccessionsSearched": 36,
+    "indexVersion": "edgar-intelligence-index-v1"
+  },
+  "citations": [
+    {
+      "citationId": "C1",
+      "ticker": "AAPL",
+      "accessionNumber": "0000320193-25-000008",
+      "form": "10-K",
+      "filingDate": "2025-11-01",
+      "documentName": "aapl-20250927.htm",
+      "section": "Risk Factors",
+      "chunkId": "0000320193-25-000008:risk-factors:0007",
+      "textRange": {
+        "startChar": 18420,
+        "endChar": 19780
+      },
+      "snippet": "Short supporting excerpt suitable for display.",
+      "sourcePath": "/Users/imyjimmy/Documents/Investing/stocks/AAPL/2025-11-01_10-K_000032019325000008/primary/aapl-20250927.htm",
+      "secUrl": "https://www.sec.gov/Archives/edgar/data/320193/000032019325000008/aapl-20250927.htm"
+    }
+  ],
+  "limitations": []
+}
+```
+
+### `EdgarComparisonRequest`
+
+Request for `POST /api/sources/edgar/intelligence/compare`:
+
+```json
+{
+  "ticker": "AAPL",
+  "outputDir": "/Users/imyjimmy/Documents/Investing",
+  "comparisonMode": "latest-annual-vs-prior-annual",
+  "question": "What changed in risk factors?",
+  "forms": ["10-K", "10-K/A"],
+  "startDate": null,
+  "endDate": null,
+  "maxChunks": 24,
+  "maxAnswerTokens": 1200,
+  "allowStale": false
+}
+```
+
+### `EdgarComparisonResponse`
+
+Response for `POST /api/sources/edgar/intelligence/compare`:
+
+```json
+{
+  "ticker": "AAPL",
+  "outputDir": "/Users/imyjimmy/Documents/Investing",
+  "comparisonMode": "latest-annual-vs-prior-annual",
+  "resolvedQuestion": "Compare the latest AAPL 10-K against the prior AAPL 10-K and explain what changed in risk factors.",
+  "targetAccessions": ["0000320193-25-000008", "0000320193-24-000123"],
+  "answer": "Grounded comparison answer with citation markers such as [C1].",
+  "confidence": "medium",
+  "generatedAt": "2026-04-28T20:17:10Z",
+  "freshnessState": {
+    "status": "fresh",
+    "liveCheckStatus": "succeeded",
+    "lastMetadataRefreshAt": "2026-04-28T20:15:10Z",
+    "lastLiveCheckAt": "2026-04-28T20:15:10Z",
+    "message": null
+  },
+  "maintenanceState": {
+    "status": "completed",
+    "newAccessionsDiscovered": 0,
+    "filingBodiesDownloaded": 0,
+    "documentsIndexed": 0,
+    "chunksEmbedded": 0,
+    "elapsedMs": 1100,
+    "jobId": null,
+    "limitations": []
+  },
+  "retrievalState": {
+    "chunksRetrieved": 24,
+    "chunksUsed": 8,
+    "eligibleAccessionsSearched": 2,
+    "indexVersion": "edgar-intelligence-index-v1"
+  },
+  "citations": [],
+  "limitations": []
+}
+```
+
+### Error Response Shape
+
+All intelligence route errors should use this envelope:
+
+```json
+{
+  "detail": {
+    "code": "index_not_ready",
+    "message": "The ticker index is not ready yet.",
+    "ticker": "AAPL",
+    "jobId": "edgar-index-AAPL-20260428T201530Z",
+    "retryAfterSeconds": 10,
+    "limitations": []
+  }
+}
+```
+
+Required phase 1 error codes:
+
+- `workspace_not_found`
+- `model_unavailable`
+- `embedding_model_unavailable`
+- `reranker_unavailable`
+- `index_not_ready`
+- `freshness_unavailable`
+- `retrieval_empty`
+- `generation_timeout`
+- `maintenance_budget_exceeded`
+- `exhibits_not_supported`
 
 ## Service Initialization
 
