@@ -4,13 +4,13 @@ Prepared 2026-04-26.
 
 ## Status
 
-Proposed architecture spec for adding local filing analysis on top of the existing EDGAR sync.
+Proposed architecture spec for adding local filing analysis on top of the simplified EDGAR sync and cache architecture.
 
 ## Summary
 
 This spec defines a local-first research architecture that:
 
-- keeps the current SEC EDGAR downloader as the source-of-truth acquisition layer
+- keeps the simplified SEC EDGAR sync and raw filing acquisition layer as the source-of-truth substrate
 - parses locally saved filing artifacts into a searchable filing corpus
 - retrieves relevant filing chunks for a user question
 - sends only the retrieved local chunks to a local MLX model
@@ -43,8 +43,8 @@ This spec assumes the current desktop app shape stays intact:
 
 The repo already has the hard part of local research acquisition:
 
-- EDGAR sync writes raw filing files under `/stocks/[ticker]/`
-- EDGAR machine state and exports already live under `/stocks/[ticker]/.edgar/`
+- EDGAR sync writes raw filing files under `[ticker workspace root]/stocks/[ticker]/`
+- EDGAR machine state and exports already live under `[ticker workspace root]/stocks/[ticker]/.edgar/`
 - the desktop app already launches a local FastAPI backend
 
 What is missing is the intelligence layer between:
@@ -311,7 +311,7 @@ The current EDGAR layout should remain intact.
 Derived intelligence artifacts should live under:
 
 ```text
-[research root]/
+[ticker workspace root selected by `outputDir` or default research root]/
   stocks/
     [ticker]/
       .edgar/
@@ -338,15 +338,19 @@ Rules:
 - raw filing files remain outside `intelligence/`
 - intelligence artifacts are fully disposable and rebuildable
 - all derived paths remain ticker-scoped
-- no model weights live inside the research root
+- no model weights live inside the ticker workspace root
 
 ## Filing Eligibility Rules
 
 Phase 1 should index:
 
 - primary filing documents
-- text-bearing HTML, HTM, TXT, XML, and XBRL-ish text artifacts
-- optionally a small allowlist of useful exhibits
+- text-bearing primary filing artifacts such as HTML, HTM, TXT, XML, and XBRL-ish primary documents when they are the filing's main document
+
+Phase 1 decision:
+
+- phase 1 indexes primary documents only
+- curated exhibit indexing is deferred until a later phase unless it is explicitly promoted into scope by a follow-up product decision
 
 Phase 1 should skip:
 
@@ -354,12 +358,13 @@ Phase 1 should skip:
 - images
 - duplicate bundle files that only restate the same content
 - giant attachment sets with no user-facing value
+- exhibits outside an explicitly approved future allowlist
 
 Default priority order:
 
 1. primary filing document
-2. filing text bundle if primary document is weak
-3. selected attachments and exhibits
+2. filing text bundle if the primary document is the main filing document and is materially more parseable
+3. selected attachments and exhibits only after a later phase explicitly enables them
 
 ## Corpus Extraction Rules
 
@@ -636,11 +641,28 @@ Purpose:
 
 - compare filings across time windows
 
+Phase 1 decision:
+
+- `compare` is a thin orchestration wrapper over the generic `ask` route
+- it does not introduce a separate corpus, retrieval system, or indexing policy
+
 Initial use cases:
 
 - latest 10-K versus prior 10-K
 - latest 10-Q versus previous quarter
 - last `N` 8-Ks on a topic
+
+Phase 1 request shape:
+
+- `ticker`
+- `comparisonMode`
+- `question`
+- `outputDir`
+
+Phase 1 execution rule:
+
+- the route resolves the comparison target set, formulates a grounded filing-comparison question, and delegates retrieval and answer generation to the same underlying machinery as `ask`
+- the route follows the same freshness, incremental sync, and index-readiness rules as `ask`
 
 ## Backend Models
 
@@ -777,22 +799,26 @@ Do not:
 
 ### Phase 1
 
-- keep current EDGAR sync unchanged
-- build ticker-scoped corpus extraction
-- add local index build
+- build on the simplified EDGAR sync/workspace contract defined in `docs/edgar-tool-simplification-and-cache-spec.md`
+- use the app-global issuer registry and filing metadata cache as the acquisition baseline
+- implement ticker-scoped corpus extraction from already-synced raw filing bodies
+- implement ticker-scoped index build under `.edgar/intelligence/`
+- keep phase 1 filing eligibility to primary documents only
 - add single-question grounded answering with citations
+- treat `compare` as a thin orchestration wrapper over `ask`, not as a separate retrieval system
 
 ### Phase 2
 
-- add comparative workflows across filings
-- add cached section summaries
-- add topic extraction and filing timeline views
+- add explicit index job lifecycle and richer readiness UX
+- add bounded ask-time incremental sync and reindex with clear limits and degraded/stale fallback behavior
+- add comparative workflows across filings and time windows
+- add on-demand deeper-history corpus hydration when retrieval requires older filings outside the default working set
 
 ### Phase 3
 
-- add optional exhibits indexing policies
-- add answer templates for analyst workflows
-- add structured comparison outputs for 10-K and 10-Q deltas
+- add curated exhibit indexing policy where it materially improves answer quality
+- add cached section summaries, topic extraction, and filing timeline views
+- evaluate whether cross-issuer or portfolio-level research indexing is worth the added complexity
 
 ## Explicit Decisions
 
@@ -803,9 +829,9 @@ Do not:
 5. `Qwen3.5-27B-4bit` is the practical fallback.
 6. All derived intelligence artifacts live under `.edgar/intelligence/`.
 7. The UI stays inside `Stock Intel > EDGAR`, not as a new shell destination.
+8. Phase 1 indexing is limited to primary filing documents.
+9. Phase 1 `compare` is a thin orchestration wrapper over `ask`, not a separate retrieval system.
 
 ## Open Questions
 
-- Should the first implementation index only primary documents, or primary documents plus a curated exhibit allowlist?
-- Should comparison mode be a separate route or a thin orchestration wrapper over the generic ask route?
-- Should the first local index be ticker-local only, or should a portfolio-wide research index also exist for cross-issuer questions later?
+- At what point, if any, should the product add a portfolio-wide or cross-issuer research index beyond the ticker-local phase 1 design?
