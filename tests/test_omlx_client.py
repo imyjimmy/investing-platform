@@ -28,6 +28,46 @@ def test_embed_texts_rejects_non_finite_vector_values() -> None:
         client.embed_texts(model="nomicai-modernbert-embed-base-4bit", texts=["hello"])
 
 
+def test_rerank_texts_returns_ordered_indices_and_scores() -> None:
+    client = OmlxClient(DashboardSettings())
+    captured: dict = {}
+
+    def fake_request(*args, **kwargs):
+        captured.update(kwargs["json"])
+        return {
+            "results": [
+                {"index": 2, "relevance_score": 0.91},
+                {"index": 0, "relevance_score": 0.72},
+            ],
+        }
+
+    client._request = fake_request  # type: ignore[method-assign]
+
+    results = client.rerank_texts(
+        model="Qwen3-Reranker-0.6B-mxfp8",
+        query="revenue",
+        documents=["first", "second", "third"],
+        top_n=2,
+    )
+
+    assert captured["model"] == "Qwen3-Reranker-0.6B-mxfp8"
+    assert captured["query"] == "revenue"
+    assert captured["documents"] == ["first", "second", "third"]
+    assert captured["top_n"] == 2
+    assert captured["return_documents"] is False
+    assert [(result.index, result.relevance_score) for result in results] == [(2, 0.91), (0, 0.72)]
+
+
+def test_rerank_texts_rejects_non_finite_scores() -> None:
+    client = OmlxClient(DashboardSettings())
+    client._request = lambda *args, **kwargs: {  # type: ignore[method-assign]
+        "results": [{"index": 0, "relevance_score": math.nan}],
+    }
+
+    with pytest.raises(OmlxClientError, match="non-finite"):
+        client.rerank_texts(model="Qwen3-Reranker-0.6B-mxfp8", query="revenue", documents=["first"])
+
+
 def test_chat_json_extracts_json_object_from_wrapped_content() -> None:
     client = OmlxClient(DashboardSettings())
     client._request = lambda *args, **kwargs: {  # type: ignore[method-assign]

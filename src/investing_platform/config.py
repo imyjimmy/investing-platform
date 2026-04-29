@@ -117,7 +117,7 @@ class DashboardSettings:
     llm_chat_model: str = "Qwen3.6-35B-A3B-4bit"
     llm_fallback_chat_model: str = "Qwen3.5-27B-4bit"
     llm_embed_model: str = "nomicai-modernbert-embed-base-4bit"
-    llm_rerank_model: str = "mxbai-rerank-large-v2"
+    llm_rerank_model: str = "Qwen3-Reranker-0.6B-mxfp8"
     llm_max_context_tokens: int = 32768
     llm_max_answer_tokens: int = 1200
     llm_max_retrieved_chunks: int = 24
@@ -290,7 +290,7 @@ class DashboardSettings:
             ),
             llm_rerank_model=_env_str(
                 "INVESTING_PLATFORM_LLM_RERANK_MODEL",
-                default="mxbai-rerank-large-v2",
+                default="Qwen3-Reranker-0.6B-mxfp8",
             ),
             llm_max_context_tokens=_env_int("INVESTING_PLATFORM_LLM_MAX_CONTEXT_TOKENS", default=32768),
             llm_max_answer_tokens=_env_int("INVESTING_PLATFORM_LLM_MAX_ANSWER_TOKENS", default=1200),

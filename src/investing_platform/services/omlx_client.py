@@ -21,6 +21,12 @@ class OmlxModel:
     id: str
 
 
+@dataclass(slots=True)
+class OmlxRerankResult:
+    index: int
+    relevance_score: float
+
+
 class OmlxClient:
     """OpenAI-compatible client for the local oMLX server."""
 
@@ -80,6 +86,42 @@ class OmlxClient:
         if len(embeddings) != len(texts):
             raise OmlxClientError("oMLX returned a different number of embeddings than requested.")
         return embeddings
+
+    def rerank_texts(self, *, model: str, query: str, documents: list[str], top_n: int | None = None) -> list[OmlxRerankResult]:
+        if not documents:
+            return []
+        request_payload: dict[str, Any] = {
+            "model": model,
+            "query": query,
+            "documents": documents,
+            "return_documents": False,
+        }
+        if top_n is not None:
+            request_payload["top_n"] = top_n
+        payload = self._request(
+            "POST",
+            "/rerank",
+            json=request_payload,
+            timeout=max(self._settings.llm_request_timeout_seconds, 60.0),
+        )
+        results = payload.get("results")
+        if not isinstance(results, list):
+            raise OmlxClientError("oMLX returned an invalid rerank response.")
+        reranked: list[OmlxRerankResult] = []
+        for item in results:
+            if not isinstance(item, dict):
+                raise OmlxClientError("oMLX returned an invalid rerank result.")
+            index = item.get("index")
+            score = item.get("relevance_score")
+            if isinstance(index, bool) or not isinstance(index, int) or index < 0 or index >= len(documents):
+                raise OmlxClientError("oMLX returned a rerank result with an invalid document index.")
+            if isinstance(score, bool) or not isinstance(score, int | float):
+                raise OmlxClientError("oMLX returned a rerank result with a non-numeric score.")
+            numeric_score = float(score)
+            if not math.isfinite(numeric_score):
+                raise OmlxClientError("oMLX returned a rerank result with a non-finite score.")
+            reranked.append(OmlxRerankResult(index=index, relevance_score=numeric_score))
+        return reranked
 
     def chat_json(self, *, model: str, messages: list[dict[str, str]], max_tokens: int) -> dict[str, Any]:
         payload = self._request(

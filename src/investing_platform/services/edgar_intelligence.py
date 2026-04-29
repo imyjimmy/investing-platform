@@ -395,6 +395,7 @@ class EdgarIntelligenceService:
                 outputDir=request.outputDir,
                 question=resolved_question,
                 forms=request.forms,
+                accessionNumbers=target_accessions,
                 startDate=request.startDate,
                 endDate=request.endDate,
                 maxChunks=request.maxChunks,
@@ -471,8 +472,11 @@ class EdgarIntelligenceService:
         if not relevant:
             return [], [f"No retrieved filing chunks met the relevance threshold of {MIN_RETRIEVAL_SCORE:.2f}."]
         limit = min(request.maxChunks, self._settings.llm_max_retrieved_chunks)
+        reranked, rerank_limitations = self._rerank_chunks(request, relevant[:limit])
+        if not reranked:
+            return [], rerank_limitations
         selected: list[RetrievedChunk] = []
-        for citation_index, chunk in enumerate(relevant[:limit], start=1):
+        for citation_index, chunk in enumerate(reranked, start=1):
             selected.append(
                 RetrievedChunk(
                     citation_id=f"C{citation_index}",
@@ -492,6 +496,53 @@ class EdgarIntelligenceService:
                     score=chunk.score,
                 )
             )
+        return selected, rerank_limitations
+
+    def _rerank_chunks(self, request: EdgarQuestionRequest, chunks: list[RetrievedChunk]) -> tuple[list[RetrievedChunk], list[str]]:
+        if not chunks:
+            return [], []
+        try:
+            if not self._omlx_client.has_model(self._settings.llm_rerank_model):
+                return [], [f"Reranker model '{self._settings.llm_rerank_model}' is not available in oMLX."]
+            reranked = self._omlx_client.rerank_texts(
+                model=self._settings.llm_rerank_model,
+                query=request.question,
+                documents=[chunk.text for chunk in chunks],
+                top_n=len(chunks),
+            )
+        except OmlxClientError as exc:
+            return [], [str(exc)]
+        if not reranked:
+            return [], ["The reranker returned no candidate chunks."]
+
+        selected: list[RetrievedChunk] = []
+        seen_indices: set[int] = set()
+        for result in reranked:
+            if result.index in seen_indices or result.index >= len(chunks):
+                continue
+            seen_indices.add(result.index)
+            chunk = chunks[result.index]
+            selected.append(
+                RetrievedChunk(
+                    citation_id=chunk.citation_id,
+                    chunk_index=chunk.chunk_index,
+                    chunk_id=chunk.chunk_id,
+                    ticker=chunk.ticker,
+                    accession_number=chunk.accession_number,
+                    form=chunk.form,
+                    filing_date=chunk.filing_date,
+                    document_name=chunk.document_name,
+                    section=chunk.section,
+                    start_char=chunk.start_char,
+                    end_char=chunk.end_char,
+                    source_path=chunk.source_path,
+                    sec_url=chunk.sec_url,
+                    text=chunk.text,
+                    score=result.relevance_score,
+                )
+            )
+        if not selected:
+            return [], ["The reranker returned no usable candidate chunks."]
         return selected, []
 
     def _load_retrieval_chunks(self, paths: WorkspacePaths, request: EdgarQuestionRequest) -> list[RetrievedChunk]:
@@ -499,6 +550,7 @@ class EdgarIntelligenceService:
         if not retrieval_path.exists():
             return []
         allowed_forms = {form.upper() for form in request.forms}
+        allowed_accessions = {accession.strip() for accession in request.accessionNumbers if accession.strip()}
         chunks: list[RetrievedChunk] = []
         with sqlite3.connect(retrieval_path) as connection:
             connection.row_factory = sqlite3.Row
@@ -508,7 +560,10 @@ class EdgarIntelligenceService:
         for fallback_index, row in enumerate(rows):
             form = str(row["form"] or "").upper() if "form" in row.keys() else ""
             filing_date = str(row["filing_date"] or "") if "filing_date" in row.keys() else ""
+            accession_number = str(row["accession_number"] or "") if "accession_number" in row.keys() else ""
             if allowed_forms and form not in allowed_forms:
+                continue
+            if allowed_accessions and accession_number not in allowed_accessions:
                 continue
             if not self._filing_date_matches(filing_date, request):
                 continue
@@ -527,7 +582,7 @@ class EdgarIntelligenceService:
                     chunk_index=chunk_index,
                     chunk_id=str(row["chunk_id"] or ""),
                     ticker=str(row["ticker"] or request.ticker) if "ticker" in row.keys() else request.ticker,
-                    accession_number=str(row["accession_number"] or ""),
+                    accession_number=accession_number,
                     form=form,
                     filing_date=filing_date,
                     document_name=str(row["document_name"] or "") if "document_name" in row.keys() else Path(source_path).name,

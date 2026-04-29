@@ -7,10 +7,20 @@ import sqlite3
 from types import SimpleNamespace
 
 from investing_platform.config import DashboardSettings
-from investing_platform.models import EdgarIntelligenceIndexRequest, EdgarMetadataState, EdgarQuestionRequest
+from investing_platform.models import (
+    EdgarAnswerModelInfo,
+    EdgarComparisonRequest,
+    EdgarFreshnessState,
+    EdgarIntelligenceIndexRequest,
+    EdgarMaintenanceState,
+    EdgarMetadataState,
+    EdgarQuestionRequest,
+    EdgarQuestionResponse,
+    EdgarRetrievalState,
+)
 from investing_platform.services.edgar_intelligence import EdgarIntelligenceApiError, EdgarIntelligenceService
 from investing_platform.services.edgar import EdgarDownloader
-from investing_platform.services.omlx_client import OmlxClientError, OmlxModel
+from investing_platform.services.omlx_client import OmlxClientError, OmlxModel, OmlxRerankResult
 
 
 class FakeOmlxClient:
@@ -22,6 +32,10 @@ class FakeOmlxClient:
 
     def embed_texts(self, *, model: str, texts: list[str]) -> list[list[float]]:
         return [[1.0, 0.0, float(index + 1)] for index, _text in enumerate(texts)]
+
+    def rerank_texts(self, *, model: str, query: str, documents: list[str], top_n: int | None = None) -> list[OmlxRerankResult]:
+        limit = top_n if top_n is not None else len(documents)
+        return [OmlxRerankResult(index=index, relevance_score=1.0 - index * 0.01) for index in range(min(len(documents), limit))]
 
 
 class MissingEmbeddingOmlxClient:
@@ -62,6 +76,29 @@ class BatchPoisoningOmlxClient:
         return [0.0, 0.0, 1.0]
 
 
+class RerankingFakeOmlxClient:
+    def __init__(self, rerank_order: list[int]) -> None:
+        self.rerank_order = rerank_order
+        self.rerank_documents: list[str] = []
+
+    def list_models(self) -> list[OmlxModel]:
+        return [
+            OmlxModel(id="nomicai-modernbert-embed-base-4bit"),
+            OmlxModel(id="Qwen3-Reranker-0.6B-mxfp8"),
+        ]
+
+    def has_model(self, model_id: str) -> bool:
+        return model_id in {"nomicai-modernbert-embed-base-4bit", "Qwen3-Reranker-0.6B-mxfp8"}
+
+    def embed_texts(self, *, model: str, texts: list[str]) -> list[list[float]]:
+        return [[1.0, 0.0, 0.0] for _text in texts]
+
+    def rerank_texts(self, *, model: str, query: str, documents: list[str], top_n: int | None = None) -> list[OmlxRerankResult]:
+        self.rerank_documents = list(documents)
+        ordered = self.rerank_order[: top_n if top_n is not None else len(self.rerank_order)]
+        return [OmlxRerankResult(index=index, relevance_score=1.0 - rank * 0.1) for rank, index in enumerate(ordered)]
+
+
 class GuardrailFakeOmlxClient:
     def __init__(self, answer_payload: dict | None = None) -> None:
         self.answer_payload = answer_payload or {
@@ -73,13 +110,21 @@ class GuardrailFakeOmlxClient:
         self.chat_calls = 0
 
     def list_models(self) -> list[OmlxModel]:
-        return [OmlxModel(id="Qwen3.6-35B-A3B-4bit"), OmlxModel(id="nomicai-modernbert-embed-base-4bit")]
+        return [
+            OmlxModel(id="Qwen3.6-35B-A3B-4bit"),
+            OmlxModel(id="nomicai-modernbert-embed-base-4bit"),
+            OmlxModel(id="Qwen3-Reranker-0.6B-mxfp8"),
+        ]
 
     def has_model(self, model_id: str) -> bool:
-        return model_id == "nomicai-modernbert-embed-base-4bit"
+        return model_id in {"nomicai-modernbert-embed-base-4bit", "Qwen3-Reranker-0.6B-mxfp8"}
 
     def embed_texts(self, *, model: str, texts: list[str]) -> list[list[float]]:
         return [self._vector_for(text) for text in texts]
+
+    def rerank_texts(self, *, model: str, query: str, documents: list[str], top_n: int | None = None) -> list[OmlxRerankResult]:
+        limit = top_n if top_n is not None else len(documents)
+        return [OmlxRerankResult(index=index, relevance_score=1.0 - index * 0.01) for index in range(min(len(documents), limit))]
 
     def chat_json(self, *, model: str, messages: list[dict[str, str]], max_tokens: int) -> dict:
         self.chat_calls += 1
@@ -216,6 +261,220 @@ def test_embedding_builder_fails_instead_of_skipping_bad_single_chunk_after_retr
         ["first filing chunk"],
         ["bad filing chunk"],
     ]
+
+
+def test_retrieve_chunks_uses_reranker_order_before_assigning_citations(tmp_path) -> None:
+    settings = DashboardSettings(
+        research_root=tmp_path / "research-root",
+        edgar_user_agent="Investing Platform tests@example.com",
+    )
+    fake_client = RerankingFakeOmlxClient(rerank_order=[2, 0, 1])
+    service = EdgarIntelligenceService(settings, omlx_client=fake_client)
+    artifact_store = EdgarDownloader(settings)
+    paths = artifact_store._workspace_paths(settings.research_root, "AAPL")
+    index_dir = paths.intelligence_dir / "index"
+    index_dir.mkdir(parents=True, exist_ok=True)
+    chunks = [
+        {
+            "ticker": "AAPL",
+            "accessionNumber": "0001",
+            "form": "10-K",
+            "filingDate": "2026-01-30",
+            "documentName": "a.htm",
+            "section": "Primary Document",
+            "chunkId": "chunk:first",
+            "startChar": 0,
+            "endChar": 18,
+            "sourcePath": "/tmp/a.htm",
+            "secUrl": "https://www.sec.gov/a",
+            "text": "first revenue fact",
+        },
+        {
+            "ticker": "AAPL",
+            "accessionNumber": "0002",
+            "form": "10-K",
+            "filingDate": "2025-01-30",
+            "documentName": "b.htm",
+            "section": "Primary Document",
+            "chunkId": "chunk:second",
+            "startChar": 0,
+            "endChar": 19,
+            "sourcePath": "/tmp/b.htm",
+            "secUrl": "https://www.sec.gov/b",
+            "text": "second revenue fact",
+        },
+        {
+            "ticker": "AAPL",
+            "accessionNumber": "0003",
+            "form": "10-K",
+            "filingDate": "2024-01-30",
+            "documentName": "c.htm",
+            "section": "Primary Document",
+            "chunkId": "chunk:third",
+            "startChar": 0,
+            "endChar": 18,
+            "sourcePath": "/tmp/c.htm",
+            "secUrl": "https://www.sec.gov/c",
+            "text": "third revenue fact",
+        },
+    ]
+    service._write_retrieval_sqlite(index_dir / "retrieval.sqlite3", chunks)
+    np.save(index_dir / "embeddings.f16.npy", np.asarray([[1.0, 0.0, 0.0]] * 3, dtype=np.float16))
+
+    retrieved, limitations = service._retrieve_chunks(paths, EdgarQuestionRequest(ticker="AAPL", question="What changed in revenue?"))
+
+    assert limitations == []
+    assert fake_client.rerank_documents == ["first revenue fact", "second revenue fact", "third revenue fact"]
+    assert [chunk.chunk_id for chunk in retrieved] == ["chunk:third", "chunk:first", "chunk:second"]
+    assert [chunk.citation_id for chunk in retrieved] == ["C1", "C2", "C3"]
+    assert [chunk.score for chunk in retrieved] == [1.0, 0.9, 0.8]
+
+
+def test_retrieve_chunks_filters_to_requested_accessions_before_reranking(tmp_path) -> None:
+    settings = DashboardSettings(
+        research_root=tmp_path / "research-root",
+        edgar_user_agent="Investing Platform tests@example.com",
+    )
+    fake_client = RerankingFakeOmlxClient(rerank_order=[1, 0])
+    service = EdgarIntelligenceService(settings, omlx_client=fake_client)
+    artifact_store = EdgarDownloader(settings)
+    paths = artifact_store._workspace_paths(settings.research_root, "AAPL")
+    index_dir = paths.intelligence_dir / "index"
+    index_dir.mkdir(parents=True, exist_ok=True)
+    chunks = [
+        {
+            "ticker": "AAPL",
+            "accessionNumber": "0001",
+            "form": "10-K",
+            "filingDate": "2026-01-30",
+            "documentName": "a.htm",
+            "section": "Primary Document",
+            "chunkId": "chunk:first",
+            "startChar": 0,
+            "endChar": 18,
+            "sourcePath": "/tmp/a.htm",
+            "secUrl": "https://www.sec.gov/a",
+            "text": "first target revenue fact",
+        },
+        {
+            "ticker": "AAPL",
+            "accessionNumber": "0002",
+            "form": "10-K",
+            "filingDate": "2025-01-30",
+            "documentName": "b.htm",
+            "section": "Primary Document",
+            "chunkId": "chunk:unrelated",
+            "startChar": 0,
+            "endChar": 24,
+            "sourcePath": "/tmp/b.htm",
+            "secUrl": "https://www.sec.gov/b",
+            "text": "unrelated revenue fact",
+        },
+        {
+            "ticker": "AAPL",
+            "accessionNumber": "0003",
+            "form": "10-K",
+            "filingDate": "2024-01-30",
+            "documentName": "c.htm",
+            "section": "Primary Document",
+            "chunkId": "chunk:third",
+            "startChar": 0,
+            "endChar": 18,
+            "sourcePath": "/tmp/c.htm",
+            "secUrl": "https://www.sec.gov/c",
+            "text": "third target revenue fact",
+        },
+    ]
+    service._write_retrieval_sqlite(index_dir / "retrieval.sqlite3", chunks)
+    np.save(index_dir / "embeddings.f16.npy", np.asarray([[1.0, 0.0, 0.0]] * 3, dtype=np.float16))
+
+    retrieved, limitations = service._retrieve_chunks(
+        paths,
+        EdgarQuestionRequest(
+            ticker="AAPL",
+            question="What changed in revenue?",
+            accessionNumbers=["0003", "0001"],
+        ),
+    )
+
+    assert limitations == []
+    assert fake_client.rerank_documents == ["first target revenue fact", "third target revenue fact"]
+    assert [chunk.accession_number for chunk in retrieved] == ["0003", "0001"]
+    assert [chunk.chunk_id for chunk in retrieved] == ["chunk:third", "chunk:first"]
+
+
+def test_compare_passes_resolved_target_accessions_to_question_retrieval(tmp_path) -> None:
+    settings = DashboardSettings(
+        research_root=tmp_path / "research-root",
+        edgar_user_agent="Investing Platform tests@example.com",
+    )
+    service = EdgarIntelligenceService(settings, omlx_client=FakeOmlxClient())
+    artifact_store = EdgarDownloader(settings)
+    paths = artifact_store._workspace_paths(settings.research_root, "AAPL")
+    paths.exports_dir.mkdir(parents=True, exist_ok=True)
+    filings = [
+        {
+            "ticker": "AAPL",
+            "form": "10-K",
+            "filingDate": "2026-01-30",
+            "accessionNumber": "000-new",
+            "primaryDocument": "new.htm",
+        },
+        {
+            "ticker": "AAPL",
+            "form": "10-K",
+            "filingDate": "2025-01-30",
+            "accessionNumber": "000-prior",
+            "primaryDocument": "prior.htm",
+        },
+        {
+            "ticker": "AAPL",
+            "form": "10-K",
+            "filingDate": "2024-01-30",
+            "accessionNumber": "000-older",
+            "primaryDocument": "older.htm",
+        },
+    ]
+    (paths.exports_dir / "matched-filings.json").write_text(json.dumps(filings), encoding="utf-8")
+    captured_request: dict[str, EdgarQuestionRequest] = {}
+
+    def fake_answer_question(*, workspace, request, paths):
+        captured_request["request"] = request
+        return EdgarQuestionResponse(
+            ticker=request.ticker,
+            outputDir=request.outputDir,
+            question=request.question,
+            answer="Compared target filings [C1].",
+            confidence="medium",
+            generatedAt=datetime.now(UTC),
+            model=EdgarAnswerModelInfo(
+                provider="omlx",
+                chatModel=settings.llm_chat_model,
+                embeddingModel=settings.llm_embed_model,
+                rerankerModel=settings.llm_rerank_model,
+            ),
+            freshnessState=EdgarFreshnessState(status="fresh", liveCheckStatus="succeeded"),
+            maintenanceState=EdgarMaintenanceState(status="none"),
+            retrievalState=EdgarRetrievalState(chunksRetrieved=2, chunksUsed=2, eligibleAccessionsSearched=2, indexVersion="test-index"),
+            citations=[],
+            limitations=[],
+        )
+
+    service.answer_question = fake_answer_question  # type: ignore[method-assign]
+
+    response = service.compare_filings(
+        workspace=object(),
+        request=EdgarComparisonRequest(
+            ticker="AAPL",
+            comparisonMode="latest-annual-vs-prior-annual",
+            question="What changed?",
+        ),
+        paths=paths,
+    )
+
+    assert response.targetAccessions == ["000-new", "000-prior"]
+    assert captured_request["request"].accessionNumbers == ["000-new", "000-prior"]
+    assert "000-new, 000-prior" in response.resolvedQuestion
 
 
 def test_intelligence_index_removes_stale_embeddings_when_embedding_model_is_missing(tmp_path) -> None:

@@ -1066,6 +1066,7 @@ export interface EdgarIntelligenceIndexResponse {
 export interface EdgarQuestionRequest extends EdgarWorkspaceRequest {
   question: string;
   forms?: string[];
+  accessionNumbers?: string[];
   startDate?: string | null;
   endDate?: string | null;
   maxChunks?: number;

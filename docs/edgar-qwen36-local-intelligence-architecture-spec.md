@@ -30,7 +30,17 @@ The recommended default runtime is:
 - local inference server: `oMLX`
 - generation model: `mlx-community/Qwen3.6-35B-A3B-4bit`
 - embedding model: `mlx-community/nomicai-modernbert-embed-base-4bit`
-- reranker model: `mlx-community/mxbai-rerank-large-v2`
+- reranker model: `mlx-community/Qwen3-Reranker-0.6B-mxfp8`
+
+Reranker model decision record:
+
+- the original candidate was `mlx-community/mxbai-rerank-large-v2`
+- local oMLX smoke testing rejected that artifact on `/v1/rerank` with `400`
+- the downloaded MLX artifact advertises `architectures: ["Qwen2ForCausalLM"]` and is discovered by oMLX as a text-generation model, not a reranker engine
+- the Hugging Face artifact is labeled as text generation and documents `mlx_lm.generate(...)` usage, which does not match the oMLX reranker endpoint contract
+- `mlx-community/Qwen3-Reranker-0.6B-mxfp8` is accepted by oMLX as a reranker engine and passed a basic relevance smoke test
+- this is a phase 1 compatibility decision, not a claim that Qwen3-Reranker-0.6B is higher quality than `mxbai-rerank-large-v2`
+- if answer quality or retrieval ordering becomes a bottleneck, revisit this decision and either find an oMLX-compatible higher-quality reranker or implement a custom Qwen2 causal-LM reranker scoring path for `mxbai-rerank-large-v2`
 
 This spec assumes the current desktop app shape stays intact:
 
@@ -130,7 +140,7 @@ Embedding:
 
 Reranker:
 
-- `mlx-community/mxbai-rerank-large-v2`
+- `mlx-community/Qwen3-Reranker-0.6B-mxfp8`
 
 Fallback generation model:
 
@@ -492,7 +502,17 @@ Use reranking before prompt assembly.
 
 Recommended default:
 
-- `mlx-community/mxbai-rerank-large-v2`
+- `mlx-community/Qwen3-Reranker-0.6B-mxfp8`
+
+This default is intentionally an oMLX `/v1/rerank` compatible reranker. Do not
+swap in a generic text-generation model unless oMLX discovers it as a reranker
+engine and the `/v1/rerank` smoke check succeeds.
+
+The phase 1 default intentionally deviates from the earlier
+`mxbai-rerank-large-v2` candidate because the available MLX artifact is not
+served by oMLX as a reranker engine. This may leave retrieval quality on the
+table; treat reranker quality as an evaluation item before relying on this
+system for high-stakes comparison workflows.
 
 Reranker inputs:
 
@@ -666,11 +686,15 @@ Request fields:
 - `outputDir`
 - `question`
 - `forms`
+- `accessionNumbers`
 - `startDate`
 - `endDate`
 - `maxChunks`
 - `maxAnswerTokens`
 - `allowStale`
+
+`accessionNumbers` is optional for ordinary ask requests. The compare route uses
+it internally after resolving the comparison target set.
 
 Minimum execution steps:
 
@@ -710,6 +734,7 @@ Phase 1 request shape:
 Phase 1 execution rule:
 
 - the route resolves the comparison target set, formulates a grounded filing-comparison question, and delegates retrieval and answer generation to the same underlying machinery as `ask`
+- the delegated ask request must carry the resolved target accession numbers as a retrieval filter so citations cannot come from filings outside the comparison set
 - the route follows the same freshness, incremental sync, and index-readiness rules as `ask`
 
 ## Backend Models
@@ -763,7 +788,7 @@ Response for `GET /api/sources/edgar/intelligence/status`:
     "baseUrl": "http://127.0.0.1:8001/v1",
     "chatModel": "Qwen3.6-35B-A3B-4bit",
     "embeddingModel": "nomicai-modernbert-embed-base-4bit",
-    "rerankerModel": "mxbai-rerank-large-v2",
+    "rerankerModel": "Qwen3-Reranker-0.6B-mxfp8",
     "lastCheckedAt": "2026-04-28T20:15:28Z",
     "message": null
   },
@@ -878,6 +903,7 @@ Request for `POST /api/sources/edgar/intelligence/ask`:
   "outputDir": "/Users/imyjimmy/Documents/Investing",
   "question": "What changed in risk factors versus the prior 10-K?",
   "forms": ["10-K", "10-K/A"],
+  "accessionNumbers": [],
   "startDate": null,
   "endDate": null,
   "maxChunks": 24,
@@ -926,7 +952,7 @@ Response for `POST /api/sources/edgar/intelligence/ask`:
     "provider": "omlx",
     "chatModel": "Qwen3.6-35B-A3B-4bit",
     "embeddingModel": "nomicai-modernbert-embed-base-4bit",
-    "rerankerModel": "mxbai-rerank-large-v2"
+    "rerankerModel": "Qwen3-Reranker-0.6B-mxfp8"
   },
   "freshnessState": {
     "status": "fresh",
@@ -1090,7 +1116,7 @@ INVESTING_PLATFORM_LLM_API_KEY=
 INVESTING_PLATFORM_LLM_CHAT_MODEL=Qwen3.6-35B-A3B-4bit
 INVESTING_PLATFORM_LLM_FALLBACK_CHAT_MODEL=Qwen3.5-27B-4bit
 INVESTING_PLATFORM_LLM_EMBED_MODEL=nomicai-modernbert-embed-base-4bit
-INVESTING_PLATFORM_LLM_RERANK_MODEL=mxbai-rerank-large-v2
+INVESTING_PLATFORM_LLM_RERANK_MODEL=Qwen3-Reranker-0.6B-mxfp8
 INVESTING_PLATFORM_LLM_MAX_CONTEXT_TOKENS=32768
 INVESTING_PLATFORM_LLM_MAX_ANSWER_TOKENS=1200
 INVESTING_PLATFORM_LLM_MAX_RETRIEVED_CHUNKS=24

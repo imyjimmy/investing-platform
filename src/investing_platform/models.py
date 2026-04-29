@@ -1388,6 +1388,7 @@ class EdgarIntelligenceIndexResponse(DashboardModel):
 class EdgarQuestionRequest(EdgarWorkspaceRequest):
     question: str
     forms: list[str] = Field(default_factory=list)
+    accessionNumbers: list[str] = Field(default_factory=list)
     startDate: date | None = None
     endDate: date | None = None
     maxChunks: int = Field(default=24, ge=1, le=64)
@@ -1408,6 +1409,16 @@ class EdgarQuestionRequest(EdgarWorkspaceRequest):
         deduped: list[str] = []
         for form_type in value:
             normalized = form_type.strip().upper()
+            if normalized and normalized not in deduped:
+                deduped.append(normalized)
+        return deduped
+
+    @field_validator("accessionNumbers")
+    @classmethod
+    def _normalize_accession_numbers(cls, value: list[str]) -> list[str]:
+        deduped: list[str] = []
+        for accession_number in value:
+            normalized = accession_number.strip()
             if normalized and normalized not in deduped:
                 deduped.append(normalized)
         return deduped
