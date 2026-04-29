@@ -3,7 +3,13 @@ import type {
   CoinbaseSourceStatus,
   EdgarDownloadRequest,
   EdgarDownloadResponse,
-  EdgarIntelligenceState,
+  EdgarComparisonRequest,
+  EdgarComparisonResponse,
+  EdgarIntelligenceIndexRequest,
+  EdgarIntelligenceIndexResponse,
+  EdgarIntelligenceStatus,
+  EdgarQuestionRequest,
+  EdgarQuestionResponse,
   EdgarSourceStatus,
   EdgarSyncRequest,
   EdgarSyncResponse,
@@ -66,11 +72,16 @@ export const sourceApi = {
   edgarSync: (request: EdgarSyncRequest) => postJson<EdgarSyncResponse>("/api/sources/edgar/sync", request),
   edgarWorkspace: (request: EdgarWorkspaceRequest) => postJson<EdgarWorkspaceResponse | null>("/api/sources/edgar/workspace", request),
   edgarIntelligenceStatus: (request: EdgarWorkspaceRequest, jobId?: string) =>
-    fetchJson<EdgarIntelligenceState>(
+    fetchJson<EdgarIntelligenceStatus>(
       `/api/sources/edgar/intelligence/status?ticker=${encodeURIComponent(request.ticker)}${
         request.outputDir ? `&outputDir=${encodeURIComponent(request.outputDir)}` : ""
       }${jobId ? `&jobId=${encodeURIComponent(jobId)}` : ""}`,
     ),
+  edgarIntelligenceIndex: (request: EdgarIntelligenceIndexRequest) =>
+    postJson<EdgarIntelligenceIndexResponse>("/api/sources/edgar/intelligence/index", request),
+  edgarAsk: (request: EdgarQuestionRequest) => postJson<EdgarQuestionResponse>("/api/sources/edgar/intelligence/ask", request),
+  edgarCompare: (request: EdgarComparisonRequest) =>
+    postJson<EdgarComparisonResponse>("/api/sources/edgar/intelligence/compare", request),
   edgarDownload: (request: EdgarDownloadRequest) => postJson<EdgarDownloadResponse>("/api/sources/edgar/download", request),
   edgarLastSync: (request: EdgarDownloadRequest) => postJson<EdgarDownloadResponse | null>("/api/sources/edgar/last-sync", request),
   investorPdfStatus: () => fetchJson<InvestorPdfSourceStatus>("/api/sources/investor-pdfs/status"),

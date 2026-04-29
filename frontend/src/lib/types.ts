@@ -975,6 +975,184 @@ export interface EdgarIntelligenceState {
   polledVia?: string | null;
 }
 
+export interface EdgarIntelligenceModelState {
+  status: "ready" | "unavailable" | "degraded";
+  provider: string;
+  baseUrl: string;
+  chatModel: string;
+  embeddingModel: string;
+  rerankerModel: string;
+  lastCheckedAt: string;
+  message?: string | null;
+}
+
+export interface EdgarFreshnessState {
+  status: "fresh" | "stale" | "degraded" | "unknown";
+  liveCheckStatus: "not_needed" | "succeeded" | "failed" | "skipped";
+  lastMetadataRefreshAt?: string | null;
+  lastLiveCheckAt?: string | null;
+  message?: string | null;
+}
+
+export interface EdgarIndexState {
+  status: "missing" | "queued" | "indexing" | "ready" | "stale" | "degraded" | "failed";
+  indexVersion: string;
+  corpusVersion: string;
+  chunkingVersion: string;
+  embeddingModel: string;
+  eligibleAccessions: number;
+  indexedAccessions: number;
+  indexedChunks: number;
+  staleAccessions: string[];
+  lastIndexedAt?: string | null;
+  limitations: string[];
+}
+
+export interface EdgarIntelligenceJobProgress {
+  documentsTotal: number;
+  documentsCompleted: number;
+  chunksTotal: number;
+  chunksCompleted: number;
+}
+
+export interface EdgarIntelligenceJob {
+  jobId?: string | null;
+  kind: "none" | "index" | "ask_maintenance" | "sync_triggered_index";
+  status: "idle" | "queued" | "indexing" | "partial" | "deferred" | "completed" | "failed" | "cancelled";
+  startedAt?: string | null;
+  updatedAt: string;
+  completedAt?: string | null;
+  progress: EdgarIntelligenceJobProgress;
+  message?: string | null;
+}
+
+export interface EdgarIntelligenceStatus {
+  ticker: string;
+  outputDir?: string | null;
+  workspaceRoot: string;
+  generatedAt: string;
+  readyForAsk: boolean;
+  modelState: EdgarIntelligenceModelState;
+  freshnessState: EdgarFreshnessState;
+  indexState: EdgarIndexState;
+  job: EdgarIntelligenceJob;
+  limitations: string[];
+}
+
+export interface EdgarIntelligenceIndexRequest extends EdgarWorkspaceRequest {
+  rebuild?: boolean;
+  forms?: string[];
+  includeExhibits?: boolean;
+}
+
+export interface EdgarPollSelector {
+  ticker: string;
+  outputDir?: string | null;
+  jobId?: string | null;
+}
+
+export interface EdgarIntelligenceIndexResponse {
+  ticker: string;
+  outputDir?: string | null;
+  status: "completed" | "queued" | "indexing" | "failed";
+  mode: "inline" | "background";
+  jobId?: string | null;
+  pollSelector: EdgarPollSelector;
+  indexState: EdgarIndexState;
+  job: EdgarIntelligenceJob;
+  message: string;
+}
+
+export interface EdgarQuestionRequest extends EdgarWorkspaceRequest {
+  question: string;
+  forms?: string[];
+  startDate?: string | null;
+  endDate?: string | null;
+  maxChunks?: number;
+  maxAnswerTokens?: number;
+  allowStale?: boolean;
+}
+
+export interface EdgarQuestionTextRange {
+  startChar: number;
+  endChar: number;
+}
+
+export interface EdgarQuestionCitation {
+  citationId: string;
+  ticker: string;
+  accessionNumber: string;
+  form: string;
+  filingDate?: string | null;
+  documentName: string;
+  section?: string | null;
+  chunkId: string;
+  textRange: EdgarQuestionTextRange;
+  snippet: string;
+  sourcePath: string;
+  secUrl: string;
+}
+
+export interface EdgarAnswerModelInfo {
+  provider: string;
+  chatModel: string;
+  embeddingModel: string;
+  rerankerModel: string;
+}
+
+export interface EdgarMaintenanceState {
+  status: "none" | "completed" | "partial" | "deferred" | "failed";
+  newAccessionsDiscovered: number;
+  filingBodiesDownloaded: number;
+  documentsIndexed: number;
+  chunksEmbedded: number;
+  elapsedMs: number;
+  jobId?: string | null;
+  limitations: string[];
+}
+
+export interface EdgarRetrievalState {
+  chunksRetrieved: number;
+  chunksUsed: number;
+  eligibleAccessionsSearched: number;
+  indexVersion: string;
+}
+
+export interface EdgarQuestionResponse {
+  ticker: string;
+  outputDir?: string | null;
+  question: string;
+  answer: string;
+  confidence: "low" | "medium" | "high";
+  generatedAt: string;
+  model: EdgarAnswerModelInfo;
+  freshnessState: EdgarFreshnessState;
+  maintenanceState: EdgarMaintenanceState;
+  retrievalState: EdgarRetrievalState;
+  citations: EdgarQuestionCitation[];
+  limitations: string[];
+}
+
+export interface EdgarComparisonRequest extends EdgarQuestionRequest {
+  comparisonMode: "latest-annual-vs-prior-annual" | "latest-quarter-vs-prior-quarter" | "recent-current-reports-by-topic";
+}
+
+export interface EdgarComparisonResponse {
+  ticker: string;
+  outputDir?: string | null;
+  comparisonMode: EdgarComparisonRequest["comparisonMode"];
+  resolvedQuestion: string;
+  targetAccessions: string[];
+  answer: string;
+  confidence: "low" | "medium" | "high";
+  generatedAt: string;
+  freshnessState: EdgarFreshnessState;
+  maintenanceState: EdgarMaintenanceState;
+  retrievalState: EdgarRetrievalState;
+  citations: EdgarQuestionCitation[];
+  limitations: string[];
+}
+
 export interface EdgarSyncResponse {
   issuerQuery: string;
   resolvedTicker: string;

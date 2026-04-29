@@ -2,21 +2,29 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from investing_platform.models import (
     EdgarDownloadRequest,
     EdgarDownloadResponse,
+    EdgarComparisonRequest,
+    EdgarComparisonResponse,
+    EdgarIntelligenceIndexRequest,
+    EdgarIntelligenceIndexResponse,
+    EdgarIntelligenceStatus,
     EdgarSourceStatus,
     EdgarSyncRequest,
     EdgarSyncResponse,
-    EdgarIntelligenceState,
+    EdgarQuestionRequest,
+    EdgarQuestionResponse,
     EdgarWorkspaceRequest,
     EdgarWorkspaceResponse,
     InvestorPdfDownloadRequest,
     InvestorPdfDownloadResponse,
     InvestorPdfSourceStatus,
 )
+
+from investing_platform.services.edgar_intelligence import EdgarIntelligenceApiError
 
 from ._helpers import edgar_service, investor_pdf_service, bad_request, upstream_error
 
@@ -69,10 +77,46 @@ def edgar_workspace(request: EdgarWorkspaceRequest) -> EdgarWorkspaceResponse | 
         upstream_error(exc)
 
 
-@router.get("/edgar/intelligence/status", response_model=EdgarIntelligenceState)
-def edgar_intelligence_status(ticker: str, outputDir: str | None = None, jobId: str | None = None) -> EdgarIntelligenceState:
+@router.get("/edgar/intelligence/status", response_model=EdgarIntelligenceStatus)
+def edgar_intelligence_status(ticker: str, outputDir: str | None = None, jobId: str | None = None) -> EdgarIntelligenceStatus:
     try:
-        return edgar_service().intelligence_status(ticker=ticker, output_dir=outputDir, job_id=jobId)
+        return edgar_service().intelligence_api_status(ticker=ticker, output_dir=outputDir, job_id=jobId)
+    except ValueError as exc:
+        bad_request(exc)
+    except RuntimeError as exc:
+        upstream_error(exc)
+
+
+@router.post("/edgar/intelligence/index", response_model=EdgarIntelligenceIndexResponse)
+def edgar_intelligence_index(request: EdgarIntelligenceIndexRequest) -> EdgarIntelligenceIndexResponse:
+    try:
+        return edgar_service().intelligence_index(request)
+    except EdgarIntelligenceApiError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail.model_dump(mode="json")) from exc
+    except ValueError as exc:
+        bad_request(exc)
+    except RuntimeError as exc:
+        upstream_error(exc)
+
+
+@router.post("/edgar/intelligence/ask", response_model=EdgarQuestionResponse)
+def edgar_intelligence_ask(request: EdgarQuestionRequest) -> EdgarQuestionResponse:
+    try:
+        return edgar_service().intelligence_ask(request)
+    except EdgarIntelligenceApiError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail.model_dump(mode="json")) from exc
+    except ValueError as exc:
+        bad_request(exc)
+    except RuntimeError as exc:
+        upstream_error(exc)
+
+
+@router.post("/edgar/intelligence/compare", response_model=EdgarComparisonResponse)
+def edgar_intelligence_compare(request: EdgarComparisonRequest) -> EdgarComparisonResponse:
+    try:
+        return edgar_service().intelligence_compare(request)
+    except EdgarIntelligenceApiError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail.model_dump(mode="json")) from exc
     except ValueError as exc:
         bad_request(exc)
     except RuntimeError as exc:

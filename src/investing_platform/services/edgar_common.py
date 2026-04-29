@@ -42,9 +42,9 @@ FILING_EXPORT_FIELDS = [
 ]
 EXHIBIT_NAME_RE = re.compile(r"(?i)(?:^|[/_-])(?:ex(?:hibit)?|xex)\d")
 BODY_COVERAGE_POLICY_VERSION = "phase1-default-v1"
-INDEX_SCHEMA_VERSION = "pending-v1"
-CHUNKING_VERSION = "pending-v1"
-EMBEDDING_MODEL_VERSION = "pending-v1"
+INDEX_SCHEMA_VERSION = "edgar-intelligence-index-v1"
+CHUNKING_VERSION = "chunk-v1"
+EMBEDDING_MODEL_VERSION = "nomicai-modernbert-embed-base-4bit-v1"
 
 
 @dataclass(slots=True)

@@ -744,10 +744,10 @@ Response for `GET /api/sources/edgar/intelligence/status`:
   "modelState": {
     "status": "ready",
     "provider": "omlx",
-    "baseUrl": "http://127.0.0.1:8000/v1",
-    "chatModel": "mlx-community/Qwen3.6-35B-A3B-4bit",
-    "embeddingModel": "mlx-community/nomicai-modernbert-embed-base-4bit",
-    "rerankerModel": "mlx-community/mxbai-rerank-large-v2",
+    "baseUrl": "http://127.0.0.1:8001/v1",
+    "chatModel": "Qwen3.6-35B-A3B-4bit",
+    "embeddingModel": "nomicai-modernbert-embed-base-4bit",
+    "rerankerModel": "mxbai-rerank-large-v2",
     "lastCheckedAt": "2026-04-28T20:15:28Z",
     "message": null
   },
@@ -763,7 +763,7 @@ Response for `GET /api/sources/edgar/intelligence/status`:
     "indexVersion": "edgar-intelligence-index-v1",
     "corpusVersion": "primary-documents-v1",
     "chunkingVersion": "chunk-v1",
-    "embeddingModel": "mlx-community/nomicai-modernbert-embed-base-4bit",
+    "embeddingModel": "nomicai-modernbert-embed-base-4bit",
     "eligibleAccessions": 36,
     "indexedAccessions": 36,
     "indexedChunks": 4280,
@@ -825,7 +825,7 @@ Response for `POST /api/sources/edgar/intelligence/index`:
     "indexVersion": "edgar-intelligence-index-v1",
     "corpusVersion": "primary-documents-v1",
     "chunkingVersion": "chunk-v1",
-    "embeddingModel": "mlx-community/nomicai-modernbert-embed-base-4bit",
+    "embeddingModel": "nomicai-modernbert-embed-base-4bit",
     "eligibleAccessions": 36,
     "indexedAccessions": 31,
     "indexedChunks": 3710,
@@ -908,9 +908,9 @@ Response for `POST /api/sources/edgar/intelligence/ask`:
   "generatedAt": "2026-04-28T20:16:10Z",
   "model": {
     "provider": "omlx",
-    "chatModel": "mlx-community/Qwen3.6-35B-A3B-4bit",
-    "embeddingModel": "mlx-community/nomicai-modernbert-embed-base-4bit",
-    "rerankerModel": "mlx-community/mxbai-rerank-large-v2"
+    "chatModel": "Qwen3.6-35B-A3B-4bit",
+    "embeddingModel": "nomicai-modernbert-embed-base-4bit",
+    "rerankerModel": "mxbai-rerank-large-v2"
   },
   "freshnessState": {
     "status": "fresh",
@@ -1069,7 +1069,7 @@ Suggested settings:
 
 ```env
 INVESTING_PLATFORM_LLM_PROVIDER=omlx
-INVESTING_PLATFORM_LLM_BASE_URL=http://127.0.0.1:8000/v1
+INVESTING_PLATFORM_LLM_BASE_URL=http://127.0.0.1:8001/v1
 INVESTING_PLATFORM_LLM_API_KEY=
 INVESTING_PLATFORM_LLM_CHAT_MODEL=Qwen3.6-35B-A3B-4bit
 INVESTING_PLATFORM_LLM_FALLBACK_CHAT_MODEL=Qwen3.5-27B-4bit

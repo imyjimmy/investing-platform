@@ -10,8 +10,15 @@ from investing_platform.config import DashboardSettings
 from investing_platform.models import (
     EdgarDownloadRequest,
     EdgarDownloadResponse,
+    EdgarComparisonRequest,
+    EdgarComparisonResponse,
+    EdgarIntelligenceIndexRequest,
+    EdgarIntelligenceIndexResponse,
+    EdgarIntelligenceStatus,
     EdgarIntelligenceState,
     EdgarMetadataState,
+    EdgarQuestionRequest,
+    EdgarQuestionResponse,
     EdgarSyncRequest,
     EdgarSyncResponse,
     EdgarWorkspaceRequest,
@@ -240,3 +247,28 @@ class EdgarSyncService:
         paths = self._artifact_store._workspace_paths(output_root, request.ticker)
         workspace = self.workspace(request)
         return self._intelligence.status_for_workspace(workspace=workspace, request=request, paths=paths, job_id=job_id)
+
+    def intelligence_api_status(self, ticker: str, output_dir: str | None = None, job_id: str | None = None) -> EdgarIntelligenceStatus:
+        request = EdgarWorkspaceRequest(ticker=ticker, outputDir=output_dir)
+        output_root = Path(output_dir).expanduser() if output_dir else self._settings.research_root
+        paths = self._artifact_store._workspace_paths(output_root, request.ticker)
+        workspace = self.workspace(request)
+        return self._intelligence.api_status_for_workspace(workspace=workspace, request=request, paths=paths, job_id=job_id)
+
+    def intelligence_index(self, request: EdgarIntelligenceIndexRequest) -> EdgarIntelligenceIndexResponse:
+        output_root = Path(request.outputDir).expanduser() if request.outputDir else self._settings.research_root
+        paths = self._artifact_store._workspace_paths(output_root, request.ticker)
+        workspace = self.workspace(EdgarWorkspaceRequest(ticker=request.ticker, outputDir=request.outputDir))
+        return self._intelligence.index_workspace(workspace=workspace, request=request, paths=paths)
+
+    def intelligence_ask(self, request: EdgarQuestionRequest) -> EdgarQuestionResponse:
+        output_root = Path(request.outputDir).expanduser() if request.outputDir else self._settings.research_root
+        paths = self._artifact_store._workspace_paths(output_root, request.ticker)
+        workspace = self.workspace(EdgarWorkspaceRequest(ticker=request.ticker, outputDir=request.outputDir))
+        return self._intelligence.answer_question(workspace=workspace, request=request, paths=paths)
+
+    def intelligence_compare(self, request: EdgarComparisonRequest) -> EdgarComparisonResponse:
+        output_root = Path(request.outputDir).expanduser() if request.outputDir else self._settings.research_root
+        paths = self._artifact_store._workspace_paths(output_root, request.ticker)
+        workspace = self.workspace(EdgarWorkspaceRequest(ticker=request.ticker, outputDir=request.outputDir))
+        return self._intelligence.compare_filings(workspace=workspace, request=request, paths=paths)

@@ -74,6 +74,22 @@ INVESTING_PLATFORM_EDGAR_USER_AGENT=Your Name your_email@example.com
 INVESTING_PLATFORM_EDGAR_MAX_REQUESTS_PER_SECOND=5
 ```
 
+For local EDGAR intelligence, run oMLX separately from the app backend. The app backend uses port `8000`, so this repo expects oMLX on port `8001`:
+
+```env
+INVESTING_PLATFORM_LLM_PROVIDER=omlx
+INVESTING_PLATFORM_LLM_BASE_URL=http://127.0.0.1:8001/v1
+INVESTING_PLATFORM_LLM_CHAT_MODEL=Qwen3.6-35B-A3B-4bit
+```
+
+Download the default Qwen MLX model and start oMLX with:
+
+```bash
+./scripts/install_omlx.sh
+./scripts/download_qwen_model.sh
+./scripts/start_omlx.sh
+```
+
 Company PDF discovery can optionally fall back to a local rendered-HTML browser for public investor pages that require JavaScript. It is disabled by default. To try Scrapling, Lightpanda, or Obscura, install the browser tool and set:
 
 ```env

@@ -65,6 +65,17 @@ EdgarDownloadMode = Literal["primary-document", "all-attachments", "metadata-onl
 InvestorPdfCategory = Literal["annual-report", "earnings-deck", "investor-presentation", "company-report", "sec-exhibit"]
 FinancialStatementType = Literal["income_statement", "balance_sheet", "cash_flow", "ratios", "estimates", "summary"]
 FinancialPeriodType = Literal["annual", "quarterly", "ttm", "current", "unknown"]
+EdgarIntelligenceModelStatus = Literal["ready", "unavailable", "degraded"]
+EdgarFreshnessStatus = Literal["fresh", "stale", "degraded", "unknown"]
+EdgarLiveCheckStatus = Literal["not_needed", "succeeded", "failed", "skipped"]
+EdgarIndexStatus = Literal["missing", "queued", "indexing", "ready", "stale", "degraded", "failed"]
+EdgarIndexResponseStatus = Literal["completed", "queued", "indexing", "failed"]
+EdgarIndexMode = Literal["inline", "background"]
+EdgarIntelligenceJobKind = Literal["none", "index", "ask_maintenance", "sync_triggered_index"]
+EdgarIntelligenceJobStatus = Literal["idle", "queued", "indexing", "partial", "deferred", "completed", "failed", "cancelled"]
+EdgarMaintenanceStatus = Literal["none", "completed", "partial", "deferred", "failed"]
+EdgarQuestionConfidence = Literal["low", "medium", "high"]
+EdgarComparisonMode = Literal["latest-annual-vs-prior-annual", "latest-quarter-vs-prior-quarter", "recent-current-reports-by-topic"]
 
 
 class ConnectionStatus(DashboardModel):
@@ -1249,6 +1260,227 @@ class EdgarIntelligenceState(DashboardModel):
     indexedFilings: int = 0
     jobId: str | None = None
     polledVia: str | None = None
+
+
+class EdgarIntelligenceModelState(DashboardModel):
+    status: EdgarIntelligenceModelStatus
+    provider: str
+    baseUrl: str
+    chatModel: str
+    embeddingModel: str
+    rerankerModel: str
+    lastCheckedAt: datetime
+    message: str | None = None
+
+
+class EdgarFreshnessState(DashboardModel):
+    status: EdgarFreshnessStatus
+    liveCheckStatus: EdgarLiveCheckStatus
+    lastMetadataRefreshAt: datetime | None = None
+    lastLiveCheckAt: datetime | None = None
+    message: str | None = None
+
+
+class EdgarIndexState(DashboardModel):
+    status: EdgarIndexStatus
+    indexVersion: str
+    corpusVersion: str
+    chunkingVersion: str
+    embeddingModel: str
+    eligibleAccessions: int = 0
+    indexedAccessions: int = 0
+    indexedChunks: int = 0
+    staleAccessions: list[str] = Field(default_factory=list)
+    lastIndexedAt: datetime | None = None
+    limitations: list[str] = Field(default_factory=list)
+
+
+class EdgarIntelligenceJobProgress(DashboardModel):
+    documentsTotal: int = 0
+    documentsCompleted: int = 0
+    chunksTotal: int = 0
+    chunksCompleted: int = 0
+
+
+class EdgarIntelligenceJob(DashboardModel):
+    jobId: str | None = None
+    kind: EdgarIntelligenceJobKind = "none"
+    status: EdgarIntelligenceJobStatus = "idle"
+    startedAt: datetime | None = None
+    updatedAt: datetime
+    completedAt: datetime | None = None
+    progress: EdgarIntelligenceJobProgress = Field(default_factory=EdgarIntelligenceJobProgress)
+    message: str | None = None
+
+
+class EdgarMaintenanceState(DashboardModel):
+    status: EdgarMaintenanceStatus
+    newAccessionsDiscovered: int = 0
+    filingBodiesDownloaded: int = 0
+    documentsIndexed: int = 0
+    chunksEmbedded: int = 0
+    elapsedMs: int = 0
+    jobId: str | None = None
+    limitations: list[str] = Field(default_factory=list)
+
+
+class EdgarRetrievalState(DashboardModel):
+    chunksRetrieved: int = 0
+    chunksUsed: int = 0
+    eligibleAccessionsSearched: int = 0
+    indexVersion: str
+
+
+class EdgarAnswerModelInfo(DashboardModel):
+    provider: str
+    chatModel: str
+    embeddingModel: str
+    rerankerModel: str
+
+
+class EdgarIntelligenceStatus(DashboardModel):
+    ticker: str
+    outputDir: str | None = None
+    workspaceRoot: str
+    generatedAt: datetime
+    readyForAsk: bool
+    modelState: EdgarIntelligenceModelState
+    freshnessState: EdgarFreshnessState
+    indexState: EdgarIndexState
+    job: EdgarIntelligenceJob
+    limitations: list[str] = Field(default_factory=list)
+
+
+class EdgarIntelligenceIndexRequest(EdgarWorkspaceRequest):
+    rebuild: bool = False
+    forms: list[str] = Field(default_factory=list)
+    includeExhibits: bool = False
+
+    @field_validator("forms")
+    @classmethod
+    def _normalize_forms(cls, value: list[str]) -> list[str]:
+        deduped: list[str] = []
+        for form_type in value:
+            normalized = form_type.strip().upper()
+            if normalized and normalized not in deduped:
+                deduped.append(normalized)
+        return deduped
+
+
+class EdgarPollSelector(DashboardModel):
+    ticker: str
+    outputDir: str | None = None
+    jobId: str | None = None
+
+
+class EdgarIntelligenceIndexResponse(DashboardModel):
+    ticker: str
+    outputDir: str | None = None
+    status: EdgarIndexResponseStatus
+    mode: EdgarIndexMode
+    jobId: str | None = None
+    pollSelector: EdgarPollSelector
+    indexState: EdgarIndexState
+    job: EdgarIntelligenceJob
+    message: str
+
+
+class EdgarQuestionRequest(EdgarWorkspaceRequest):
+    question: str
+    forms: list[str] = Field(default_factory=list)
+    startDate: date | None = None
+    endDate: date | None = None
+    maxChunks: int = Field(default=24, ge=1, le=64)
+    maxAnswerTokens: int = Field(default=1200, ge=128, le=4096)
+    allowStale: bool = False
+
+    @field_validator("question")
+    @classmethod
+    def _normalize_question(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Provide a filing question.")
+        return normalized
+
+    @field_validator("forms")
+    @classmethod
+    def _normalize_forms(cls, value: list[str]) -> list[str]:
+        deduped: list[str] = []
+        for form_type in value:
+            normalized = form_type.strip().upper()
+            if normalized and normalized not in deduped:
+                deduped.append(normalized)
+        return deduped
+
+    @model_validator(mode="after")
+    def _validate_date_range(self) -> "EdgarQuestionRequest":
+        if self.startDate and self.endDate and self.startDate > self.endDate:
+            raise ValueError("startDate must be on or before endDate.")
+        return self
+
+
+class EdgarQuestionTextRange(DashboardModel):
+    startChar: int
+    endChar: int
+
+
+class EdgarQuestionCitation(DashboardModel):
+    citationId: str
+    ticker: str
+    accessionNumber: str
+    form: str
+    filingDate: date | None = None
+    documentName: str
+    section: str | None = None
+    chunkId: str
+    textRange: EdgarQuestionTextRange
+    snippet: str
+    sourcePath: str
+    secUrl: str
+
+
+class EdgarQuestionResponse(DashboardModel):
+    ticker: str
+    outputDir: str | None = None
+    question: str
+    answer: str
+    confidence: EdgarQuestionConfidence
+    generatedAt: datetime
+    model: EdgarAnswerModelInfo
+    freshnessState: EdgarFreshnessState
+    maintenanceState: EdgarMaintenanceState
+    retrievalState: EdgarRetrievalState
+    citations: list[EdgarQuestionCitation] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
+
+
+class EdgarComparisonRequest(EdgarQuestionRequest):
+    comparisonMode: EdgarComparisonMode
+
+
+class EdgarComparisonResponse(DashboardModel):
+    ticker: str
+    outputDir: str | None = None
+    comparisonMode: EdgarComparisonMode
+    resolvedQuestion: str
+    targetAccessions: list[str] = Field(default_factory=list)
+    answer: str
+    confidence: EdgarQuestionConfidence
+    generatedAt: datetime
+    freshnessState: EdgarFreshnessState
+    maintenanceState: EdgarMaintenanceState
+    retrievalState: EdgarRetrievalState
+    citations: list[EdgarQuestionCitation] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
+
+
+class EdgarIntelligenceErrorDetail(DashboardModel):
+    code: str
+    message: str
+    ticker: str | None = None
+    jobId: str | None = None
+    retryAfterSeconds: int | None = None
+    limitations: list[str] = Field(default_factory=list)
 
 
 class EdgarSyncResponse(DashboardModel):

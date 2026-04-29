@@ -20,8 +20,15 @@ from investing_platform.models import (
     EdgarBodyCacheState,
     EdgarDownloadRequest,
     EdgarDownloadResponse,
+    EdgarComparisonRequest,
+    EdgarComparisonResponse,
+    EdgarIntelligenceIndexRequest,
+    EdgarIntelligenceIndexResponse,
+    EdgarIntelligenceStatus,
     EdgarIntelligenceState,
     EdgarMetadataState,
+    EdgarQuestionRequest,
+    EdgarQuestionResponse,
     EdgarSourceStatus,
     EdgarSyncRequest,
     EdgarSyncResponse,
@@ -64,7 +71,7 @@ class EdgarDownloader:
         self._limiters_lock = threading.Lock()
         self._resolver_service = EdgarResolverService(settings, get_json=self._get_json)
         self._metadata_cache_service = EdgarMetadataCacheService(settings, request=self._request)
-        self._intelligence_service = EdgarIntelligenceService()
+        self._intelligence_service = EdgarIntelligenceService(settings)
         self._sync_service = EdgarSyncService(
             settings,
             resolver=self._resolver_service,
@@ -234,6 +241,18 @@ class EdgarDownloader:
 
     def intelligence_status(self, ticker: str, output_dir: str | None = None, job_id: str | None = None) -> EdgarIntelligenceState:
         return self._sync_service.intelligence_status(ticker=ticker, output_dir=output_dir, job_id=job_id)
+
+    def intelligence_api_status(self, ticker: str, output_dir: str | None = None, job_id: str | None = None) -> EdgarIntelligenceStatus:
+        return self._sync_service.intelligence_api_status(ticker=ticker, output_dir=output_dir, job_id=job_id)
+
+    def intelligence_index(self, request: EdgarIntelligenceIndexRequest) -> EdgarIntelligenceIndexResponse:
+        return self._sync_service.intelligence_index(request)
+
+    def intelligence_ask(self, request: EdgarQuestionRequest) -> EdgarQuestionResponse:
+        return self._sync_service.intelligence_ask(request)
+
+    def intelligence_compare(self, request: EdgarComparisonRequest) -> EdgarComparisonResponse:
+        return self._sync_service.intelligence_compare(request)
 
     def _default_runtime_options(self) -> EdgarRuntimeOptions:
         return EdgarRuntimeOptions(

@@ -111,6 +111,20 @@ class DashboardSettings:
     edgar_max_requests_per_second: float = 5.0
     edgar_timeout_seconds: float = 30.0
     edgar_retry_limit: int = 5
+    llm_provider: str = "omlx"
+    llm_base_url: str = "http://127.0.0.1:8001/v1"
+    llm_api_key: str | None = None
+    llm_chat_model: str = "Qwen3.6-35B-A3B-4bit"
+    llm_fallback_chat_model: str = "Qwen3.5-27B-4bit"
+    llm_embed_model: str = "nomicai-modernbert-embed-base-4bit"
+    llm_rerank_model: str = "mxbai-rerank-large-v2"
+    llm_max_context_tokens: int = 32768
+    llm_max_answer_tokens: int = 1200
+    llm_max_retrieved_chunks: int = 24
+    llm_max_prompt_chunks: int = 8
+    llm_chunk_target_tokens: int = 1100
+    llm_chunk_overlap_tokens: int = 150
+    llm_request_timeout_seconds: float = 5.0
     investor_browser_provider: InvestorBrowserProvider = "disabled"
     investor_browser_command: str | None = None
     investor_browser_timeout_seconds: float = 30.0
@@ -262,6 +276,29 @@ class DashboardSettings:
                 "OPTIONS_DASHBOARD_EDGAR_RETRY_LIMIT",
                 default=5,
             ),
+            llm_provider=_env_str("INVESTING_PLATFORM_LLM_PROVIDER", default="omlx"),
+            llm_base_url=_env_str("INVESTING_PLATFORM_LLM_BASE_URL", default="http://127.0.0.1:8001/v1"),
+            llm_api_key=_env_optional_str("INVESTING_PLATFORM_LLM_API_KEY"),
+            llm_chat_model=_env_str("INVESTING_PLATFORM_LLM_CHAT_MODEL", default="Qwen3.6-35B-A3B-4bit"),
+            llm_fallback_chat_model=_env_str(
+                "INVESTING_PLATFORM_LLM_FALLBACK_CHAT_MODEL",
+                default="Qwen3.5-27B-4bit",
+            ),
+            llm_embed_model=_env_str(
+                "INVESTING_PLATFORM_LLM_EMBED_MODEL",
+                default="nomicai-modernbert-embed-base-4bit",
+            ),
+            llm_rerank_model=_env_str(
+                "INVESTING_PLATFORM_LLM_RERANK_MODEL",
+                default="mxbai-rerank-large-v2",
+            ),
+            llm_max_context_tokens=_env_int("INVESTING_PLATFORM_LLM_MAX_CONTEXT_TOKENS", default=32768),
+            llm_max_answer_tokens=_env_int("INVESTING_PLATFORM_LLM_MAX_ANSWER_TOKENS", default=1200),
+            llm_max_retrieved_chunks=_env_int("INVESTING_PLATFORM_LLM_MAX_RETRIEVED_CHUNKS", default=24),
+            llm_max_prompt_chunks=_env_int("INVESTING_PLATFORM_LLM_MAX_PROMPT_CHUNKS", default=8),
+            llm_chunk_target_tokens=_env_int("INVESTING_PLATFORM_LLM_CHUNK_TARGET_TOKENS", default=1100),
+            llm_chunk_overlap_tokens=_env_int("INVESTING_PLATFORM_LLM_CHUNK_OVERLAP_TOKENS", default=150),
+            llm_request_timeout_seconds=_env_float("INVESTING_PLATFORM_LLM_REQUEST_TIMEOUT_SECONDS", default=5.0),
             investor_browser_provider=_env_investor_browser_provider(
                 "INVESTING_PLATFORM_INVESTOR_BROWSER_PROVIDER",
                 default="disabled",
