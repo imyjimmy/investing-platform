@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json as json_module
+import math
 from typing import Any
 
 import requests
@@ -71,7 +72,10 @@ class OmlxClient:
             for value in embedding:
                 if isinstance(value, bool) or not isinstance(value, int | float):
                     raise OmlxClientError("oMLX returned an embedding with non-numeric values.")
-                vector.append(float(value))
+                numeric_value = float(value)
+                if not math.isfinite(numeric_value):
+                    raise OmlxClientError("oMLX returned an embedding with non-finite values.")
+                vector.append(numeric_value)
             embeddings.append(vector)
         if len(embeddings) != len(texts):
             raise OmlxClientError("oMLX returned a different number of embeddings than requested.")

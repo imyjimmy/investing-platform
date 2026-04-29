@@ -10,7 +10,7 @@ from investing_platform.config import DashboardSettings
 from investing_platform.models import EdgarIntelligenceIndexRequest, EdgarMetadataState, EdgarQuestionRequest
 from investing_platform.services.edgar_intelligence import EdgarIntelligenceApiError, EdgarIntelligenceService
 from investing_platform.services.edgar import EdgarDownloader
-from investing_platform.services.omlx_client import OmlxModel
+from investing_platform.services.omlx_client import OmlxClientError, OmlxModel
 
 
 class FakeOmlxClient:
@@ -33,6 +33,33 @@ class MissingEmbeddingOmlxClient:
 
     def embed_texts(self, *, model: str, texts: list[str]) -> list[list[float]]:
         raise AssertionError("Embedding should not run when the model is unavailable.")
+
+
+class BatchPoisoningOmlxClient:
+    def __init__(self, *, fail_single_text: str | None = None) -> None:
+        self.calls: list[list[str]] = []
+        self.fail_single_text = fail_single_text
+
+    def list_models(self) -> list[OmlxModel]:
+        return [OmlxModel(id="nomicai-modernbert-embed-base-4bit")]
+
+    def has_model(self, model_id: str) -> bool:
+        return model_id == "nomicai-modernbert-embed-base-4bit"
+
+    def embed_texts(self, *, model: str, texts: list[str]) -> list[list[float]]:
+        self.calls.append(list(texts))
+        if len(texts) > 1:
+            raise OmlxClientError("oMLX returned an embedding with non-numeric values.")
+        if self.fail_single_text and self.fail_single_text in texts[0]:
+            raise OmlxClientError("oMLX returned an embedding with non-finite values.")
+        return [self._vector_for(texts[0])]
+
+    def _vector_for(self, text: str) -> list[float]:
+        if "first" in text:
+            return [1.0, 0.0, 0.0]
+        if "second" in text:
+            return [0.0, 1.0, 0.0]
+        return [0.0, 0.0, 1.0]
 
 
 class GuardrailFakeOmlxClient:
@@ -124,6 +151,71 @@ def test_intelligence_index_builds_ticker_scoped_corpus_scaffold(tmp_path) -> No
     with sqlite3.connect(paths.intelligence_dir / "index" / "retrieval.sqlite3") as connection:
         chunk_count = connection.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
     assert chunk_count == 1
+
+
+def test_embedding_builder_retries_failed_batch_one_chunk_at_a_time_without_losing_chunks(tmp_path) -> None:
+    settings = DashboardSettings(
+        research_root=tmp_path / "research-root",
+        edgar_user_agent="Investing Platform tests@example.com",
+    )
+    fake_client = BatchPoisoningOmlxClient()
+    service = EdgarIntelligenceService(settings, omlx_client=fake_client)
+
+    embeddings, errors = service._build_embeddings(
+        [
+            {"chunkId": "chunk:first", "text": "first filing chunk"},
+            {"chunkId": "chunk:second", "text": "second filing chunk"},
+            {"chunkId": "chunk:third", "text": "third filing chunk"},
+        ]
+    )
+
+    assert errors == []
+    assert embeddings is not None
+    assert embeddings.shape == (3, 3)
+    assert np.allclose(
+        embeddings.astype(np.float32),
+        np.asarray(
+            [
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ],
+            dtype=np.float32,
+        ),
+    )
+    assert fake_client.calls == [
+        ["first filing chunk", "second filing chunk", "third filing chunk"],
+        ["first filing chunk"],
+        ["second filing chunk"],
+        ["third filing chunk"],
+    ]
+
+
+def test_embedding_builder_fails_instead_of_skipping_bad_single_chunk_after_retry(tmp_path) -> None:
+    settings = DashboardSettings(
+        research_root=tmp_path / "research-root",
+        edgar_user_agent="Investing Platform tests@example.com",
+    )
+    fake_client = BatchPoisoningOmlxClient(fail_single_text="bad")
+    service = EdgarIntelligenceService(settings, omlx_client=fake_client)
+
+    embeddings, errors = service._build_embeddings(
+        [
+            {"chunkId": "chunk:first", "text": "first filing chunk"},
+            {"chunkId": "chunk:bad", "text": "bad filing chunk"},
+            {"chunkId": "chunk:third", "text": "third filing chunk"},
+        ]
+    )
+
+    assert embeddings is None
+    assert len(errors) == 1
+    assert "chunk:bad" in errors[0]
+    assert "still failed" in errors[0]
+    assert fake_client.calls == [
+        ["first filing chunk", "bad filing chunk", "third filing chunk"],
+        ["first filing chunk"],
+        ["bad filing chunk"],
+    ]
 
 
 def test_intelligence_index_removes_stale_embeddings_when_embedding_model_is_missing(tmp_path) -> None:

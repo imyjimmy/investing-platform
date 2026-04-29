@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import pytest
 
 from investing_platform.config import DashboardSettings
@@ -13,6 +15,16 @@ def test_embed_texts_rejects_non_numeric_vector_values() -> None:
     }
 
     with pytest.raises(OmlxClientError, match="non-numeric"):
+        client.embed_texts(model="nomicai-modernbert-embed-base-4bit", texts=["hello"])
+
+
+def test_embed_texts_rejects_non_finite_vector_values() -> None:
+    client = OmlxClient(DashboardSettings())
+    client._request = lambda *args, **kwargs: {  # type: ignore[method-assign]
+        "data": [{"index": 0, "embedding": [0.1, math.nan, 0.3]}],
+    }
+
+    with pytest.raises(OmlxClientError, match="non-finite"):
         client.embed_texts(model="nomicai-modernbert-embed-base-4bit", texts=["hello"])
 
 

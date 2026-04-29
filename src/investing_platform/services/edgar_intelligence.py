@@ -984,9 +984,9 @@ class EdgarIntelligenceService:
             texts = [str(chunk.get("text") or "") for chunk in chunks]
             for start in range(0, len(texts), EMBEDDING_BATCH_SIZE):
                 vectors.extend(
-                    self._omlx_client.embed_texts(
-                        model=self._settings.llm_embed_model,
-                        texts=texts[start : start + EMBEDDING_BATCH_SIZE],
+                    self._embed_text_batch(
+                        texts[start : start + EMBEDDING_BATCH_SIZE],
+                        chunks[start : start + EMBEDDING_BATCH_SIZE],
                     )
                 )
         except OmlxClientError as exc:
@@ -1002,6 +1002,33 @@ class EdgarIntelligenceService:
         if not np.all(np.isfinite(matrix)):
             return None, ["Embedding model returned non-finite vector values."]
         return matrix.astype(np.float16), []
+
+    def _embed_text_batch(self, texts: list[str], chunks: list[dict[str, Any]]) -> list[list[float]]:
+        try:
+            return self._omlx_client.embed_texts(
+                model=self._settings.llm_embed_model,
+                texts=texts,
+            )
+        except OmlxClientError as batch_error:
+            if len(texts) <= 1:
+                raise
+
+            vectors: list[list[float]] = []
+            for text, chunk in zip(texts, chunks, strict=False):
+                try:
+                    vectors.extend(
+                        self._omlx_client.embed_texts(
+                            model=self._settings.llm_embed_model,
+                            texts=[text],
+                        )
+                    )
+                except OmlxClientError as single_error:
+                    chunk_id = str(chunk.get("chunkId") or "unknown chunk")
+                    raise OmlxClientError(
+                        f"{batch_error} Retried the embedding batch one chunk at a time, "
+                        f"but chunk {chunk_id} still failed: {single_error}"
+                    ) from single_error
+            return vectors
 
     def _write_last_index(self, paths: WorkspacePaths, *, index_state: EdgarIndexState, job: EdgarIntelligenceJob) -> None:
         last_index_path = self._last_index_path(paths)
