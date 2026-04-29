@@ -67,7 +67,12 @@ class OmlxClient:
             embedding = item.get("embedding")
             if not isinstance(embedding, list):
                 raise OmlxClientError("oMLX returned an embedding without float values.")
-            embeddings.append([float(value) for value in embedding])
+            vector: list[float] = []
+            for value in embedding:
+                if isinstance(value, bool) or not isinstance(value, int | float):
+                    raise OmlxClientError("oMLX returned an embedding with non-numeric values.")
+                vector.append(float(value))
+            embeddings.append(vector)
         if len(embeddings) != len(texts):
             raise OmlxClientError("oMLX returned a different number of embeddings than requested.")
         return embeddings
@@ -81,7 +86,32 @@ class OmlxClient:
                 "messages": messages,
                 "temperature": 0,
                 "max_tokens": max_tokens,
-                "response_format": {"type": "json_object"},
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "edgar_answer",
+                        "strict": True,
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "required": ["answer", "confidence", "citations", "limitations"],
+                            "properties": {
+                                "answer": {"type": "string"},
+                                "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
+                                "citations": {
+                                    "type": "array",
+                                    "items": {"type": "string", "pattern": "^C[0-9]+$"},
+                                },
+                                "limitations": {"type": "array", "items": {"type": "string"}},
+                            },
+                        },
+                    },
+                },
+                "chat_template_kwargs": {
+                    "enable_thinking": False,
+                    "preserve_thinking": False,
+                },
+                "thinking_budget": 0,
             },
             timeout=max(self._settings.llm_request_timeout_seconds, 120.0),
         )
@@ -99,13 +129,30 @@ class OmlxClient:
             content = "".join(str(part.get("text") or "") if isinstance(part, dict) else str(part) for part in content)
         if not isinstance(content, str) or not content.strip():
             raise OmlxClientError("oMLX returned an empty chat completion.")
+        return self._decode_json_object(content)
+
+    def _decode_json_object(self, content: str) -> dict[str, Any]:
         try:
             decoded = json_module.loads(content)
-        except ValueError as exc:
-            raise OmlxClientError("oMLX returned non-JSON answer content.") from exc
+        except ValueError:
+            decoded = self._extract_json_object(content)
         if not isinstance(decoded, dict):
             raise OmlxClientError("oMLX returned JSON answer content that was not an object.")
         return decoded
+
+    def _extract_json_object(self, content: str) -> dict[str, Any]:
+        decoder = json_module.JSONDecoder()
+        for index, char in enumerate(content):
+            if char != "{":
+                continue
+            try:
+                decoded, _end = decoder.raw_decode(content[index:])
+            except ValueError:
+                continue
+            if isinstance(decoded, dict):
+                return decoded
+        snippet = content.strip().replace("\n", " ")[:300]
+        raise OmlxClientError(f"oMLX returned non-JSON answer content: {snippet}")
 
     def _request(
         self,
