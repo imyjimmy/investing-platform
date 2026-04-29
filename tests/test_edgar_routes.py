@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 import investing_platform.api.routes.research as research_routes
 from investing_platform.main import app
 from investing_platform.models import (
+    EdgarAnswerModelInfo,
     EdgarBodyCacheState,
     EdgarFreshnessState,
     EdgarIndexState,
@@ -16,8 +17,11 @@ from investing_platform.models import (
     EdgarIntelligenceModelState,
     EdgarIntelligenceState,
     EdgarIntelligenceStatus,
+    EdgarMaintenanceState,
     EdgarMetadataState,
     EdgarPollSelector,
+    EdgarQuestionResponse,
+    EdgarRetrievalState,
     EdgarSourceStatus,
     EdgarSyncResponse,
     EdgarWorkspaceResponse,
@@ -192,6 +196,27 @@ class FakeEdgarService:
             message="Index request completed.",
         )
 
+    def intelligence_ask(self, request) -> EdgarQuestionResponse:
+        return EdgarQuestionResponse(
+            ticker=request.ticker,
+            outputDir=request.outputDir,
+            question=request.question,
+            answer="I cannot answer this from the retrieved SEC filing excerpts.",
+            confidence="low",
+            generatedAt=NOW,
+            model=EdgarAnswerModelInfo(
+                provider="omlx",
+                chatModel="Qwen3.6-35B-A3B-4bit",
+                embeddingModel="nomicai-modernbert-embed-base-4bit",
+                rerankerModel="mxbai-rerank-large-v2",
+            ),
+            freshnessState=EdgarFreshnessState(status="fresh", liveCheckStatus="succeeded", lastMetadataRefreshAt=NOW, lastLiveCheckAt=NOW),
+            maintenanceState=EdgarMaintenanceState(status="none", elapsedMs=12),
+            retrievalState=EdgarRetrievalState(chunksRetrieved=0, chunksUsed=0, eligibleAccessionsSearched=0, indexVersion="edgar-intelligence-index-v1"),
+            citations=[],
+            limitations=["No retrieved filing evidence was strong enough to answer safely."],
+        )
+
 
 def test_edgar_sync_route_returns_simplified_contract(monkeypatch) -> None:
     fake_service = FakeEdgarService()
@@ -281,3 +306,25 @@ def test_edgar_intelligence_index_route_returns_structured_exhibit_error(monkeyp
     payload = response.json()
     assert payload["detail"]["code"] == "exhibits_not_supported"
     assert payload["detail"]["ticker"] == "AAPL"
+
+
+def test_edgar_intelligence_ask_route_returns_guarded_response_shape(monkeypatch) -> None:
+    fake_service = FakeEdgarService()
+    monkeypatch.setattr(research_routes, "edgar_service", lambda: fake_service)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/sources/edgar/intelligence/ask",
+            json={
+                "ticker": "AAPL",
+                "question": "What does the filing say about lithium exposure?",
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ticker"] == "AAPL"
+    assert payload["answer"] == "I cannot answer this from the retrieved SEC filing excerpts."
+    assert payload["confidence"] == "low"
+    assert payload["citations"] == []
+    assert payload["retrievalState"]["chunksRetrieved"] == 0

@@ -561,6 +561,22 @@ Suggested response shape:
 }
 ```
 
+## Answer Validation Guardrails
+
+Phase 1 must treat model output as a proposal, not as the final product response.
+
+The backend must validate generated answers before returning them to the UI:
+
+- if retrieval is empty or below the relevance threshold, return a low-confidence refusal rather than calling generation
+- every substantive factual answer must include citation markers that refer to retrieved chunks
+- citation ids returned by the model must be a subset of the citation ids assigned by retrieval
+- the API must assemble final citation objects from local chunk metadata, not from model-provided citation text
+- model answers with fabricated citation ids, missing citation markers, unsupported numbers, unsupported proper nouns, or contradicted direction terms must be replaced with a guarded refusal
+- freshness-sensitive questions must not answer from degraded live metadata unless stale answers are explicitly allowed
+- retrieved text that looks like prompt injection must not be treated as instructions
+
+The test suite should include deterministic freewheel tripwires with tiny fixture filings and fake model outputs. These tests should fail if unsupported model output escapes the backend validator.
+
 ## Backend API Design
 
 Extend `src/investing_platform/api/routes/research.py`.

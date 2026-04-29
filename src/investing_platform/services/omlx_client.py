@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json as json_module
 from typing import Any
 
 import requests
@@ -70,6 +71,41 @@ class OmlxClient:
         if len(embeddings) != len(texts):
             raise OmlxClientError("oMLX returned a different number of embeddings than requested.")
         return embeddings
+
+    def chat_json(self, *, model: str, messages: list[dict[str, str]], max_tokens: int) -> dict[str, Any]:
+        payload = self._request(
+            "POST",
+            "/chat/completions",
+            json={
+                "model": model,
+                "messages": messages,
+                "temperature": 0,
+                "max_tokens": max_tokens,
+                "response_format": {"type": "json_object"},
+            },
+            timeout=max(self._settings.llm_request_timeout_seconds, 120.0),
+        )
+        choices = payload.get("choices")
+        if not isinstance(choices, list) or not choices:
+            raise OmlxClientError("oMLX returned no chat completion choices.")
+        first_choice = choices[0]
+        if not isinstance(first_choice, dict):
+            raise OmlxClientError("oMLX returned an invalid chat completion choice.")
+        message = first_choice.get("message")
+        if not isinstance(message, dict):
+            raise OmlxClientError("oMLX returned a chat completion without a message.")
+        content = message.get("content")
+        if isinstance(content, list):
+            content = "".join(str(part.get("text") or "") if isinstance(part, dict) else str(part) for part in content)
+        if not isinstance(content, str) or not content.strip():
+            raise OmlxClientError("oMLX returned an empty chat completion.")
+        try:
+            decoded = json_module.loads(content)
+        except ValueError as exc:
+            raise OmlxClientError("oMLX returned non-JSON answer content.") from exc
+        if not isinstance(decoded, dict):
+            raise OmlxClientError("oMLX returned JSON answer content that was not an object.")
+        return decoded
 
     def _request(
         self,
