@@ -42,6 +42,16 @@ function formatApiErrorDetail(detail: unknown): string | null {
     return entries.length ? entries.join(" ") : null;
   }
   if (detail && typeof detail === "object") {
+    const structured = detail as { code?: unknown; message?: unknown; limitations?: unknown };
+    const message = typeof structured.message === "string" ? structured.message.trim() : "";
+    const code = typeof structured.code === "string" ? structured.code.trim() : "";
+    const limitations = Array.isArray(structured.limitations)
+      ? structured.limitations.map((item) => (typeof item === "string" ? item.trim() : "")).filter(Boolean)
+      : [];
+    if (message) {
+      const suffix = [code ? `Code: ${code}.` : "", ...limitations].filter(Boolean).join(" ");
+      return suffix ? `${message} ${suffix}` : message;
+    }
     try {
       return JSON.stringify(detail);
     } catch {
