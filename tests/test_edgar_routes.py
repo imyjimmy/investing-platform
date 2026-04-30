@@ -9,6 +9,7 @@ from investing_platform.main import app
 from investing_platform.models import (
     EdgarAnswerModelInfo,
     EdgarBodyCacheState,
+    EdgarComparisonResponse,
     EdgarFreshnessState,
     EdgarIndexState,
     EdgarIntelligenceIndexRequest,
@@ -217,6 +218,23 @@ class FakeEdgarService:
             limitations=["No retrieved filing evidence was strong enough to answer safely."],
         )
 
+    def intelligence_compare(self, request) -> EdgarComparisonResponse:
+        return EdgarComparisonResponse(
+            ticker=request.ticker,
+            outputDir=request.outputDir,
+            comparisonMode=request.comparisonMode,
+            resolvedQuestion=f"Compare 000-new, 000-prior for {request.ticker}. User question: {request.question}",
+            targetAccessions=["000-new", "000-prior"],
+            answer="Compared target filings [C1].",
+            confidence="medium",
+            generatedAt=NOW,
+            freshnessState=EdgarFreshnessState(status="fresh", liveCheckStatus="succeeded", lastMetadataRefreshAt=NOW, lastLiveCheckAt=NOW),
+            maintenanceState=EdgarMaintenanceState(status="none", elapsedMs=12),
+            retrievalState=EdgarRetrievalState(chunksRetrieved=2, chunksUsed=2, eligibleAccessionsSearched=2, indexVersion="edgar-intelligence-index-v1"),
+            citations=[],
+            limitations=[],
+        )
+
 
 def test_edgar_sync_route_returns_simplified_contract(monkeypatch) -> None:
     fake_service = FakeEdgarService()
@@ -328,3 +346,26 @@ def test_edgar_intelligence_ask_route_returns_guarded_response_shape(monkeypatch
     assert payload["confidence"] == "low"
     assert payload["citations"] == []
     assert payload["retrievalState"]["chunksRetrieved"] == 0
+
+
+def test_edgar_intelligence_compare_route_returns_targeted_response_shape(monkeypatch) -> None:
+    fake_service = FakeEdgarService()
+    monkeypatch.setattr(research_routes, "edgar_service", lambda: fake_service)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/sources/edgar/intelligence/compare",
+            json={
+                "ticker": "AAPL",
+                "comparisonMode": "latest-annual-vs-prior-annual",
+                "question": "What changed in risk factors?",
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ticker"] == "AAPL"
+    assert payload["comparisonMode"] == "latest-annual-vs-prior-annual"
+    assert payload["targetAccessions"] == ["000-new", "000-prior"]
+    assert payload["answer"] == "Compared target filings [C1]."
+    assert payload["retrievalState"]["eligibleAccessionsSearched"] == 2

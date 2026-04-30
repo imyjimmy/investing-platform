@@ -5,7 +5,27 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from investing_platform.config import DashboardSettings
-from investing_platform.models import EdgarDownloadResponse, EdgarSyncRequest, EdgarWorkspaceRequest
+from investing_platform.models import (
+    EdgarAnswerModelInfo,
+    EdgarBodyCacheState,
+    EdgarFreshnessState,
+    EdgarIndexState,
+    EdgarIntelligenceIndexResponse,
+    EdgarIntelligenceJob,
+    EdgarIntelligenceState,
+    EdgarMaintenanceState,
+    EdgarMetadataState,
+    EdgarPollSelector,
+    EdgarQuestionRequest,
+    EdgarQuestionResponse,
+    EdgarRetrievalState,
+    EdgarDownloadResponse,
+    EdgarSyncRequest,
+    EdgarSyncResponse,
+    EdgarWorkspaceRequest,
+    EdgarWorkspaceResponse,
+    EdgarWorkspaceSelector,
+)
 from investing_platform.services.edgar import EdgarDownloader, DownloadCounters, ResolvedCompany
 
 
@@ -185,3 +205,224 @@ def test_workspace_falls_back_to_legacy_last_sync_when_simplified_snapshot_is_mi
     assert workspace.workspace.outputDir == str(legacy_output_root)
     assert workspace.metadataState.status == "stale"
     assert "before the simplified EDGAR sync state" in str(workspace.metadataState.message)
+
+
+def test_ask_time_sync_limits_new_filing_body_downloads(tmp_path, monkeypatch) -> None:
+    service, _settings = _build_service(tmp_path)
+    resolved = _sample_resolved_company()
+    filings = []
+    for index in range(7):
+        filings.append(
+            {
+                "ticker": "AAPL",
+                "companyName": "Apple Inc.",
+                "cik": "320193",
+                "cik10": "0000320193",
+                "form": "8-K",
+                "filingDate": f"2026-01-{30 - index:02d}",
+                "reportDate": f"2026-01-{30 - index:02d}",
+                "acceptanceDateTime": f"2026-01-{30 - index:02d}T12:00:00Z",
+                "accessionNumber": f"0000320193-26-00000{index}",
+                "accessionNumberNoDashes": f"00003201932600000{index}",
+                "primaryDocument": f"a8-k-{index}.htm",
+                "primaryDocDescription": "Current report",
+                "items": "2.02",
+                "act": "34",
+                "fileNumber": "001-36743",
+                "filmNumber": f"2654321{index}",
+                "size": None,
+                "isXBRL": None,
+                "isInlineXBRL": None,
+                "archiveBaseUrl": f"https://www.sec.gov/Archives/edgar/data/320193/00003201932600000{index}",
+                "primaryDocumentUrl": f"https://www.sec.gov/Archives/edgar/data/320193/00003201932600000{index}/a8-k-{index}.htm",
+            }
+        )
+
+    monkeypatch.setattr(service._resolver_service, "resolve_issuer_query", lambda issuer_query, options, force_refresh=False: resolved)
+    monkeypatch.setattr(service._metadata_cache_service, "ensure_bulk_baseline", lambda options, force_refresh=False: {"status": "ready", "artifacts": {}})
+    monkeypatch.setattr(service, "_fetch_submission_payloads", lambda **kwargs: [{"stub": "payload"}])
+    monkeypatch.setattr(service, "_build_filing_rows", lambda payloads, resolved_company: filings)
+    monkeypatch.setattr(service, "_select_smart_working_set", lambda all_filings: all_filings)
+    downloaded_accessions: list[str] = []
+
+    def fake_download_filing_assets(*, filing, request, options, filings_dir, edgar_root, manifest, counters) -> None:
+        downloaded_accessions.append(str(filing["accessionNumber"]))
+        destination = filings_dir / service._filing_folder_name(filing) / "primary" / str(filing["primaryDocument"])
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text("<html>filing body</html>", encoding="utf-8")
+        counters.downloaded_files += 1
+
+    monkeypatch.setattr(service, "_download_filing_assets", fake_download_filing_assets)
+
+    response = service._sync_service._sync(
+        EdgarSyncRequest(issuerQuery="AAPL"),
+        max_uncached_filing_bodies=5,
+    )
+
+    assert downloaded_accessions == [str(filing["accessionNumber"]) for filing in filings[:5]]
+    assert response.bodyCacheState.status == "partial"
+    assert response.bodyCacheState.matchedFilings == 7
+    assert response.bodyCacheState.cachedFilings == 5
+    assert response.bodyCacheState.downloadedFilings == 5
+    assert response.bodyCacheState.skippedFilings == 2
+    assert "deferred the remaining filing bodies" in str(response.bodyCacheState.message)
+
+
+def test_ask_runs_bounded_maintenance_before_answer(tmp_path, monkeypatch) -> None:
+    service, settings = _build_service(tmp_path)
+    sync_service = service._sync_service
+    stale_workspace = _workspace_response(settings, metadata_status="stale", body_status="missing")
+    fresh_workspace = _workspace_response(settings, metadata_status="fresh", body_status="ready")
+    workspace_calls = 0
+    sync_calls: list[tuple[str, str | None, int | None]] = []
+    fake_intelligence = _AskMaintenanceFakeIntelligence(settings)
+    sync_service._intelligence = fake_intelligence
+
+    def fake_workspace(request: EdgarWorkspaceRequest) -> EdgarWorkspaceResponse:
+        nonlocal workspace_calls
+        workspace_calls += 1
+        return stale_workspace if workspace_calls == 1 else fresh_workspace
+
+    def fake_sync(request: EdgarSyncRequest, *, max_uncached_filing_bodies: int | None = None) -> EdgarSyncResponse:
+        sync_calls.append((request.issuerQuery, request.outputDir, max_uncached_filing_bodies))
+        return EdgarSyncResponse(
+            issuerQuery=request.issuerQuery,
+            resolvedTicker="AAPL",
+            resolvedCompanyName="Apple Inc.",
+            resolvedCik="0000320193",
+            workspace=EdgarWorkspaceSelector(ticker="AAPL", outputDir=request.outputDir),
+            metadataState=EdgarMetadataState(status="fresh", lastRefreshedAt=NOW, lastLiveCheckedAt=NOW, newAccessions=2),
+            bodyCacheState=EdgarBodyCacheState(
+                status="updated",
+                lastRefreshedAt=NOW,
+                matchedFilings=2,
+                cachedFilings=2,
+                downloadedFilings=2,
+                skippedFilings=0,
+                failedFilings=0,
+            ),
+            intelligenceState=EdgarIntelligenceState(status="unavailable"),
+        )
+
+    monkeypatch.setattr(sync_service, "workspace", fake_workspace)
+    monkeypatch.setattr(sync_service, "_sync", fake_sync)
+
+    response = sync_service.intelligence_ask(
+        EdgarQuestionRequest(ticker="AAPL", question="What changed in revenue?")
+    )
+
+    assert sync_calls == [("AAPL", None, 5)]
+    assert fake_intelligence.index_limits == {
+        "max_documents": 5,
+        "max_chunks": 250,
+        "max_index_seconds": 20.0,
+        "job_kind": "ask_maintenance",
+    }
+    assert fake_intelligence.answer_calls == 1
+    assert response.maintenanceState.status == "completed"
+    assert response.maintenanceState.newAccessionsDiscovered == 2
+    assert response.maintenanceState.filingBodiesDownloaded == 2
+    assert response.maintenanceState.documentsIndexed == 1
+    assert response.maintenanceState.chunksEmbedded == 1
+    assert response.maintenanceState.jobId == "job-ask-maintenance"
+
+
+def _workspace_response(
+    settings: DashboardSettings,
+    *,
+    metadata_status: str,
+    body_status: str,
+) -> EdgarWorkspaceResponse:
+    return EdgarWorkspaceResponse(
+        ticker="AAPL",
+        companyName="Apple Inc.",
+        cik="0000320193",
+        workspace=EdgarWorkspaceSelector(ticker="AAPL"),
+        stockPath=str(settings.research_root / "stocks" / "AAPL"),
+        edgarPath=str(settings.research_root / "stocks" / "AAPL" / ".edgar"),
+        exportsJsonPath=str(settings.research_root / "stocks" / "AAPL" / ".edgar" / "exports" / "matched-filings.json"),
+        exportsCsvPath=str(settings.research_root / "stocks" / "AAPL" / ".edgar" / "exports" / "matched-filings.csv"),
+        manifestPath=str(settings.research_root / "stocks" / "AAPL" / ".edgar" / "manifests" / "download-manifest.json"),
+        lastSyncedAt=NOW,
+        metadataState=EdgarMetadataState(
+            status=metadata_status,  # type: ignore[arg-type]
+            lastRefreshedAt=NOW,
+            lastLiveCheckedAt=NOW,
+            newAccessions=0,
+        ),
+        bodyCacheState=EdgarBodyCacheState(
+            status=body_status,  # type: ignore[arg-type]
+            lastRefreshedAt=NOW,
+            matchedFilings=0,
+            cachedFilings=0,
+            downloadedFilings=0,
+            skippedFilings=0,
+            failedFilings=0,
+        ),
+        intelligenceState=EdgarIntelligenceState(status="unavailable"),
+    )
+
+
+class _AskMaintenanceFakeIntelligence:
+    def __init__(self, settings: DashboardSettings) -> None:
+        self._settings = settings
+        self.indexed = False
+        self.index_limits: dict[str, object] = {}
+        self.answer_calls = 0
+
+    def _index_state(self, paths) -> EdgarIndexState:
+        return EdgarIndexState(
+            status="ready" if self.indexed else "missing",
+            indexVersion="edgar-intelligence-index-v1",
+            corpusVersion="primary-documents-v1",
+            chunkingVersion="edgar-chunking-v1",
+            embeddingModel=self._settings.llm_embed_model,
+            eligibleAccessions=1 if self.indexed else 0,
+            indexedAccessions=1 if self.indexed else 0,
+            indexedChunks=1 if self.indexed else 0,
+            limitations=[] if self.indexed else ["No EDGAR intelligence index has been built for this workspace."],
+        )
+
+    def index_workspace(self, *, workspace, request, paths, max_documents, max_chunks, max_index_seconds, job_kind):
+        self.indexed = True
+        self.index_limits = {
+            "max_documents": max_documents,
+            "max_chunks": max_chunks,
+            "max_index_seconds": max_index_seconds,
+            "job_kind": job_kind,
+        }
+        index_state = self._index_state(paths)
+        job = EdgarIntelligenceJob(jobId="job-ask-maintenance", kind="ask_maintenance", status="completed", updatedAt=NOW, completedAt=NOW)
+        return EdgarIntelligenceIndexResponse(
+            ticker=request.ticker,
+            outputDir=request.outputDir,
+            status="completed",
+            mode="inline",
+            jobId="job-ask-maintenance",
+            pollSelector=EdgarPollSelector(ticker=request.ticker, outputDir=request.outputDir, jobId="job-ask-maintenance"),
+            indexState=index_state,
+            job=job,
+            message="Index request completed.",
+        )
+
+    def answer_question(self, *, workspace, request, paths) -> EdgarQuestionResponse:
+        self.answer_calls += 1
+        return EdgarQuestionResponse(
+            ticker=request.ticker,
+            outputDir=request.outputDir,
+            question=request.question,
+            answer="Revenue changed according to the filing [C1].",
+            confidence="medium",
+            generatedAt=NOW,
+            model=EdgarAnswerModelInfo(
+                provider="omlx",
+                chatModel=self._settings.llm_chat_model,
+                embeddingModel=self._settings.llm_embed_model,
+                rerankerModel=self._settings.llm_rerank_model,
+            ),
+            freshnessState=EdgarFreshnessState(status="fresh", liveCheckStatus="succeeded", lastMetadataRefreshAt=NOW, lastLiveCheckAt=NOW),
+            maintenanceState=EdgarMaintenanceState(status="none"),
+            retrievalState=EdgarRetrievalState(chunksRetrieved=1, chunksUsed=1, eligibleAccessionsSearched=1, indexVersion="edgar-intelligence-index-v1"),
+            citations=[],
+            limitations=[],
+        )

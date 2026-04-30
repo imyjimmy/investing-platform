@@ -45,6 +45,7 @@ from investing_platform.services.omlx_client import OmlxClient, OmlxClientError
 CORPUS_VERSION = "primary-documents-v1"
 EMBEDDING_BATCH_SIZE = 16
 MIN_RETRIEVAL_SCORE = 0.15
+LEXICAL_RETRIEVAL_BOOST_CAP = 0.35
 CITATION_MARKER_RE = re.compile(r"\[C(\d+)\]")
 GUARDED_NUMBER_RE = re.compile(r"(?<![A-Za-z])\$?\d+(?:,\d{3})*(?:\.\d+)?%?")
 PROPER_NOUN_RE = re.compile(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\b")
@@ -218,6 +219,10 @@ class EdgarIntelligenceService:
         workspace: Any,
         request: EdgarIntelligenceIndexRequest,
         paths: WorkspacePaths,
+        max_documents: int | None = None,
+        max_chunks: int | None = None,
+        max_index_seconds: float | None = None,
+        job_kind: str = "index",
     ) -> EdgarIntelligenceIndexResponse:
         if request.includeExhibits:
             raise EdgarIntelligenceApiError(
@@ -236,19 +241,40 @@ class EdgarIntelligenceService:
 
         started_at = datetime.now(UTC)
         job_id = f"edgar-index-{request.ticker}-{started_at.strftime('%Y%m%dT%H%M%SZ')}"
-        filings = self._load_selected_filings(paths, request.forms)
+        budget_started = time.monotonic()
+        budget_limitations: list[str] = []
+        eligible_filings = self._load_selected_filings(paths, request.forms)
+        filings = eligible_filings
+        if max_documents is not None and len(filings) > max_documents:
+            filings = filings[:max_documents]
+            budget_limitations.append(
+                f"Ask-time maintenance indexed the newest {max_documents} eligible primary documents inline and deferred the remainder."
+            )
         documents, chunks, sections = self._build_corpus_documents(paths, filings)
+        if max_chunks is not None and len(chunks) > max_chunks:
+            chunks = chunks[:max_chunks]
+            budget_limitations.append(
+                f"Ask-time maintenance embedded the newest {max_chunks} chunks inline and deferred the remainder."
+            )
+        if max_index_seconds is not None and (time.monotonic() - budget_started) > max_index_seconds:
+            budget_limitations.append(
+                f"Ask-time index preparation exceeded the {int(max_index_seconds)}s inline budget before embedding."
+            )
         embeddings, embedding_limitations = self._build_embeddings(chunks)
+        embedding_limitations = budget_limitations + embedding_limitations
         self._write_corpus_artifacts(paths, documents=documents, chunks=chunks, sections=sections, embeddings=embeddings)
         completed_at = datetime.now(UTC)
         has_embeddings = embeddings is not None and len(embeddings) == len(chunks) and len(chunks) > 0
+        job_status = "completed" if documents else "failed"
+        if has_embeddings and budget_limitations:
+            job_status = "partial"
         index_state = EdgarIndexState(
             status="ready" if has_embeddings else "degraded" if chunks else "missing",
             indexVersion=INDEX_SCHEMA_VERSION,
             corpusVersion=CORPUS_VERSION,
             chunkingVersion=CHUNKING_VERSION,
             embeddingModel=self._settings.llm_embed_model or EMBEDDING_MODEL_VERSION,
-            eligibleAccessions=len(filings),
+            eligibleAccessions=len(eligible_filings),
             indexedAccessions=len(documents),
             indexedChunks=len(chunks),
             staleAccessions=[],
@@ -257,18 +283,24 @@ class EdgarIntelligenceService:
         )
         job = EdgarIntelligenceJob(
             jobId=job_id,
-            kind="index",
-            status="completed" if documents else "failed",
+            kind=job_kind,  # type: ignore[arg-type]
+            status=job_status,  # type: ignore[arg-type]
             startedAt=started_at,
             updatedAt=completed_at,
             completedAt=completed_at,
             progress=EdgarIntelligenceJobProgress(
-                documentsTotal=len(filings),
+                documentsTotal=len(eligible_filings),
                 documentsCompleted=len(documents),
                 chunksTotal=len(chunks),
                 chunksCompleted=len(chunks),
             ),
-            message="EDGAR intelligence index built." if has_embeddings else "Corpus scaffold built, but embeddings are not ready.",
+            message=(
+                "EDGAR intelligence index built with ask-time budget limits."
+                if has_embeddings and budget_limitations
+                else "EDGAR intelligence index built."
+                if has_embeddings
+                else "Corpus scaffold built, but embeddings are not ready."
+            ),
         )
         self._write_last_index(paths, index_state=index_state, job=job)
         return EdgarIntelligenceIndexResponse(
@@ -361,7 +393,7 @@ class EdgarIntelligenceService:
                 started=started,
                 limitations=baseline_limitations + ["The generated answer did not pass evidence validation."],
             )
-        citations = self._citations_for_chunks(prompt_chunks, validated.citation_ids)
+        citations = self._citations_for_chunks(prompt_chunks, validated.citation_ids, question=request.question)
         generated_at = datetime.now(UTC)
         return EdgarQuestionResponse(
             ticker=request.ticker,
@@ -387,6 +419,17 @@ class EdgarIntelligenceService:
     ) -> EdgarComparisonResponse:
         filings = self._load_selected_filings(paths, request.forms)
         target_accessions = self._resolve_comparison_targets(filings, request.comparisonMode)
+        min_targets = 1 if request.comparisonMode == "recent-current-reports-by-topic" else 2
+        if len(target_accessions) < min_targets:
+            raise EdgarIntelligenceApiError(
+                status_code=409,
+                code="comparison_targets_not_ready",
+                message="Not enough eligible synced filings are available for this EDGAR comparison.",
+                ticker=request.ticker,
+                limitations=[
+                    "Sync more filing history or choose a broader comparison mode before running this comparison.",
+                ],
+            )
         resolved_question = self._comparison_question(request, target_accessions)
         question_response = self.answer_question(
             workspace=workspace,
@@ -447,7 +490,8 @@ class EdgarIntelligenceService:
         for chunk in chunks:
             if chunk.chunk_index >= embeddings.shape[0]:
                 continue
-            score = float(np.dot(embeddings[chunk.chunk_index], query))
+            vector_score = float(np.dot(embeddings[chunk.chunk_index], query))
+            score = vector_score + self._lexical_retrieval_boost(request.question, chunk)
             scored.append(
                 RetrievedChunk(
                     citation_id=chunk.citation_id,
@@ -497,6 +541,37 @@ class EdgarIntelligenceService:
                 )
             )
         return selected, rerank_limitations
+
+    def _lexical_retrieval_boost(self, question: str, chunk: RetrievedChunk) -> float:
+        """Give exact filing vocabulary a small say alongside embeddings.
+
+        This is intentionally capped so lexical matching can rescue obvious
+        section queries like "risk factors" without overwhelming semantic rank.
+        """
+        normalized_question = question.lower()
+        searchable = " ".join([chunk.section, chunk.form, chunk.document_name, chunk.text]).lower()
+        boost = 0.0
+        if "risk" in normalized_question:
+            if "item 1a" in searchable or "risk factors" in searchable:
+                boost += 0.25
+            elif "risk" in searchable:
+                boost += 0.12
+        if "management discussion" in normalized_question or "md&a" in normalized_question or "mda" in normalized_question:
+            if "item 7" in searchable or "management's discussion" in searchable or "management discussion" in searchable:
+                boost += 0.2
+        if "market risk" in normalized_question:
+            if "item 7a" in searchable or "market risk" in searchable:
+                boost += 0.2
+        question_terms = {
+            term
+            for term in re.findall(r"\b[a-z][a-z0-9]{3,}\b", normalized_question)
+            if term not in {"what", "which", "where", "when", "were", "with", "from", "that", "this", "there", "their", "about", "latest"}
+        }
+        if question_terms:
+            searchable_terms = set(re.findall(r"\b[a-z][a-z0-9]{3,}\b", searchable))
+            overlap = len(question_terms.intersection(searchable_terms))
+            boost += min(0.1, overlap * 0.025)
+        return min(boost, LEXICAL_RETRIEVAL_BOOST_CAP)
 
     def _rerank_chunks(self, request: EdgarQuestionRequest, chunks: list[RetrievedChunk]) -> tuple[list[RetrievedChunk], list[str]]:
         if not chunks:
@@ -708,14 +783,14 @@ class EdgarIntelligenceService:
             limitations=self._dedupe([limitation for limitation in limitations if limitation]),
         )
 
-    def _citations_for_chunks(self, chunks: list[RetrievedChunk], citation_ids: list[str]) -> list[EdgarQuestionCitation]:
+    def _citations_for_chunks(self, chunks: list[RetrievedChunk], citation_ids: list[str], *, question: str = "") -> list[EdgarQuestionCitation]:
         chunk_by_id = {chunk.citation_id: chunk for chunk in chunks}
         citations: list[EdgarQuestionCitation] = []
         for citation_id in citation_ids:
             chunk = chunk_by_id.get(citation_id)
             if chunk is None:
                 continue
-            snippet = chunk.text.strip()[:500]
+            snippet = self._citation_snippet(chunk.text, question=question)
             citations.append(
                 EdgarQuestionCitation(
                     citationId=citation_id,
@@ -734,6 +809,42 @@ class EdgarIntelligenceService:
             )
         return citations
 
+    def _citation_snippet(self, text: str, *, question: str) -> str:
+        cleaned = text.strip()
+        if len(cleaned) <= 500:
+            return cleaned
+        lower_text = cleaned.lower()
+        lower_question = question.lower()
+        anchors: list[str] = []
+        if "risk" in lower_question:
+            anchors.extend(["item 1a", "risk factors", "risk"])
+        if "management discussion" in lower_question or "md&a" in lower_question or "mda" in lower_question:
+            anchors.extend(["item 7", "management's discussion", "management discussion"])
+        if "market risk" in lower_question:
+            anchors.extend(["item 7a", "market risk"])
+        anchors.extend(
+            term
+            for term in re.findall(r"\b[a-z][a-z0-9]{4,}\b", lower_question)
+            if term not in {"which", "where", "there", "their", "about", "latest", "factors"}
+        )
+        anchor_positions = [lower_text.find(anchor) for anchor in anchors if anchor and lower_text.find(anchor) >= 0]
+        if not anchor_positions:
+            return cleaned[:500]
+        center = min(anchor_positions)
+        start = max(0, center - 80)
+        end = min(len(cleaned), center + 420)
+        if start > 0:
+            next_space = cleaned.find(" ", start)
+            if next_space != -1 and next_space < center:
+                start = next_space + 1
+        if end < len(cleaned):
+            previous_space = cleaned.rfind(" ", start, end)
+            if previous_space > center:
+                end = previous_space
+        prefix = "..." if start > 0 else ""
+        suffix = "..." if end < len(cleaned) else ""
+        return f"{prefix}{cleaned[start:end].strip()}{suffix}"
+
     def _model_state(self, now: datetime) -> EdgarIntelligenceModelState:
         base_url = self._settings.llm_base_url.rstrip("/")
         message: str | None = None
@@ -741,12 +852,20 @@ class EdgarIntelligenceService:
         if base_url:
             try:
                 model_ids = {model.id for model in self._omlx_client.list_models()}
-                if self._settings.llm_chat_model in model_ids:
+                missing = [
+                    model_id
+                    for model_id in (self._settings.llm_chat_model, self._settings.llm_embed_model, self._settings.llm_rerank_model)
+                    if model_id not in model_ids
+                ]
+                if not missing:
                     status = "ready"
-                elif model_ids:
+                elif not model_ids:
+                    message = "oMLX is reachable, but no models are loaded."
+                elif self._settings.llm_chat_model in missing:
                     message = f"oMLX is reachable, but chat model '{self._settings.llm_chat_model}' is not loaded."
                 else:
-                    message = "oMLX is reachable, but no models are loaded."
+                    status = "degraded"
+                    message = "oMLX is reachable, but required retrieval model(s) are not loaded: " + ", ".join(missing)
             except OmlxClientError as exc:
                 message = str(exc)
         else:

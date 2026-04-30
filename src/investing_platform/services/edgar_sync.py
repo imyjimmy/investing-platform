@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+import time
 from typing import Any
 
 from investing_platform.config import DashboardSettings
@@ -16,6 +17,7 @@ from investing_platform.models import (
     EdgarIntelligenceIndexResponse,
     EdgarIntelligenceStatus,
     EdgarIntelligenceState,
+    EdgarMaintenanceState,
     EdgarMetadataState,
     EdgarQuestionRequest,
     EdgarQuestionResponse,
@@ -26,6 +28,14 @@ from investing_platform.models import (
     EdgarWorkspaceSelector,
 )
 from investing_platform.services.edgar_common import DownloadCounters, SUBMISSIONS_URL_TEMPLATE
+from investing_platform.services.edgar_intelligence import EdgarIntelligenceApiError
+
+
+ASK_MAINTENANCE_MAX_SECONDS = 30.0
+ASK_MAINTENANCE_MAX_NEW_BODIES = 5
+ASK_MAINTENANCE_MAX_DOCUMENTS = 5
+ASK_MAINTENANCE_MAX_CHUNKS = 250
+ASK_MAINTENANCE_MAX_INDEX_SECONDS = 20.0
 
 
 class EdgarSyncService:
@@ -47,6 +57,9 @@ class EdgarSyncService:
         self._intelligence = intelligence
 
     def sync(self, request: EdgarSyncRequest) -> EdgarSyncResponse:
+        return self._sync(request)
+
+    def _sync(self, request: EdgarSyncRequest, *, max_uncached_filing_bodies: int | None = None) -> EdgarSyncResponse:
         options = self._artifact_store._default_runtime_options()
         if not options.user_agent:
             raise ValueError("A descriptive SEC User-Agent is required.")
@@ -119,8 +132,23 @@ class EdgarSyncService:
         downloaded_accessions: set[str] = set()
         skipped_accessions: set[str] = set()
         failed_accessions: set[str] = set()
+        body_budget_exhausted = False
+        uncached_bodies_touched = 0
         for filing in selected_filings:
             accession = str(filing.get("accessionNumber") or "")
+            is_uncached = not self._artifact_store._filing_is_cached(paths.stock_root, filing)
+            if (
+                max_uncached_filing_bodies is not None
+                and is_uncached
+                and uncached_bodies_touched >= max_uncached_filing_bodies
+            ):
+                body_budget_exhausted = True
+                counters.skipped_files += 1
+                if accession:
+                    skipped_accessions.add(accession)
+                continue
+            if is_uncached:
+                uncached_bodies_touched += 1
             before_downloaded = counters.downloaded_files
             before_skipped = counters.skipped_files
             try:
@@ -160,6 +188,16 @@ class EdgarSyncService:
             cached_filings=len({accession for accession in cached_accessions if accession}),
             last_refreshed_at=synced_at,
         )
+        if body_budget_exhausted:
+            body_cache_state = body_cache_state.model_copy(
+                update={
+                    "status": "partial",
+                    "message": (
+                        f"Ask-time maintenance processed at most {max_uncached_filing_bodies} uncached filing bodies "
+                        "and deferred the remaining filing bodies."
+                    ),
+                }
+            )
         self._artifact_store._persist_accession_state(
             path=paths.accession_state_path,
             ticker=resolved.ticker,
@@ -265,10 +303,204 @@ class EdgarSyncService:
         output_root = Path(request.outputDir).expanduser() if request.outputDir else self._settings.research_root
         paths = self._artifact_store._workspace_paths(output_root, request.ticker)
         workspace = self.workspace(EdgarWorkspaceRequest(ticker=request.ticker, outputDir=request.outputDir))
-        return self._intelligence.answer_question(workspace=workspace, request=request, paths=paths)
+        maintenance_state = EdgarMaintenanceState(status="none")
+        workspace, maintenance_state = self._run_ask_time_maintenance(request=request, workspace=workspace, paths=paths)
+        if maintenance_state.status in {"deferred", "failed"} and self._intelligence._index_state(paths).status != "ready":
+            raise EdgarIntelligenceApiError(
+                status_code=409,
+                code="index_not_ready",
+                message="The EDGAR intelligence index is not ready after bounded ask-time maintenance.",
+                ticker=request.ticker,
+                job_id=maintenance_state.jobId,
+                retry_after_seconds=10,
+                limitations=maintenance_state.limitations,
+            )
+        response = self._intelligence.answer_question(workspace=workspace, request=request, paths=paths)
+        if maintenance_state.status == "none":
+            return response
+        return response.model_copy(update={"maintenanceState": maintenance_state})
 
     def intelligence_compare(self, request: EdgarComparisonRequest) -> EdgarComparisonResponse:
         output_root = Path(request.outputDir).expanduser() if request.outputDir else self._settings.research_root
         paths = self._artifact_store._workspace_paths(output_root, request.ticker)
         workspace = self.workspace(EdgarWorkspaceRequest(ticker=request.ticker, outputDir=request.outputDir))
-        return self._intelligence.compare_filings(workspace=workspace, request=request, paths=paths)
+        workspace, maintenance_state = self._run_ask_time_maintenance(request=request, workspace=workspace, paths=paths)
+        if maintenance_state.status in {"deferred", "failed"} and self._intelligence._index_state(paths).status != "ready":
+            raise EdgarIntelligenceApiError(
+                status_code=409,
+                code="index_not_ready",
+                message="The EDGAR intelligence index is not ready after bounded ask-time maintenance.",
+                ticker=request.ticker,
+                job_id=maintenance_state.jobId,
+                retry_after_seconds=10,
+                limitations=maintenance_state.limitations,
+            )
+        response = self._intelligence.compare_filings(workspace=workspace, request=request, paths=paths)
+        if maintenance_state.status == "none":
+            return response
+        return response.model_copy(update={"maintenanceState": maintenance_state})
+
+    def _run_ask_time_maintenance(
+        self,
+        *,
+        request: EdgarQuestionRequest,
+        workspace: EdgarWorkspaceResponse | None,
+        paths: Any,
+    ) -> tuple[EdgarWorkspaceResponse | None, EdgarMaintenanceState]:
+        started = time.monotonic()
+        limitations: list[str] = []
+        new_accessions = 0
+        filing_bodies_downloaded = 0
+        documents_indexed = 0
+        chunks_embedded = 0
+        job_id: str | None = None
+        status = "none"
+        sync_response: EdgarSyncResponse | None = None
+
+        needs_sync = workspace is None
+        if workspace is not None:
+            needs_sync = (
+                workspace.metadataState.status != "fresh"
+                or workspace.bodyCacheState.status in {"missing", "partial", "degraded"}
+            )
+
+        if needs_sync:
+            try:
+                sync_response = self._sync(
+                    EdgarSyncRequest(
+                        issuerQuery=request.ticker,
+                        outputDir=request.outputDir,
+                        forceRefresh=False,
+                    ),
+                    max_uncached_filing_bodies=ASK_MAINTENANCE_MAX_NEW_BODIES,
+                )
+                workspace = self.workspace(EdgarWorkspaceRequest(ticker=request.ticker, outputDir=request.outputDir))
+            except RuntimeError as exc:
+                limitations.append(f"Ask-time EDGAR sync failed: {exc}")
+                return workspace, self._maintenance_state(
+                    status="failed" if workspace is None else "deferred",
+                    started=started,
+                    new_accessions=new_accessions,
+                    filing_bodies_downloaded=filing_bodies_downloaded,
+                    documents_indexed=documents_indexed,
+                    chunks_embedded=chunks_embedded,
+                    job_id=job_id,
+                    limitations=limitations,
+                )
+
+            new_accessions = sync_response.metadataState.newAccessions
+            filing_bodies_downloaded = sync_response.bodyCacheState.downloadedFilings
+            status = "completed"
+            if sync_response.metadataState.message:
+                limitations.append(sync_response.metadataState.message)
+            if sync_response.bodyCacheState.status in {"partial", "degraded"} and sync_response.bodyCacheState.message:
+                limitations.append(sync_response.bodyCacheState.message)
+            if sync_response.bodyCacheState.status == "partial":
+                status = "partial"
+            elif sync_response.bodyCacheState.status == "degraded":
+                status = "failed"
+
+        if time.monotonic() - started > ASK_MAINTENANCE_MAX_SECONDS:
+            limitations.append(
+                f"Ask-time EDGAR maintenance exceeded the {int(ASK_MAINTENANCE_MAX_SECONDS)}s budget before indexing."
+            )
+            return workspace, self._maintenance_state(
+                status="deferred",
+                started=started,
+                new_accessions=new_accessions,
+                filing_bodies_downloaded=filing_bodies_downloaded,
+                documents_indexed=documents_indexed,
+                chunks_embedded=chunks_embedded,
+                job_id=job_id,
+                limitations=limitations,
+            )
+
+        index_state = self._intelligence._index_state(paths)
+        sync_changed_local_inputs = sync_response is not None and (
+            sync_response.metadataState.newAccessions > 0 or sync_response.bodyCacheState.downloadedFilings > 0
+        )
+        needs_index = index_state.status != "ready" or sync_changed_local_inputs
+        if not needs_index:
+            return workspace, self._maintenance_state(
+                status=status,
+                started=started,
+                new_accessions=new_accessions,
+                filing_bodies_downloaded=filing_bodies_downloaded,
+                documents_indexed=documents_indexed,
+                chunks_embedded=chunks_embedded,
+                job_id=job_id,
+                limitations=limitations,
+            )
+
+        try:
+            index_response = self._intelligence.index_workspace(
+                workspace=workspace,
+                request=EdgarIntelligenceIndexRequest(
+                    ticker=request.ticker,
+                    outputDir=request.outputDir,
+                    forms=request.forms,
+                    includeExhibits=False,
+                ),
+                paths=paths,
+                max_documents=ASK_MAINTENANCE_MAX_DOCUMENTS,
+                max_chunks=ASK_MAINTENANCE_MAX_CHUNKS,
+                max_index_seconds=ASK_MAINTENANCE_MAX_INDEX_SECONDS,
+                job_kind="ask_maintenance",
+            )
+        except EdgarIntelligenceApiError:
+            raise
+        except RuntimeError as exc:
+            limitations.append(f"Ask-time EDGAR indexing failed: {exc}")
+            return workspace, self._maintenance_state(
+                status="failed",
+                started=started,
+                new_accessions=new_accessions,
+                filing_bodies_downloaded=filing_bodies_downloaded,
+                documents_indexed=documents_indexed,
+                chunks_embedded=chunks_embedded,
+                job_id=job_id,
+                limitations=limitations,
+            )
+
+        documents_indexed = index_response.indexState.indexedAccessions
+        chunks_embedded = index_response.indexState.indexedChunks
+        job_id = index_response.jobId
+        limitations.extend(index_response.indexState.limitations)
+        if index_response.job.status in {"partial", "deferred", "failed"}:
+            status = index_response.job.status
+        elif status == "none":
+            status = "completed"
+
+        return workspace, self._maintenance_state(
+            status=status,
+            started=started,
+            new_accessions=new_accessions,
+            filing_bodies_downloaded=filing_bodies_downloaded,
+            documents_indexed=documents_indexed,
+            chunks_embedded=chunks_embedded,
+            job_id=job_id,
+            limitations=limitations,
+        )
+
+    def _maintenance_state(
+        self,
+        *,
+        status: str,
+        started: float,
+        new_accessions: int,
+        filing_bodies_downloaded: int,
+        documents_indexed: int,
+        chunks_embedded: int,
+        job_id: str | None,
+        limitations: list[str],
+    ) -> EdgarMaintenanceState:
+        return EdgarMaintenanceState(
+            status=status,  # type: ignore[arg-type]
+            newAccessionsDiscovered=new_accessions,
+            filingBodiesDownloaded=filing_bodies_downloaded,
+            documentsIndexed=documents_indexed,
+            chunksEmbedded=chunks_embedded,
+            elapsedMs=int((time.monotonic() - started) * 1000),
+            jobId=job_id,
+            limitations=[limitation for limitation in limitations if limitation],
+        )

@@ -403,6 +403,60 @@ def test_retrieve_chunks_filters_to_requested_accessions_before_reranking(tmp_pa
     assert [chunk.chunk_id for chunk in retrieved] == ["chunk:third", "chunk:first"]
 
 
+def test_retrieve_chunks_boosts_obvious_risk_factor_matches(tmp_path) -> None:
+    settings = DashboardSettings(
+        research_root=tmp_path / "research-root",
+        edgar_user_agent="Investing Platform tests@example.com",
+    )
+    fake_client = RerankingFakeOmlxClient(rerank_order=[0, 1])
+    service = EdgarIntelligenceService(settings, omlx_client=fake_client)
+    artifact_store = EdgarDownloader(settings)
+    paths = artifact_store._workspace_paths(settings.research_root, "NVDA")
+    index_dir = paths.intelligence_dir / "index"
+    index_dir.mkdir(parents=True, exist_ok=True)
+    chunks = [
+        {
+            "ticker": "NVDA",
+            "accessionNumber": "0001",
+            "form": "10-K",
+            "filingDate": "2026-02-25",
+            "documentName": "nvda-2026.htm",
+            "section": "Primary Document",
+            "chunkId": "chunk:generic-business",
+            "startChar": 0,
+            "endChar": 55,
+            "sourcePath": "/tmp/nvda-2026.htm",
+            "secUrl": "https://www.sec.gov/nvda",
+            "text": "NVIDIA sells accelerated computing products to many customers.",
+        },
+        {
+            "ticker": "NVDA",
+            "accessionNumber": "0001",
+            "form": "10-K",
+            "filingDate": "2026-02-25",
+            "documentName": "nvda-2026.htm",
+            "section": "Item 1A. Risk Factors",
+            "chunkId": "chunk:item-1a-risk-factors",
+            "startChar": 56,
+            "endChar": 180,
+            "sourcePath": "/tmp/nvda-2026.htm",
+            "secUrl": "https://www.sec.gov/nvda",
+            "text": "Item 1A. Risk Factors. Export controls, supply constraints, competition, and customer concentration could harm the business.",
+        },
+    ]
+    service._write_retrieval_sqlite(index_dir / "retrieval.sqlite3", chunks)
+    np.save(index_dir / "embeddings.f16.npy", np.asarray([[0.2, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float16))
+
+    retrieved, limitations = service._retrieve_chunks(
+        paths,
+        EdgarQuestionRequest(ticker="NVDA", question="What are the risk factors for NVDA?"),
+    )
+
+    assert limitations == []
+    assert [chunk.chunk_id for chunk in retrieved] == ["chunk:item-1a-risk-factors", "chunk:generic-business"]
+    assert "Risk Factors" in fake_client.rerank_documents[0]
+
+
 def test_compare_passes_resolved_target_accessions_to_question_retrieval(tmp_path) -> None:
     settings = DashboardSettings(
         research_root=tmp_path / "research-root",
@@ -477,6 +531,47 @@ def test_compare_passes_resolved_target_accessions_to_question_retrieval(tmp_pat
     assert "000-new, 000-prior" in response.resolvedQuestion
 
 
+def test_compare_rejects_when_enough_target_filings_are_not_available(tmp_path) -> None:
+    settings = DashboardSettings(
+        research_root=tmp_path / "research-root",
+        edgar_user_agent="Investing Platform tests@example.com",
+    )
+    service = EdgarIntelligenceService(settings, omlx_client=FakeOmlxClient())
+    artifact_store = EdgarDownloader(settings)
+    paths = artifact_store._workspace_paths(settings.research_root, "AAPL")
+    paths.exports_dir.mkdir(parents=True, exist_ok=True)
+    (paths.exports_dir / "matched-filings.json").write_text(
+        json.dumps(
+            [
+                {
+                    "ticker": "AAPL",
+                    "form": "10-K",
+                    "filingDate": "2026-01-30",
+                    "accessionNumber": "000-only",
+                    "primaryDocument": "only.htm",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    try:
+        service.compare_filings(
+            workspace=object(),
+            request=EdgarComparisonRequest(
+                ticker="AAPL",
+                comparisonMode="latest-annual-vs-prior-annual",
+                question="What changed?",
+            ),
+            paths=paths,
+        )
+    except EdgarIntelligenceApiError as exc:
+        assert exc.status_code == 409
+        assert exc.detail.code == "comparison_targets_not_ready"
+    else:
+        raise AssertionError("Expected compare to reject missing target filings.")
+
+
 def test_intelligence_index_removes_stale_embeddings_when_embedding_model_is_missing(tmp_path) -> None:
     settings = DashboardSettings(
         research_root=tmp_path / "research-root",
@@ -539,6 +634,28 @@ def test_ask_accepts_grounded_cited_answer(tmp_path) -> None:
     assert response.confidence == "high"
     assert [citation.citationId for citation in response.citations] == ["C1"]
     assert "Revenue decreased 12%" in response.citations[0].snippet
+
+
+def test_citation_snippet_centers_risk_factor_anchor(tmp_path) -> None:
+    service = EdgarIntelligenceService(
+        DashboardSettings(
+            research_root=tmp_path / "research-root",
+            edgar_user_agent="Investing Platform tests@example.com",
+        ),
+        omlx_client=FakeOmlxClient(),
+    )
+    text = (
+        ("Executive biography and available information. " * 30)
+        + "Item 1A. Risk Factors. Export controls, supply constraints, competition, and customer concentration could harm the business. "
+        + ("Additional risk detail. " * 30)
+    )
+
+    snippet = service._citation_snippet(text, question="What are the risk factors for NVDA?")
+
+    assert snippet.startswith("...")
+    assert "Item 1A. Risk Factors" in snippet
+    assert "Export controls" in snippet
+    assert "Executive biography and available information. Executive biography" not in snippet
 
 
 def test_ask_refuses_when_retrieval_has_no_relevant_evidence(tmp_path) -> None:
