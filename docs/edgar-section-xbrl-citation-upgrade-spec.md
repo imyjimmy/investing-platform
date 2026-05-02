@@ -247,7 +247,7 @@ There are two useful levels:
    - accession number
    - frame, if available
 
-Phase 1 should implement a compact issuer-scoped fact extractor from the existing `companyfacts.zip` baseline or SEC companyfacts JSON payloads. It does not need to index the entire SEC XBRL universe.
+The overall implementation plan below places issuer-scoped XBRL facts in Phase 3, after section-aware text citations are stable. That phase should implement a compact issuer-scoped fact extractor from the existing `companyfacts.zip` baseline or SEC companyfacts JSON payloads. It does not need to index the entire SEC XBRL universe.
 
 ### Extractor Ownership And Cache Bridge
 
@@ -314,7 +314,7 @@ CREATE TABLE facts (
 
 Do not force XBRL facts into the same text chunk table immediately.
 
-Recommended phase 1:
+Recommended Phase 3 XBRL integration:
 
 - keep text chunks in `retrieval.sqlite3`
 - keep structured facts in `xbrl/facts.sqlite3`
@@ -340,6 +340,9 @@ Add a small concept alias map for common stock-intelligence terms:
   "operating income": [
     "us-gaap:OperatingIncomeLoss"
   ],
+  "gross profit": [
+    "us-gaap:GrossProfit"
+  ],
   "net income": [
     "us-gaap:NetIncomeLoss"
   ],
@@ -353,11 +356,41 @@ Add a small concept alias map for common stock-intelligence terms:
     "us-gaap:DebtCurrent"
   ],
   "shares": [
+    "dei:EntityCommonStockSharesOutstanding",
+    "us-gaap:WeightedAverageNumberOfSharesOutstandingBasic",
     "us-gaap:WeightedAverageNumberOfDilutedSharesOutstanding",
-    "us-gaap:CommonStocksIncludingAdditionalPaidInCapital"
+    "us-gaap:WeightedAverageNumberOfSharesOutstandingBasicAndDiluted"
+  ],
+  "gross margin": [
+    "us-gaap:GrossProfit",
+    "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+    "us-gaap:Revenues",
+    "us-gaap:SalesRevenueNet"
+  ],
+  "operating margin": [
+    "us-gaap:OperatingIncomeLoss",
+    "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+    "us-gaap:Revenues",
+    "us-gaap:SalesRevenueNet"
+  ],
+  "net margin": [
+    "us-gaap:NetIncomeLoss",
+    "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+    "us-gaap:Revenues",
+    "us-gaap:SalesRevenueNet"
   ]
 }
 ```
+
+Do not use monetary equity concepts such as `us-gaap:CommonStocksIncludingAdditionalPaidInCapital` for share-count questions. Those belong to equity or paid-in-capital questions and should rank under monetary units, not `shares`.
+
+Margin questions are derived-answer questions, not single-fact lookups. The retriever should gather numerator and denominator facts:
+
+- gross margin: gross profit divided by revenue
+- operating margin: operating income divided by revenue
+- net margin: net income divided by revenue
+
+The answer path should only compute or validate a margin if every input fact used in the calculation is retrieved and cited. If either side is missing, Qwen should answer with the available facts and a limitation instead of inventing the ratio.
 
 Ranking should prefer:
 
