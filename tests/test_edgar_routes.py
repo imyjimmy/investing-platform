@@ -27,6 +27,8 @@ from investing_platform.models import (
     EdgarRetrievalState,
     EdgarSourceStatus,
     EdgarSyncResponse,
+    EdgarWarmIssuerResult,
+    EdgarWarmResponse,
     EdgarWorkspaceResponse,
     EdgarWorkspaceSelector,
 )
@@ -116,6 +118,7 @@ def _build_workspace_response(output_dir: str | None = None) -> EdgarWorkspaceRe
 class FakeEdgarService:
     def __init__(self) -> None:
         self.sync_requests: list[tuple[str, str | None, bool]] = []
+        self.warm_requests: list[tuple[list[str], str, int]] = []
         self.workspace_requests: list[tuple[str, str | None]] = []
 
     def source_status(self) -> EdgarSourceStatus:
@@ -124,6 +127,26 @@ class FakeEdgarService:
     def sync(self, request) -> EdgarSyncResponse:
         self.sync_requests.append((request.issuerQuery, request.outputDir, request.forceRefresh))
         return _build_sync_response(output_dir=request.outputDir)
+
+    def warm(self, request) -> EdgarWarmResponse:
+        self.warm_requests.append((request.issuerQueries, request.mode, request.maxFilingBodiesPerIssuer))
+        return EdgarWarmResponse(
+            mode=request.mode,
+            requestedIssuers=len(request.issuerQueries),
+            warmedIssuers=len(request.issuerQueries),
+            failedIssuers=0,
+            results=[
+                EdgarWarmIssuerResult(
+                    issuerQuery=issuer_query,
+                    ticker=issuer_query.upper(),
+                    status="warmed",
+                    metadataStatus="fresh",
+                    message="Metadata warmed.",
+                )
+                for issuer_query in request.issuerQueries
+            ],
+            generatedAt=NOW,
+        )
 
     def workspace(self, request) -> EdgarWorkspaceResponse:
         self.workspace_requests.append((request.ticker, request.outputDir))
@@ -298,6 +321,28 @@ def test_edgar_sync_route_returns_simplified_contract(monkeypatch) -> None:
     assert payload["metadataState"]["status"] == "fresh"
     assert payload["bodyCacheState"]["status"] == "updated"
     assert fake_service.sync_requests == [("AAPL", "/tmp/custom-root", True)]
+
+
+def test_edgar_warm_route_returns_bounded_warming_contract(monkeypatch) -> None:
+    fake_service = FakeEdgarService()
+    monkeypatch.setattr(research_routes, "edgar_service", lambda: fake_service)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/sources/edgar/warm",
+            json={
+                "issuerQueries": ["aapl", "nvda"],
+                "mode": "metadata-only",
+                "maxFilingBodiesPerIssuer": 0,
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["mode"] == "metadata-only"
+    assert payload["warmedIssuers"] == 2
+    assert payload["results"][0]["metadataStatus"] == "fresh"
+    assert fake_service.warm_requests == [(["aapl", "nvda"], "metadata-only", 0)]
 
 
 def test_edgar_workspace_route_accepts_ticker_and_output_dir(monkeypatch) -> None:

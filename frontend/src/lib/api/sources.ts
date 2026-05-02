@@ -13,6 +13,8 @@ import type {
   EdgarSourceStatus,
   EdgarSyncRequest,
   EdgarSyncResponse,
+  EdgarWarmRequest,
+  EdgarWarmResponse,
   EdgarWorkspaceRequest,
   EdgarWorkspaceResponse,
   FilesystemConnectorConfigRequest,
@@ -70,6 +72,7 @@ export const sourceApi = {
     ),
   edgarStatus: () => fetchJson<EdgarSourceStatus>("/api/sources/edgar/status"),
   edgarSync: (request: EdgarSyncRequest) => postJson<EdgarSyncResponse>("/api/sources/edgar/sync", request),
+  edgarWarm: (request: EdgarWarmRequest) => postJson<EdgarWarmResponse>("/api/sources/edgar/warm", request),
   edgarWorkspace: (request: EdgarWorkspaceRequest) => postJson<EdgarWorkspaceResponse | null>("/api/sources/edgar/workspace", request),
   edgarIntelligenceStatus: (request: EdgarWorkspaceRequest, jobId?: string) =>
     fetchJson<EdgarIntelligenceStatus>(

@@ -887,6 +887,8 @@ export interface EdgarSourceStatus {
   status: "ready" | "degraded";
   researchRootPath: string;
   stocksRootPath: string;
+  issuerRegistryCachePath?: string | null;
+  filingMetadataCachePath?: string | null;
   edgarUserAgent: string;
   maxRequestsPerSecond: number;
   timeoutSeconds: number;
@@ -934,6 +936,34 @@ export interface EdgarSyncRequest {
   issuerQuery: string;
   outputDir?: string;
   forceRefresh?: boolean;
+}
+
+export interface EdgarWarmRequest {
+  issuerQueries: string[];
+  outputDir?: string;
+  mode?: "metadata-only" | "body-cache" | "index";
+  maxIssuers?: number;
+  maxFilingBodiesPerIssuer?: number;
+  forceRefresh?: boolean;
+}
+
+export interface EdgarWarmIssuerResult {
+  issuerQuery: string;
+  ticker?: string | null;
+  status: "warmed" | "partial" | "failed" | "skipped";
+  metadataStatus?: "fresh" | "stale" | "degraded" | null;
+  bodyCacheStatus?: "missing" | "updated" | "ready" | "partial" | "degraded" | null;
+  intelligenceStatus?: "unavailable" | "not-ready" | "queued" | "indexing" | "ready" | null;
+  message?: string | null;
+}
+
+export interface EdgarWarmResponse {
+  mode: "metadata-only" | "body-cache" | "index";
+  requestedIssuers: number;
+  warmedIssuers: number;
+  failedIssuers: number;
+  results: EdgarWarmIssuerResult[];
+  generatedAt: string;
 }
 
 export interface EdgarWorkspaceRequest {

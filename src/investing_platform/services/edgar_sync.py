@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+import json
 from pathlib import Path
+import re
 import time
 from typing import Any
 
@@ -23,6 +25,9 @@ from investing_platform.models import (
     EdgarQuestionResponse,
     EdgarSyncRequest,
     EdgarSyncResponse,
+    EdgarWarmIssuerResult,
+    EdgarWarmRequest,
+    EdgarWarmResponse,
     EdgarWorkspaceRequest,
     EdgarWorkspaceResponse,
     EdgarWorkspaceSelector,
@@ -36,6 +41,8 @@ ASK_MAINTENANCE_MAX_NEW_BODIES = 5
 ASK_MAINTENANCE_MAX_DOCUMENTS = 5
 ASK_MAINTENANCE_MAX_CHUNKS = 250
 ASK_MAINTENANCE_MAX_INDEX_SECONDS = 20.0
+ASK_DEEP_HISTORY_MAX_NEW_BODIES = 3
+DEEP_HISTORY_TERMS_RE = re.compile(r"\b(older|history|historical|trend|since|last\s+\d+\s+years?|past\s+\d+\s+years?)\b", re.IGNORECASE)
 
 
 class EdgarSyncService:
@@ -59,6 +66,61 @@ class EdgarSyncService:
     def sync(self, request: EdgarSyncRequest) -> EdgarSyncResponse:
         return self._sync(request)
 
+    def warm(self, request: EdgarWarmRequest) -> EdgarWarmResponse:
+        options = self._artifact_store._default_runtime_options()
+        if not options.user_agent:
+            raise ValueError("A descriptive SEC User-Agent is required.")
+
+        results: list[EdgarWarmIssuerResult] = []
+        for issuer_query in request.issuerQueries[: request.maxIssuers]:
+            try:
+                if request.mode == "metadata-only":
+                    result = self._warm_metadata_only(issuer_query, request=request, options=options)
+                else:
+                    sync_response = self._sync(
+                        EdgarSyncRequest(
+                            issuerQuery=issuer_query,
+                            outputDir=request.outputDir,
+                            forceRefresh=request.forceRefresh,
+                        ),
+                        max_uncached_filing_bodies=request.maxFilingBodiesPerIssuer,
+                    )
+                    intelligence_status = sync_response.intelligenceState.status
+                    if request.mode == "index":
+                        index_response = self.intelligence_index(
+                            EdgarIntelligenceIndexRequest(
+                                ticker=sync_response.resolvedTicker,
+                                outputDir=request.outputDir,
+                                includeExhibits=False,
+                            )
+                        )
+                        intelligence_status = "ready" if index_response.indexState.status == "ready" else "not-ready"
+                    result = EdgarWarmIssuerResult(
+                        issuerQuery=issuer_query,
+                        ticker=sync_response.resolvedTicker,
+                        status="partial" if sync_response.bodyCacheState.status == "partial" else "warmed",
+                        metadataStatus=sync_response.metadataState.status,
+                        bodyCacheStatus=sync_response.bodyCacheState.status,
+                        intelligenceStatus=intelligence_status,
+                        message=sync_response.bodyCacheState.message,
+                    )
+            except Exception as exc:
+                result = EdgarWarmIssuerResult(
+                    issuerQuery=issuer_query,
+                    status="failed",
+                    message=str(exc),
+                )
+            results.append(result)
+
+        return EdgarWarmResponse(
+            mode=request.mode,
+            requestedIssuers=len(request.issuerQueries),
+            warmedIssuers=sum(1 for result in results if result.status in {"warmed", "partial"}),
+            failedIssuers=sum(1 for result in results if result.status == "failed"),
+            results=results,
+            generatedAt=datetime.now(UTC),
+        )
+
     def _sync(self, request: EdgarSyncRequest, *, max_uncached_filing_bodies: int | None = None) -> EdgarSyncResponse:
         options = self._artifact_store._default_runtime_options()
         if not options.user_agent:
@@ -75,6 +137,10 @@ class EdgarSyncService:
         counters = DownloadCounters()
         baseline_state = self._metadata_cache.ensure_bulk_baseline(options, force_refresh=request.forceRefresh)
         previous_metadata_snapshot = self._metadata_cache.load_snapshot(resolved.cik10)
+        baseline_filings = self._metadata_cache.load_filing_rows(resolved)
+        history_seed_snapshot = previous_metadata_snapshot
+        if history_seed_snapshot is None and baseline_filings:
+            history_seed_snapshot = {"filings": baseline_filings}
         previous_accessions = self._metadata_cache.snapshot_accessions(previous_metadata_snapshot)
         previous_accession_state = self._artifact_store._load_accession_state(paths.accession_state_path)
         metadata_status = "fresh"
@@ -90,11 +156,11 @@ class EdgarSyncService:
                 manifest=manifest,
                 edgar_root=paths.edgar_root,
                 counters=counters,
-                previous_metadata_snapshot=previous_metadata_snapshot,
+                previous_metadata_snapshot=history_seed_snapshot,
                 force_refresh=request.forceRefresh,
             )
             current_filings = self._artifact_store._build_filing_rows(payloads, resolved)
-            all_filings = self._metadata_cache.merge_cached_filing_rows(current_filings, previous_metadata_snapshot)
+            all_filings = self._metadata_cache.merge_cached_filing_rows([*baseline_filings, *current_filings], previous_metadata_snapshot)
             metadata_snapshot = self._metadata_cache.persist_snapshot(resolved, all_filings)
             metadata_refreshed_at = self._artifact_store._parse_datetime(metadata_snapshot.get("lastRefreshedAt"))
             metadata_live_checked_at = self._artifact_store._parse_datetime(metadata_snapshot.get("lastLiveCheckedAt"))
@@ -340,6 +406,26 @@ class EdgarSyncService:
             return response
         return response.model_copy(update={"maintenanceState": maintenance_state})
 
+    def _warm_metadata_only(self, issuer_query: str, *, request: EdgarWarmRequest, options: Any) -> EdgarWarmIssuerResult:
+        resolved = self._resolver.resolve_issuer_query(issuer_query, options, force_refresh=request.forceRefresh)
+        baseline_state = self._metadata_cache.ensure_bulk_baseline(options, force_refresh=request.forceRefresh)
+        previous_snapshot = self._metadata_cache.load_snapshot(resolved.cik10)
+        baseline_filings = self._metadata_cache.load_filing_rows(resolved)
+        current_filings = self._artifact_store._build_filing_rows([resolved.submissions_payload], resolved)
+        all_filings = self._metadata_cache.merge_cached_filing_rows([*baseline_filings, *current_filings], previous_snapshot)
+        snapshot = self._metadata_cache.persist_snapshot(resolved, all_filings)
+        metadata_status = "fresh" if baseline_state.get("status") == "ready" else "degraded"
+        return EdgarWarmIssuerResult(
+            issuerQuery=issuer_query,
+            ticker=resolved.ticker,
+            status="warmed" if metadata_status == "fresh" else "partial",
+            metadataStatus=metadata_status,
+            message=(
+                f"Metadata warmed with {len(all_filings)} known filings. "
+                f"Last live check {snapshot.get('lastLiveCheckedAt') or 'unknown'}."
+            ),
+        )
+
     def _run_ask_time_maintenance(
         self,
         *,
@@ -356,6 +442,7 @@ class EdgarSyncService:
         job_id: str | None = None
         status = "none"
         sync_response: EdgarSyncResponse | None = None
+        hydration_changed_local_inputs = False
 
         needs_sync = workspace is None
         if workspace is not None:
@@ -400,6 +487,18 @@ class EdgarSyncService:
             elif sync_response.bodyCacheState.status == "degraded":
                 status = "failed"
 
+        hydration_state = self._hydrate_question_required_filings(request=request, paths=paths)
+        if hydration_state["status"] != "none":
+            filing_bodies_downloaded += int(hydration_state.get("downloaded", 0))
+            hydration_changed_local_inputs = bool(hydration_state.get("changed"))
+            if hydration_state.get("message"):
+                limitations.append(str(hydration_state["message"]))
+            if hydration_state["status"] == "partial":
+                status = "partial"
+            elif status == "none":
+                status = "completed"
+            workspace = self.workspace(EdgarWorkspaceRequest(ticker=request.ticker, outputDir=request.outputDir)) or workspace
+
         if time.monotonic() - started > ASK_MAINTENANCE_MAX_SECONDS:
             limitations.append(
                 f"Ask-time EDGAR maintenance exceeded the {int(ASK_MAINTENANCE_MAX_SECONDS)}s budget before indexing."
@@ -419,7 +518,7 @@ class EdgarSyncService:
         sync_changed_local_inputs = sync_response is not None and (
             sync_response.metadataState.newAccessions > 0 or sync_response.bodyCacheState.downloadedFilings > 0
         )
-        needs_index = index_state.status != "ready" or sync_changed_local_inputs
+        needs_index = index_state.status != "ready" or sync_changed_local_inputs or hydration_changed_local_inputs
         if not needs_index:
             return workspace, self._maintenance_state(
                 status=status,
@@ -504,3 +603,193 @@ class EdgarSyncService:
             jobId=job_id,
             limitations=[limitation for limitation in limitations if limitation],
         )
+
+    def _hydrate_question_required_filings(self, *, request: EdgarQuestionRequest, paths: Any) -> dict[str, Any]:
+        all_filings = self._load_json_list(paths.exports_dir / "all-filings.json")
+        if not all_filings:
+            return {"status": "none", "downloaded": 0, "changed": False}
+        selected_filings = self._load_json_list(paths.exports_dir / "matched-filings.json")
+        selected_accessions = {
+            str(filing.get("accessionNumber") or "")
+            for filing in selected_filings
+            if isinstance(filing, dict) and str(filing.get("accessionNumber") or "")
+        }
+        candidates = self._question_required_filings(
+            request=request,
+            all_filings=[filing for filing in all_filings if isinstance(filing, dict)],
+            selected_accessions=selected_accessions,
+        )
+        if not candidates:
+            return {"status": "none", "downloaded": 0, "changed": False}
+
+        options = self._artifact_store._default_runtime_options()
+        manifest = self._artifact_store._load_manifest(paths.manifest_path)
+        counters = DownloadCounters()
+        downloaded_accessions: set[str] = set()
+        failed_accessions: set[str] = set()
+        skipped_accessions: set[str] = set()
+        added_to_selection = False
+        uncached_touched = 0
+        download_request = EdgarDownloadRequest(
+            ticker=request.ticker,
+            outputDir=str(paths.output_root),
+            downloadMode="primary-document",
+            includeExhibits=False,
+            resume=True,
+        )
+
+        for filing in candidates:
+            accession = str(filing.get("accessionNumber") or "")
+            if not self._artifact_store._filing_is_cached(paths.stock_root, filing):
+                if uncached_touched >= ASK_DEEP_HISTORY_MAX_NEW_BODIES:
+                    if accession:
+                        skipped_accessions.add(accession)
+                    counters.skipped_files += 1
+                    continue
+                uncached_touched += 1
+                before_downloaded = counters.downloaded_files
+                before_skipped = counters.skipped_files
+                try:
+                    self._artifact_store._download_filing_assets(
+                        filing=filing,
+                        request=download_request,
+                        options=options,
+                        filings_dir=paths.stock_root,
+                        edgar_root=paths.edgar_root,
+                        manifest=manifest,
+                        counters=counters,
+                    )
+                except RuntimeError:
+                    counters.failed_files += 1
+                    if accession:
+                        failed_accessions.add(accession)
+                else:
+                    if accession:
+                        if counters.downloaded_files > before_downloaded:
+                            downloaded_accessions.add(accession)
+                        elif counters.skipped_files > before_skipped:
+                            skipped_accessions.add(accession)
+
+            if self._artifact_store._filing_is_cached(paths.stock_root, filing) and accession not in selected_accessions:
+                selected_filings.append(filing)
+                selected_accessions.add(accession)
+                added_to_selection = True
+
+        if downloaded_accessions or added_to_selection:
+            sorted_selection = self._sort_filings([filing for filing in selected_filings if isinstance(filing, dict)])
+            self._artifact_store._write_json_artifact(
+                paths.exports_dir / "matched-filings.json",
+                sorted_selection,
+                "generated://edgar-question-required-filings",
+                manifest,
+                paths.edgar_root,
+            )
+            self._artifact_store._write_csv_artifact(paths.exports_dir / "matched-filings.csv", sorted_selection, manifest, paths.edgar_root)
+            previous_state = self._artifact_store._load_accession_state(paths.accession_state_path)
+            self._artifact_store._persist_accession_state(
+                path=paths.accession_state_path,
+                ticker=request.ticker,
+                cik10=self._cik10_for_filings([filing for filing in all_filings if isinstance(filing, dict)], previous_state),
+                stock_root=paths.stock_root,
+                all_filings=[filing for filing in all_filings if isinstance(filing, dict)],
+                selected_filings=sorted_selection,
+                cached_accessions={
+                    str(filing.get("accessionNumber") or "")
+                    for filing in sorted_selection
+                    if self._artifact_store._filing_is_cached(paths.stock_root, filing)
+                },
+                downloaded_accessions=downloaded_accessions,
+                skipped_accessions=skipped_accessions,
+                failed_accessions=failed_accessions,
+                previous_state=previous_state,
+                refreshed_at=datetime.now(UTC),
+            )
+            self._artifact_store._save_manifest(paths.manifest_path, manifest)
+
+        status = "partial" if skipped_accessions or failed_accessions else "completed" if downloaded_accessions or added_to_selection else "none"
+        message = None
+        if status != "none":
+            touched_count = len(downloaded_accessions) if downloaded_accessions else 1 if added_to_selection else 0
+            message = f"Ask-time deep-history hydration added {touched_count} question-required filing(s) to the local working set."
+            if skipped_accessions:
+                message += f" Deferred {len(skipped_accessions)} additional filing(s) because the ask-time hydration budget is bounded."
+        return {
+            "status": status,
+            "downloaded": len(downloaded_accessions),
+            "changed": bool(downloaded_accessions or added_to_selection),
+            "message": message,
+        }
+
+    def _cik10_for_filings(self, filings: list[dict[str, Any]], previous_state: dict[str, Any] | None) -> str:
+        for filing in filings:
+            cik10 = str(filing.get("cik10") or "").strip()
+            if cik10:
+                return cik10.zfill(10)
+        return str((previous_state or {}).get("cik") or "")
+
+    def _question_required_filings(
+        self,
+        *,
+        request: EdgarQuestionRequest,
+        all_filings: list[dict[str, Any]],
+        selected_accessions: set[str],
+    ) -> list[dict[str, Any]]:
+        allowed_accessions = {accession.strip() for accession in request.accessionNumbers if accession.strip()}
+        allowed_forms = {form.strip().upper() for form in request.forms if form.strip()}
+        explicit_scope = bool(allowed_accessions or allowed_forms or request.startDate or request.endDate)
+        inferred_history_scope = bool(DEEP_HISTORY_TERMS_RE.search(request.question))
+        if not explicit_scope and not inferred_history_scope:
+            return []
+
+        candidates: list[dict[str, Any]] = []
+        for filing in self._sort_filings(all_filings):
+            accession = str(filing.get("accessionNumber") or "")
+            if not accession or accession in selected_accessions:
+                continue
+            if allowed_accessions:
+                if accession in allowed_accessions:
+                    candidates.append(filing)
+                continue
+            form = str(filing.get("form") or "").upper()
+            if allowed_forms and form not in allowed_forms:
+                continue
+            if not self._filing_date_matches_question(filing, request):
+                continue
+            if inferred_history_scope and not allowed_forms and form not in {"10-K", "10-K/A", "20-F", "20-F/A", "40-F", "40-F/A", "10-Q", "10-Q/A"}:
+                continue
+            candidates.append(filing)
+        return candidates
+
+    def _filing_date_matches_question(self, filing: dict[str, Any], request: EdgarQuestionRequest) -> bool:
+        filing_date = self._parse_date(str(filing.get("filingDate") or ""))
+        if filing_date is None:
+            return not request.startDate and not request.endDate
+        if request.startDate and filing_date < request.startDate:
+            return False
+        if request.endDate and filing_date > request.endDate:
+            return False
+        return True
+
+    def _parse_date(self, value: str) -> date | None:
+        if not value:
+            return None
+        try:
+            return date.fromisoformat(value[:10])
+        except ValueError:
+            return None
+
+    def _sort_filings(self, filings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return sorted(
+            [filing for filing in filings if isinstance(filing, dict)],
+            key=lambda filing: (str(filing.get("filingDate") or ""), str(filing.get("accessionNumber") or "")),
+            reverse=True,
+        )
+
+    def _load_json_list(self, path: Path) -> list[Any]:
+        if not path.exists():
+            return []
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return []
+        return payload if isinstance(payload, list) else []

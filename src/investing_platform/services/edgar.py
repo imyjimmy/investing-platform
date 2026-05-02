@@ -32,6 +32,8 @@ from investing_platform.models import (
     EdgarSourceStatus,
     EdgarSyncRequest,
     EdgarSyncResponse,
+    EdgarWarmRequest,
+    EdgarWarmResponse,
     EdgarWorkspaceRequest,
     EdgarWorkspaceResponse,
     EdgarWorkspaceSelector,
@@ -88,6 +90,8 @@ class EdgarDownloader:
             status="ready" if available else "degraded",
             researchRootPath=str(self._settings.research_root),
             stocksRootPath=str(self._settings.stocks_root),
+            issuerRegistryCachePath=str(self._settings.research_root / ".sec" / "issuer-registry"),
+            filingMetadataCachePath=str(self._settings.research_root / ".sec" / "filing-metadata"),
             edgarUserAgent=user_agent,
             maxRequestsPerSecond=self._settings.edgar_max_requests_per_second,
             timeoutSeconds=self._settings.edgar_timeout_seconds,
@@ -235,6 +239,9 @@ class EdgarDownloader:
 
     def sync(self, request: EdgarSyncRequest) -> EdgarSyncResponse:
         return self._sync_service.sync(request)
+
+    def warm(self, request: EdgarWarmRequest) -> EdgarWarmResponse:
+        return self._sync_service.warm(request)
 
     def workspace(self, request: EdgarWorkspaceRequest) -> EdgarWorkspaceResponse | None:
         return self._sync_service.workspace(request)

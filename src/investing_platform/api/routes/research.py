@@ -19,6 +19,8 @@ from investing_platform.models import (
     EdgarQuestionResponse,
     EdgarWorkspaceRequest,
     EdgarWorkspaceResponse,
+    EdgarWarmRequest,
+    EdgarWarmResponse,
     InvestorPdfDownloadRequest,
     InvestorPdfDownloadResponse,
     InvestorPdfSourceStatus,
@@ -61,6 +63,16 @@ def edgar_last_sync(request: EdgarDownloadRequest) -> EdgarDownloadResponse | No
 def edgar_sync(request: EdgarSyncRequest) -> EdgarSyncResponse:
     try:
         return edgar_service().sync(request)
+    except ValueError as exc:
+        bad_request(exc)
+    except RuntimeError as exc:
+        upstream_error(exc)
+
+
+@router.post("/edgar/warm", response_model=EdgarWarmResponse)
+def edgar_warm(request: EdgarWarmRequest) -> EdgarWarmResponse:
+    try:
+        return edgar_service().warm(request)
     except ValueError as exc:
         bad_request(exc)
     except RuntimeError as exc:

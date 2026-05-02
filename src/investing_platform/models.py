@@ -74,6 +74,8 @@ EdgarIndexMode = Literal["inline", "background"]
 EdgarIntelligenceJobKind = Literal["none", "index", "ask_maintenance", "sync_triggered_index"]
 EdgarIntelligenceJobStatus = Literal["idle", "queued", "indexing", "partial", "deferred", "completed", "failed", "cancelled"]
 EdgarMaintenanceStatus = Literal["none", "completed", "partial", "deferred", "failed"]
+EdgarWarmMode = Literal["metadata-only", "body-cache", "index"]
+EdgarWarmIssuerStatus = Literal["warmed", "partial", "failed", "skipped"]
 EdgarQuestionConfidence = Literal["low", "medium", "high"]
 EdgarAnswerStyle = Literal["bullets", "paragraph"]
 EdgarComparisonMode = Literal["latest-annual-vs-prior-annual", "latest-quarter-vs-prior-quarter", "recent-current-reports-by-topic"]
@@ -1117,6 +1119,8 @@ class EdgarSourceStatus(DashboardModel):
     status: Literal["ready", "degraded"]
     researchRootPath: str
     stocksRootPath: str
+    issuerRegistryCachePath: str | None = None
+    filingMetadataCachePath: str | None = None
     edgarUserAgent: str
     maxRequestsPerSecond: float
     timeoutSeconds: float
@@ -1214,6 +1218,27 @@ class EdgarSyncRequest(DashboardModel):
         if not normalized:
             raise ValueError("Provide a ticker, company name, or CIK.")
         return normalized
+
+
+class EdgarWarmRequest(DashboardModel):
+    issuerQueries: list[str]
+    outputDir: str | None = None
+    mode: EdgarWarmMode = "metadata-only"
+    maxIssuers: int = Field(default=10, ge=1, le=50)
+    maxFilingBodiesPerIssuer: int = Field(default=2, ge=0, le=20)
+    forceRefresh: bool = False
+
+    @field_validator("issuerQueries")
+    @classmethod
+    def _normalize_issuer_queries(cls, value: list[str]) -> list[str]:
+        deduped: list[str] = []
+        for item in value:
+            normalized = item.strip()
+            if normalized and normalized not in deduped:
+                deduped.append(normalized)
+        if not deduped:
+            raise ValueError("Provide at least one ticker, company name, or CIK to warm.")
+        return deduped
 
 
 class EdgarWorkspaceRequest(DashboardModel):
@@ -1372,6 +1397,25 @@ class EdgarPollSelector(DashboardModel):
     ticker: str
     outputDir: str | None = None
     jobId: str | None = None
+
+
+class EdgarWarmIssuerResult(DashboardModel):
+    issuerQuery: str
+    ticker: str | None = None
+    status: EdgarWarmIssuerStatus
+    metadataStatus: Literal["fresh", "stale", "degraded"] | None = None
+    bodyCacheStatus: Literal["missing", "updated", "ready", "partial", "degraded"] | None = None
+    intelligenceStatus: Literal["unavailable", "not-ready", "queued", "indexing", "ready"] | None = None
+    message: str | None = None
+
+
+class EdgarWarmResponse(DashboardModel):
+    mode: EdgarWarmMode
+    requestedIssuers: int
+    warmedIssuers: int
+    failedIssuers: int
+    results: list[EdgarWarmIssuerResult] = Field(default_factory=list)
+    generatedAt: datetime
 
 
 class EdgarIntelligenceIndexResponse(DashboardModel):
