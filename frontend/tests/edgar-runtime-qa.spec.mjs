@@ -314,6 +314,56 @@ test.describe("stock intel EDGAR workspace", () => {
     await expect(page.getByTestId("edgar-qwen-citation-C1")).toContainText("10-K");
   });
 
+  test("surfaces Qwen index lifecycle state and job progress", async ({ page }) => {
+    const workspace = buildWorkspace({
+      ticker: "AAPL",
+      companyName: "Apple Inc.",
+      cik: "0000320193",
+      intelligenceState: {
+        status: "not-ready",
+        questionAnsweringEnabled: false,
+        detail: "The filing index is stale.",
+        lastIndexedAt: "2026-04-27T20:15:00Z",
+        indexedFilings: 2,
+        jobId: "job-index-2",
+        polledVia: null,
+      },
+    });
+
+    await installEdgarRoutes(page, {
+      initialWorkspace: workspace,
+      initialIntelligenceStatus: buildIntelligenceStatus({
+        workspace,
+        indexStatus: "stale",
+        indexedChunks: 18,
+        limitations: ["The filing index is missing 1 selected accession from the current EDGAR workspace."],
+        job: {
+          jobId: "job-index-2",
+          kind: "index",
+          status: "indexing",
+          startedAt: "2026-04-27T20:20:00Z",
+          updatedAt: "2026-04-27T20:21:00Z",
+          completedAt: null,
+          progress: {
+            documentsTotal: 5,
+            documentsCompleted: 2,
+            chunksTotal: 100,
+            chunksCompleted: 40,
+          },
+          message: "Index build in progress.",
+        },
+      }),
+    });
+
+    await openEdgarWorkspace(page);
+    await openQwenIntelligenceTab(page);
+
+    await expect(page.getByTestId("edgar-qwen-status")).toContainText("stale");
+    await expect(page.getByTestId("edgar-qwen-status")).toContainText("indexing");
+    await expect(page.getByTestId("edgar-qwen-job-progress")).toContainText("Indexed 2 of 5 documents");
+    await expect(page.getByTestId("edgar-qwen-status")).toContainText("missing 1 selected accession");
+  });
+
   test("surfaces stale and degraded EDGAR state, then recovers after refresh", async ({ page }) => {
     const staleWorkspace = buildWorkspace({
       ticker: "NVDA",
@@ -634,9 +684,10 @@ function buildWarmResponse({ request } = {}) {
   };
 }
 
-function buildIntelligenceStatus({ workspace, readyForAsk = false, indexStatus = "missing", indexedChunks = 0 } = {}) {
+function buildIntelligenceStatus({ workspace, readyForAsk = false, indexStatus = "missing", indexedChunks = 0, job, limitations } = {}) {
   const ticker = workspace?.ticker ?? "NVDA";
   const outputDir = workspace?.workspace?.outputDir ?? null;
+  const readinessLimitations = limitations ?? (readyForAsk ? [] : ["No EDGAR intelligence index has been built for this workspace."]);
   return {
     ticker,
     outputDir,
@@ -671,9 +722,9 @@ function buildIntelligenceStatus({ workspace, readyForAsk = false, indexStatus =
       indexedChunks,
       staleAccessions: [],
       lastIndexedAt: readyForAsk ? "2026-04-27T20:15:00Z" : null,
-      limitations: readyForAsk ? [] : ["No EDGAR intelligence index has been built for this workspace."],
+      limitations: readinessLimitations,
     },
-    job: {
+    job: job ?? {
       jobId: null,
       kind: "none",
       status: "idle",
@@ -688,7 +739,7 @@ function buildIntelligenceStatus({ workspace, readyForAsk = false, indexStatus =
       },
       message: null,
     },
-    limitations: readyForAsk ? [] : ["No EDGAR intelligence index has been built for this workspace."],
+    limitations: readinessLimitations,
   };
 }
 

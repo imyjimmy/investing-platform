@@ -274,17 +274,25 @@ function IntelligenceStatusCard({ status, loading }: { status?: EdgarIntelligenc
     );
   }
 
+  const activeJob = status.job.jobId || status.job.status !== "idle";
+
   return (
     <div className="rounded-[18px] border border-line bg-panelSoft/55 px-4 py-4" data-testid="edgar-qwen-status">
       <div className="flex items-center justify-between gap-3">
         <div className="text-sm font-medium text-text">Model and index readiness</div>
         <StatusPill status={status.readyForAsk ? "ready" : status.indexState.status} />
       </div>
-      <div className="mt-4 grid gap-3 sm:grid-cols-3">
+      <div className={`mt-4 grid gap-3 ${activeJob ? "sm:grid-cols-2 xl:grid-cols-4" : "sm:grid-cols-3"}`}>
         <MiniState label="oMLX" status={status.modelState.status} detail={status.modelState.chatModel} />
         <MiniState label="Index" status={status.indexState.status} detail={`${status.indexState.indexedChunks} chunks`} />
         <MiniState label="Freshness" status={status.freshnessState.status} detail={status.freshnessState.liveCheckStatus.replaceAll("_", " ")} />
+        {activeJob ? <MiniState label="Job" status={status.job.status} detail={status.job.message ?? status.job.jobId ?? "No active job"} /> : null}
       </div>
+      {activeJob && status.job.progress.documentsTotal > 0 ? (
+        <div className="mt-4 text-xs text-muted" data-testid="edgar-qwen-job-progress">
+          Indexed {status.job.progress.documentsCompleted} of {status.job.progress.documentsTotal} documents
+        </div>
+      ) : null}
       {status.limitations.length ? (
         <ul className="mt-4 grid gap-2 text-sm leading-6 text-muted">
           {status.limitations.map((limitation) => (

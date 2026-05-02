@@ -378,12 +378,7 @@ class EdgarIntelligenceService:
             )
         model_state = self._model_state(datetime.now(UTC))
         if model_state.status != "ready":
-            raise EdgarIntelligenceApiError(
-                status_code=502,
-                code="model_unavailable",
-                message=model_state.message or "The configured local model server is unavailable.",
-                ticker=request.ticker,
-            )
+            self._raise_model_dependency_error(model_state, ticker=request.ticker)
         started = time.monotonic()
         freshness_state = self._freshness_state(workspace)
         if self._is_freshness_sensitive_question(request.question) and freshness_state.liveCheckStatus == "failed" and not request.allowStale:
@@ -396,6 +391,7 @@ class EdgarIntelligenceService:
             )
         baseline_limitations = self._freshness_limitations(freshness_state)
         retrieved_chunks, retrieval_limitations = self._retrieve_chunks(paths, request)
+        self._raise_retrieval_dependency_error(retrieval_limitations, ticker=request.ticker)
         retrieval_state = EdgarRetrievalState(
             chunksRetrieved=len(retrieved_chunks),
             chunksUsed=min(len(retrieved_chunks), self._settings.llm_max_prompt_chunks),
@@ -415,6 +411,13 @@ class EdgarIntelligenceService:
             generated = self._generate_answer_json(request, prompt_chunks)
             validated = self._validate_generated_answer(generated, prompt_chunks, request)
         except OmlxClientError as exc:
+            if self._is_generation_timeout(exc):
+                raise EdgarIntelligenceApiError(
+                    status_code=504,
+                    code="generation_timeout",
+                    message=str(exc),
+                    ticker=request.ticker,
+                ) from exc
             return self._safe_refusal_response(
                 request=request,
                 freshness_state=freshness_state,
@@ -500,6 +503,60 @@ class EdgarIntelligenceService:
             citations=question_response.citations,
             limitations=question_response.limitations,
         )
+
+    def _raise_model_dependency_error(self, model_state: EdgarIntelligenceModelState, *, ticker: str) -> None:
+        if model_state.status == "degraded":
+            try:
+                if not self._omlx_client.has_model(self._settings.llm_embed_model):
+                    raise EdgarIntelligenceApiError(
+                        status_code=502,
+                        code="embedding_model_unavailable",
+                        message=f"Embedding model '{self._settings.llm_embed_model}' is not available in oMLX.",
+                        ticker=ticker,
+                    )
+                if not self._omlx_client.has_model(self._settings.llm_rerank_model):
+                    raise EdgarIntelligenceApiError(
+                        status_code=502,
+                        code="reranker_unavailable",
+                        message=f"Reranker model '{self._settings.llm_rerank_model}' is not available in oMLX.",
+                        ticker=ticker,
+                    )
+            except OmlxClientError as exc:
+                raise EdgarIntelligenceApiError(
+                    status_code=502,
+                    code="model_unavailable",
+                    message=str(exc),
+                    ticker=ticker,
+                ) from exc
+        raise EdgarIntelligenceApiError(
+            status_code=502,
+            code="model_unavailable",
+            message=model_state.message or "The configured local model server is unavailable.",
+            ticker=ticker,
+        )
+
+    def _raise_retrieval_dependency_error(self, limitations: list[str], *, ticker: str) -> None:
+        joined = " ".join(limitations).lower()
+        if "embedding model" in joined and "not available" in joined:
+            raise EdgarIntelligenceApiError(
+                status_code=502,
+                code="embedding_model_unavailable",
+                message=f"Embedding model '{self._settings.llm_embed_model}' is not available in oMLX.",
+                ticker=ticker,
+                limitations=limitations,
+            )
+        if "reranker" in joined and "not available" in joined:
+            raise EdgarIntelligenceApiError(
+                status_code=502,
+                code="reranker_unavailable",
+                message=f"Reranker model '{self._settings.llm_rerank_model}' is not available in oMLX.",
+                ticker=ticker,
+                limitations=limitations,
+            )
+
+    def _is_generation_timeout(self, exc: OmlxClientError) -> bool:
+        message = str(exc).lower()
+        return "timeout" in message or "timed out" in message
 
     def _retrieve_chunks(self, paths: WorkspacePaths, request: EdgarQuestionRequest) -> tuple[list[RetrievedChunk], list[str]]:
         embeddings_path = paths.intelligence_dir / "index" / "embeddings.f16.npy"
@@ -1117,7 +1174,7 @@ class EdgarIntelligenceService:
         raw_index_state = last_index_payload.get("indexState")
         if isinstance(raw_index_state, dict):
             try:
-                return EdgarIndexState.model_validate(raw_index_state)
+                return self._reconcile_index_state(paths, EdgarIndexState.model_validate(raw_index_state))
             except ValueError:
                 pass
         return EdgarIndexState(
@@ -1129,6 +1186,51 @@ class EdgarIntelligenceService:
             limitations=["The saved EDGAR intelligence index state could not be parsed."],
         )
 
+    def _reconcile_index_state(self, paths: WorkspacePaths, index_state: EdgarIndexState) -> EdgarIndexState:
+        limitations = list(index_state.limitations)
+        updates: dict[str, Any] = {}
+        status = index_state.status
+
+        if index_state.status in {"ready", "stale"}:
+            if index_state.indexVersion != INDEX_SCHEMA_VERSION:
+                status = "stale"
+                limitations.append("The saved EDGAR intelligence index was built with an older index schema.")
+            if index_state.corpusVersion != CORPUS_VERSION:
+                status = "stale"
+                limitations.append("The saved EDGAR intelligence corpus was built with an older corpus version.")
+            if index_state.chunkingVersion != CHUNKING_VERSION:
+                status = "stale"
+                limitations.append("The saved EDGAR intelligence index was built with an older chunking version.")
+            if index_state.embeddingModel != (self._settings.llm_embed_model or EMBEDDING_MODEL_VERSION):
+                status = "stale"
+                limitations.append("The saved EDGAR intelligence index uses a different embedding model.")
+
+        if index_state.status == "ready":
+            embeddings_path = paths.intelligence_dir / "index" / "embeddings.f16.npy"
+            retrieval_path = paths.intelligence_dir / "index" / "retrieval.sqlite3"
+            if not embeddings_path.exists() or not retrieval_path.exists():
+                status = "degraded"
+                limitations.append("The saved EDGAR intelligence index is missing retrieval artifacts.")
+            else:
+                eligible_accessions = self._selected_accessions(paths)
+                indexed_accessions = self._indexed_accessions(retrieval_path)
+                if eligible_accessions:
+                    stale_accessions = sorted(eligible_accessions - indexed_accessions)
+                    updates["eligibleAccessions"] = len(eligible_accessions)
+                    updates["indexedAccessions"] = len(indexed_accessions.intersection(eligible_accessions))
+                    if stale_accessions:
+                        status = "stale"
+                        updates["staleAccessions"] = stale_accessions
+                        limitations.append(
+                            f"The filing index is missing {len(stale_accessions)} selected accession(s) from the current EDGAR workspace."
+                        )
+
+        if status != index_state.status:
+            updates["status"] = status
+        if limitations != index_state.limitations:
+            updates["limitations"] = self._dedupe(limitations)
+        return index_state.model_copy(update=updates) if updates else index_state
+
     def _job_state(self, paths: WorkspacePaths, *, job_id: str | None = None) -> EdgarIntelligenceJob:
         now = datetime.now(UTC)
         last_index_payload = self._load_json_document(self._last_index_path(paths))
@@ -1138,10 +1240,34 @@ class EdgarIntelligenceService:
                 job = EdgarIntelligenceJob.model_validate(raw_job)
                 if job_id and job.jobId != job_id:
                     return EdgarIntelligenceJob(jobId=job_id, kind="none", status="idle", updatedAt=now, message="No active job matched the supplied jobId.")
+                if not job_id and job.status in {"completed", "failed", "cancelled"}:
+                    return EdgarIntelligenceJob(kind="none", status="idle", updatedAt=now)
                 return job
             except ValueError:
                 pass
         return EdgarIntelligenceJob(jobId=job_id, kind="none", status="idle", updatedAt=now)
+
+    def _selected_accessions(self, paths: WorkspacePaths) -> set[str]:
+        accessions: set[str] = set()
+        for filing in self._load_selected_filings(paths, []):
+            accession = str(filing.get("accessionNumber") or "")
+            primary_document = str(filing.get("primaryDocument") or "").strip()
+            if not accession or not primary_document:
+                continue
+            source_path = paths.stock_root / self._filing_folder_name(filing) / "primary" / primary_document
+            if source_path.exists():
+                accessions.add(accession)
+        return accessions
+
+    def _indexed_accessions(self, retrieval_path: Path) -> set[str]:
+        if not retrieval_path.exists():
+            return set()
+        try:
+            with sqlite3.connect(retrieval_path) as connection:
+                rows = connection.execute("SELECT DISTINCT accession_number FROM chunks").fetchall()
+        except sqlite3.Error:
+            return set()
+        return {str(row[0] or "") for row in rows if str(row[0] or "")}
 
     def _load_selected_filings(self, paths: WorkspacePaths, forms: list[str]) -> list[dict[str, Any]]:
         payload = self._load_json_document(paths.exports_dir / "matched-filings.json")

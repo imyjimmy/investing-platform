@@ -17,6 +17,7 @@ from investing_platform.models import (
     EdgarQuestionRequest,
     EdgarQuestionResponse,
     EdgarRetrievalState,
+    EdgarWorkspaceRequest,
 )
 from investing_platform.services.edgar_intelligence import EdgarIntelligenceApiError, EdgarIntelligenceService
 from investing_platform.services.edgar import EdgarDownloader
@@ -139,6 +140,33 @@ class GuardrailFakeOmlxClient:
         if "revenue" in normalized or "gross margin" in normalized or "margin" in normalized:
             return [1.0, 0.0, 0.0]
         return [0.0, 0.0, 1.0]
+
+
+class MissingEmbeddingDependencyOmlxClient(GuardrailFakeOmlxClient):
+    def list_models(self) -> list[OmlxModel]:
+        return [
+            OmlxModel(id="Qwen3.6-35B-A3B-4bit"),
+            OmlxModel(id="Qwen3-Reranker-0.6B-mxfp8"),
+        ]
+
+    def has_model(self, model_id: str) -> bool:
+        return model_id in {"Qwen3.6-35B-A3B-4bit", "Qwen3-Reranker-0.6B-mxfp8"}
+
+
+class MissingRerankerDependencyOmlxClient(GuardrailFakeOmlxClient):
+    def list_models(self) -> list[OmlxModel]:
+        return [
+            OmlxModel(id="Qwen3.6-35B-A3B-4bit"),
+            OmlxModel(id="nomicai-modernbert-embed-base-4bit"),
+        ]
+
+    def has_model(self, model_id: str) -> bool:
+        return model_id in {"Qwen3.6-35B-A3B-4bit", "nomicai-modernbert-embed-base-4bit"}
+
+
+class TimeoutGenerationOmlxClient(GuardrailFakeOmlxClient):
+    def chat_json(self, *, model: str, messages: list[dict[str, str]], max_tokens: int) -> dict:
+        raise OmlxClientError("oMLX generation timed out after 60 seconds.")
 
 
 def test_intelligence_index_builds_ticker_scoped_corpus_scaffold(tmp_path) -> None:
@@ -651,6 +679,68 @@ def test_compare_rejects_when_enough_target_filings_are_not_available(tmp_path) 
         raise AssertionError("Expected compare to reject missing target filings.")
 
 
+def test_index_state_marks_ready_index_stale_when_selected_filings_change(tmp_path) -> None:
+    service, paths, workspace, _fake_client = _indexed_guardrail_service(
+        tmp_path,
+        filing_text="Revenue decreased 12% because component supply constraints affected product availability.",
+    )
+    matched_path = paths.exports_dir / "matched-filings.json"
+    filings = json.loads(matched_path.read_text(encoding="utf-8"))
+    new_filing = {
+        **filings[0],
+        "filingDate": "2026-02-15",
+        "accessionNumber": "0000320193-26-000002",
+        "accessionNumberNoDashes": "000032019326000002",
+        "primaryDocument": "a10-k2026.htm",
+        "primaryDocumentUrl": "https://www.sec.gov/Archives/edgar/data/320193/000032019326000002/a10-k2026.htm",
+    }
+    matched_path.write_text(json.dumps([new_filing, *filings]), encoding="utf-8")
+    artifact_store = EdgarDownloader(service._settings)
+    new_primary_path = paths.stock_root / artifact_store._filing_folder_name(new_filing) / "primary" / "a10-k2026.htm"
+    new_primary_path.parent.mkdir(parents=True, exist_ok=True)
+    new_primary_path.write_text("<html><body><p>New filing text.</p></body></html>", encoding="utf-8")
+
+    index_state = service._index_state(paths)
+    status = service.api_status_for_workspace(
+        workspace=workspace,
+        request=EdgarWorkspaceRequest(ticker="AAPL"),
+        paths=paths,
+    )
+
+    assert index_state.status == "stale"
+    assert index_state.eligibleAccessions == 2
+    assert index_state.indexedAccessions == 1
+    assert index_state.staleAccessions == ["0000320193-26-000002"]
+    assert status.readyForAsk is False
+    assert "missing 1 selected accession" in " ".join(status.limitations)
+
+
+def test_status_reports_completed_job_only_when_polled_by_job_id(tmp_path) -> None:
+    service, paths, workspace, _fake_client = _indexed_guardrail_service(
+        tmp_path,
+        filing_text="Revenue decreased 12% because component supply constraints affected product availability.",
+    )
+    last_index_payload = json.loads((paths.intelligence_dir / "jobs" / "last-index.json").read_text(encoding="utf-8"))
+    job_id = last_index_payload["jobId"]
+
+    default_status = service.api_status_for_workspace(
+        workspace=workspace,
+        request=EdgarWorkspaceRequest(ticker="AAPL"),
+        paths=paths,
+    )
+    polled_status = service.api_status_for_workspace(
+        workspace=workspace,
+        request=EdgarWorkspaceRequest(ticker="AAPL"),
+        paths=paths,
+        job_id=job_id,
+    )
+
+    assert default_status.job.status == "idle"
+    assert default_status.job.jobId is None
+    assert polled_status.job.status == "completed"
+    assert polled_status.job.jobId == job_id
+
+
 def test_intelligence_index_removes_stale_embeddings_when_embedding_model_is_missing(tmp_path) -> None:
     settings = DashboardSettings(
         research_root=tmp_path / "research-root",
@@ -715,6 +805,66 @@ def test_ask_accepts_grounded_cited_answer(tmp_path) -> None:
     assert [citation.citationId for citation in response.citations] == ["C1"]
     assert "Revenue decreased 12%" in response.citations[0].snippet
     assert "Use one or two concise paragraphs" in fake_client.chat_messages[0][0]["content"]
+
+
+def test_ask_returns_specific_embedding_dependency_error(tmp_path) -> None:
+    service, paths, workspace, _fake_client = _indexed_guardrail_service(
+        tmp_path,
+        filing_text="Revenue decreased 12% because component supply constraints affected product availability.",
+    )
+    service._omlx_client = MissingEmbeddingDependencyOmlxClient()
+
+    try:
+        service.answer_question(
+            workspace=workspace,
+            request=EdgarQuestionRequest(ticker="AAPL", question="What happened to revenue?"),
+            paths=paths,
+        )
+    except EdgarIntelligenceApiError as exc:
+        assert exc.status_code == 502
+        assert exc.detail.code == "embedding_model_unavailable"
+    else:
+        raise AssertionError("Expected missing embedding model to return a specific dependency error.")
+
+
+def test_ask_returns_specific_reranker_dependency_error(tmp_path) -> None:
+    service, paths, workspace, _fake_client = _indexed_guardrail_service(
+        tmp_path,
+        filing_text="Revenue decreased 12% because component supply constraints affected product availability.",
+    )
+    service._omlx_client = MissingRerankerDependencyOmlxClient()
+
+    try:
+        service.answer_question(
+            workspace=workspace,
+            request=EdgarQuestionRequest(ticker="AAPL", question="What happened to revenue?"),
+            paths=paths,
+        )
+    except EdgarIntelligenceApiError as exc:
+        assert exc.status_code == 502
+        assert exc.detail.code == "reranker_unavailable"
+    else:
+        raise AssertionError("Expected missing reranker model to return a specific dependency error.")
+
+
+def test_ask_returns_generation_timeout_error(tmp_path) -> None:
+    service, paths, workspace, _fake_client = _indexed_guardrail_service(
+        tmp_path,
+        filing_text="Revenue decreased 12% because component supply constraints affected product availability.",
+    )
+    service._omlx_client = TimeoutGenerationOmlxClient()
+
+    try:
+        service.answer_question(
+            workspace=workspace,
+            request=EdgarQuestionRequest(ticker="AAPL", question="What happened to revenue?"),
+            paths=paths,
+        )
+    except EdgarIntelligenceApiError as exc:
+        assert exc.status_code == 504
+        assert exc.detail.code == "generation_timeout"
+    else:
+        raise AssertionError("Expected generation timeout to return a structured timeout error.")
 
 
 def test_ask_uses_bullet_style_for_risk_factor_questions(tmp_path) -> None:
@@ -912,6 +1062,35 @@ def test_ask_rejects_freshness_sensitive_question_when_live_check_failed(tmp_pat
         assert exc.detail.code == "freshness_unavailable"
     else:
         raise AssertionError("Expected freshness-sensitive ask to fail when live check failed.")
+
+
+def test_ask_allows_freshness_sensitive_question_when_stale_answers_are_allowed(tmp_path) -> None:
+    service, paths, _workspace, _fake_client = _indexed_guardrail_service(
+        tmp_path,
+        filing_text="Revenue decreased 12% because component supply constraints affected product availability.",
+    )
+    degraded_workspace = SimpleNamespace(
+        metadataState=EdgarMetadataState(
+            status="degraded",
+            lastRefreshedAt=datetime.now(UTC),
+            lastLiveCheckedAt=datetime.now(UTC),
+            message="Live submissions check failed.",
+        )
+    )
+
+    response = service.answer_question(
+        workspace=degraded_workspace,
+        request=EdgarQuestionRequest(
+            ticker="AAPL",
+            question="What is the latest revenue change today?",
+            allowStale=True,
+        ),
+        paths=paths,
+    )
+
+    assert response.answer == "Revenue decreased 12% [C1]."
+    assert response.freshnessState.status == "degraded"
+    assert "Workspace freshness is degraded" in " ".join(response.limitations)
 
 
 def _indexed_guardrail_service(
