@@ -936,15 +936,22 @@ export interface EdgarSyncRequest {
   issuerQuery: string;
   outputDir?: string;
   forceRefresh?: boolean;
+  startDate?: string | null;
+  endDate?: string | null;
+  formTypes?: string[];
+  includeExhibits?: boolean;
 }
 
 export interface EdgarWarmRequest {
-  issuerQueries: string[];
+  issuerQueries?: string[];
   outputDir?: string;
   mode?: "metadata-only" | "body-cache" | "index";
   maxIssuers?: number;
   maxFilingBodiesPerIssuer?: number;
   forceRefresh?: boolean;
+  includeWatchlist?: boolean;
+  includeRecentIssuers?: boolean;
+  includeAskedIssuers?: boolean;
 }
 
 export interface EdgarWarmIssuerResult {

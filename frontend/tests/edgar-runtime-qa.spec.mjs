@@ -52,6 +52,11 @@ test.describe("stock intel EDGAR workspace", () => {
     await expect(page.getByTestId("edgar-company-input")).toHaveValue("NVDA");
     await expect(page.getByTestId("edgar-workspace-empty")).toBeVisible();
 
+    await page.getByTestId("edgar-warm-button").click();
+    await expect.poll(() => harness.warmRequests.length, { timeout: 15_000 }).toBe(1);
+    expect(harness.warmRequests[0]).toMatchObject({ mode: "metadata-only", maxIssuers: 10 });
+    await expect(page.getByText("Warmed 2 issuers.", { exact: true })).toBeVisible();
+
     await page.getByTestId("edgar-company-input").fill("AAPL");
     await page.getByTestId("edgar-sync-button").click();
 
@@ -73,6 +78,55 @@ test.describe("stock intel EDGAR workspace", () => {
     });
 
     expect(harness.workspaceRequests.some((request) => request?.ticker === "AAPL")).toBeTruthy();
+  });
+
+  test("keeps advanced EDGAR sync overrides behind disclosure", async ({ page }) => {
+    const advancedWorkspace = buildWorkspace({
+      ticker: "AAPL",
+      companyName: "Apple Inc.",
+      cik: "0000320193",
+      workspace: {
+        ticker: "AAPL",
+        outputDir: "/tmp/custom-research",
+      },
+      stockPath: "/tmp/custom-research/stocks/AAPL",
+      edgarPath: "/tmp/custom-research/stocks/AAPL/.edgar",
+    });
+
+    const harness = await installEdgarRoutes(page, {
+      initialWorkspace: null,
+      onSync: (request) => ({
+        response: buildSyncResponse({
+          issuerQuery: request?.issuerQuery ?? "AAPL",
+          workspace: advancedWorkspace,
+        }),
+        workspace: advancedWorkspace,
+      }),
+    });
+
+    await openEdgarWorkspace(page);
+
+    await expect(page.getByTestId("edgar-force-refresh-checkbox")).toBeHidden();
+    await page.getByTestId("edgar-advanced-toggle").click();
+    await page.getByTestId("edgar-company-input").fill("AAPL");
+    await page.getByTestId("edgar-output-dir-input").fill("/tmp/custom-research");
+    await page.getByTestId("edgar-start-date-input").fill("2025-10-01");
+    await page.getByTestId("edgar-end-date-input").fill("2025-10-31");
+    await page.getByTestId("edgar-form-types-input").fill("10-k, 8-k/a 10-q");
+    await page.getByTestId("edgar-force-refresh-checkbox").check();
+    await page.getByTestId("edgar-include-exhibits-checkbox").check();
+    await page.getByTestId("edgar-sync-button").click();
+
+    await expect.poll(() => harness.syncRequests.length, { timeout: 15_000 }).toBe(1);
+    expect(harness.syncRequests[0]).toMatchObject({
+      issuerQuery: "AAPL",
+      outputDir: "/tmp/custom-research",
+      forceRefresh: true,
+      startDate: "2025-10-01",
+      endDate: "2025-10-31",
+      formTypes: ["10-K", "8-K/A", "10-Q"],
+      includeExhibits: true,
+    });
   });
 
   test("lets a ticker question start bounded Qwen setup before a workspace exists", async ({ page }) => {
@@ -370,6 +424,7 @@ test.describe("stock intel EDGAR workspace", () => {
 
 async function installEdgarRoutes(page, options = {}) {
   const syncRequests = [];
+  const warmRequests = [];
   const workspaceRequests = [];
   const intelligenceStatusRequests = [];
   const indexRequests = [];
@@ -396,6 +451,12 @@ async function installEdgarRoutes(page, options = {}) {
     }
 
     await fulfillJson(route, currentWorkspace);
+  });
+
+  await page.route("**/api/sources/edgar/warm", async (route) => {
+    const request = route.request().postDataJSON();
+    warmRequests.push(request);
+    await fulfillJson(route, options.onWarm ? options.onWarm(request) : buildWarmResponse({ request }));
   });
 
   await page.route("**/api/sources/edgar/intelligence/status**", async (route) => {
@@ -445,6 +506,7 @@ async function installEdgarRoutes(page, options = {}) {
 
   return {
     syncRequests,
+    warmRequests,
     workspaceRequests,
     intelligenceStatusRequests,
     indexRequests,
@@ -539,6 +601,36 @@ function buildSyncResponse({ issuerQuery, workspace }) {
     metadataState: workspace.metadataState,
     bodyCacheState: workspace.bodyCacheState,
     intelligenceState: workspace.intelligenceState,
+  };
+}
+
+function buildWarmResponse({ request } = {}) {
+  return {
+    mode: request?.mode ?? "metadata-only",
+    requestedIssuers: 2,
+    warmedIssuers: 2,
+    failedIssuers: 0,
+    results: [
+      {
+        issuerQuery: "NVDA",
+        ticker: "NVDA",
+        status: "warmed",
+        metadataStatus: "fresh",
+        bodyCacheStatus: null,
+        intelligenceStatus: null,
+        message: "Metadata warmed with 34 known filings.",
+      },
+      {
+        issuerQuery: "AAPL",
+        ticker: "AAPL",
+        status: "warmed",
+        metadataStatus: "fresh",
+        bodyCacheStatus: null,
+        intelligenceStatus: null,
+        message: "Metadata warmed with 36 known filings.",
+      },
+    ],
+    generatedAt: "2026-04-27T20:05:00Z",
   };
 }
 

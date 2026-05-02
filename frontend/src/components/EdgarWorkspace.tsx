@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { sourceApi } from "../lib/api";
 import { queryKeys } from "../lib/queryKeys";
@@ -45,7 +45,17 @@ export function EdgarWorkspace({
   syncResult,
   syncing,
 }: EdgarWorkspaceProps) {
+  const queryClient = useQueryClient();
   const [issuerQuery, setIssuerQuery] = useState(defaultTicker);
+  const [advancedOutputDir, setAdvancedOutputDir] = useState("");
+  const [advancedStartDate, setAdvancedStartDate] = useState("");
+  const [advancedEndDate, setAdvancedEndDate] = useState("");
+  const [advancedFormTypes, setAdvancedFormTypes] = useState("");
+  const [forceRefresh, setForceRefresh] = useState(false);
+  const [includeExhibits, setIncludeExhibits] = useState(false);
+  const [warming, setWarming] = useState(false);
+  const [warmMessage, setWarmMessage] = useState<string | null>(null);
+  const [warmError, setWarmError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!issuerQuery.trim() && defaultTicker) {
@@ -77,13 +87,53 @@ export function EdgarWorkspace({
   const effectiveTicker = activeWorkspace?.ticker ?? syncResult?.resolvedTicker ?? likelyTicker ?? defaultTicker.trim().toUpperCase();
   const effectiveCompany = activeWorkspace?.companyName ?? syncResult?.resolvedCompanyName ?? normalizedQuery ?? "No company selected";
   const canRun = Boolean(status?.available) && Boolean(normalizedQuery) && !syncing;
+  const canWarm = Boolean(status?.available) && !warming;
   const workspaceError = workspaceQuery.error instanceof Error ? workspaceQuery.error.message : null;
 
   function handleRun() {
     if (!canRun) {
       return;
     }
-    onRun({ issuerQuery: normalizedQuery });
+    const request: EdgarSyncRequest = { issuerQuery: normalizedQuery };
+    const outputDir = advancedOutputDir.trim();
+    const formTypes = parseFormTypes(advancedFormTypes);
+    if (outputDir) {
+      request.outputDir = outputDir;
+    }
+    if (forceRefresh) {
+      request.forceRefresh = true;
+    }
+    if (advancedStartDate) {
+      request.startDate = advancedStartDate;
+    }
+    if (advancedEndDate) {
+      request.endDate = advancedEndDate;
+    }
+    if (formTypes.length > 0) {
+      request.formTypes = formTypes;
+    }
+    if (includeExhibits) {
+      request.includeExhibits = true;
+    }
+    onRun(request);
+  }
+
+  async function handleWarm() {
+    if (!canWarm) {
+      return;
+    }
+    setWarming(true);
+    setWarmMessage(null);
+    setWarmError(null);
+    try {
+      const response = await sourceApi.edgarWarm({ mode: "metadata-only", maxIssuers: 10 });
+      setWarmMessage(`Warmed ${response.warmedIssuers} issuer${response.warmedIssuers === 1 ? "" : "s"}.`);
+      await queryClient.invalidateQueries({ queryKey: ["edgar-workspace"] });
+    } catch (error) {
+      setWarmError(error instanceof Error ? error.message : "EDGAR warm failed.");
+    } finally {
+      setWarming(false);
+    }
   }
 
   const header = (
@@ -101,15 +151,26 @@ export function EdgarWorkspace({
         </p>
       </div>
       <div className="flex flex-col items-start gap-3 lg:items-end">
-        <button
-          className="rounded-full border border-accent/35 bg-accent/10 px-4 py-2 text-sm font-medium text-accent transition hover:border-accent/50 hover:text-white disabled:cursor-default disabled:opacity-45"
-          data-testid="edgar-sync-button"
-          disabled={!canRun}
-          onClick={handleRun}
-          type="button"
-        >
-          {syncing ? "Syncing filings..." : activeWorkspace ? "Refresh filings" : "Sync SEC filings"}
-        </button>
+        <div className="flex flex-wrap justify-start gap-2 lg:justify-end">
+          <button
+            className="rounded-full border border-line bg-panelSoft px-4 py-2 text-sm font-medium text-text transition hover:border-accent/35 hover:text-white disabled:cursor-default disabled:opacity-45"
+            data-testid="edgar-warm-button"
+            disabled={!canWarm}
+            onClick={handleWarm}
+            type="button"
+          >
+            {warming ? "Warming..." : "Warm defaults"}
+          </button>
+          <button
+            className="rounded-full border border-accent/35 bg-accent/10 px-4 py-2 text-sm font-medium text-accent transition hover:border-accent/50 hover:text-white disabled:cursor-default disabled:opacity-45"
+            data-testid="edgar-sync-button"
+            disabled={!canRun}
+            onClick={handleRun}
+            type="button"
+          >
+            {syncing ? "Syncing filings..." : activeWorkspace ? "Refresh filings" : "Sync SEC filings"}
+          </button>
+        </div>
         {!status?.available ? (
           <div className="max-w-md rounded-[20px] border border-caution/25 bg-caution/10 px-4 py-3 text-sm text-caution">
             Add a descriptive SEC <span className="mono">User-Agent</span> to enable filing sync.
@@ -156,6 +217,78 @@ export function EdgarWorkspace({
                 Annual, quarterly, current-report, and amended filings are included automatically. Filing bodies are cached locally under the stock workspace; app-global EDGAR metadata stays under the configured research root.
               </div>
             </div>
+
+            <details className="rounded-[18px] border border-line bg-panelSoft/45 px-4 py-4" data-testid="edgar-advanced-controls">
+              <summary className="cursor-pointer text-sm font-medium text-text" data-testid="edgar-advanced-toggle">Advanced sync options</summary>
+              <div className="mt-4 grid gap-4">
+                <label className="grid gap-2">
+                  <span className="text-xs uppercase tracking-[0.18em] text-muted">Output folder</span>
+                  <input
+                    className={inputClassName}
+                    data-testid="edgar-output-dir-input"
+                    onChange={(event) => setAdvancedOutputDir(event.target.value)}
+                    placeholder={status?.researchRootPath ?? "Research root"}
+                    type="text"
+                    value={advancedOutputDir}
+                  />
+                </label>
+                <div className="grid gap-4 md:grid-cols-2">
+                  <label className="grid gap-2">
+                    <span className="text-xs uppercase tracking-[0.18em] text-muted">Start date</span>
+                    <input
+                      className={inputClassName}
+                      data-testid="edgar-start-date-input"
+                      onChange={(event) => setAdvancedStartDate(event.target.value)}
+                      type="date"
+                      value={advancedStartDate}
+                    />
+                  </label>
+                  <label className="grid gap-2">
+                    <span className="text-xs uppercase tracking-[0.18em] text-muted">End date</span>
+                    <input
+                      className={inputClassName}
+                      data-testid="edgar-end-date-input"
+                      onChange={(event) => setAdvancedEndDate(event.target.value)}
+                      type="date"
+                      value={advancedEndDate}
+                    />
+                  </label>
+                </div>
+                <label className="grid gap-2">
+                  <span className="text-xs uppercase tracking-[0.18em] text-muted">Form types</span>
+                  <input
+                    className={inputClassName}
+                    data-testid="edgar-form-types-input"
+                    onChange={(event) => setAdvancedFormTypes(event.target.value)}
+                    placeholder="10-K, 10-Q, 8-K"
+                    type="text"
+                    value={advancedFormTypes}
+                  />
+                </label>
+                <div className="grid gap-3 text-sm text-muted md:grid-cols-2">
+                  <label className="flex items-center gap-3">
+                    <input
+                      checked={forceRefresh}
+                      className="h-4 w-4 accent-accent"
+                      data-testid="edgar-force-refresh-checkbox"
+                      onChange={(event) => setForceRefresh(event.target.checked)}
+                      type="checkbox"
+                    />
+                    <span>Force refresh</span>
+                  </label>
+                  <label className="flex items-center gap-3">
+                    <input
+                      checked={includeExhibits}
+                      className="h-4 w-4 accent-accent"
+                      data-testid="edgar-include-exhibits-checkbox"
+                      onChange={(event) => setIncludeExhibits(event.target.checked)}
+                      type="checkbox"
+                    />
+                    <span>Include exhibits</span>
+                  </label>
+                </div>
+              </div>
+            </details>
 
             <div className="grid gap-3 md:grid-cols-2">
               <InfoCard
@@ -206,6 +339,8 @@ export function EdgarWorkspace({
 
         {statusError ? <InlineMessage tone="danger" message={statusError} /> : null}
         {workspaceError ? <InlineMessage tone="danger" message={workspaceError} /> : null}
+        {warmError ? <InlineMessage tone="danger" message={warmError} /> : null}
+        {warmMessage ? <InlineMessage tone="neutral" message={warmMessage} /> : null}
         {syncError ? <InlineMessage tone="danger" message={syncError} /> : null}
       </section>
 
@@ -344,6 +479,17 @@ function normalizeTickerCandidate(value: string) {
     return null;
   }
   return value.toUpperCase();
+}
+
+function parseFormTypes(value: string) {
+  const deduped: string[] = [];
+  for (const item of value.split(/[,\s]+/)) {
+    const normalized = item.trim().toUpperCase();
+    if (normalized && !deduped.includes(normalized)) {
+      deduped.push(normalized);
+    }
+  }
+  return deduped;
 }
 
 function describeState(state: EdgarMetadataState | EdgarBodyCacheState | EdgarIntelligenceState) {
