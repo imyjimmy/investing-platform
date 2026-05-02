@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 import json
 from pathlib import Path
 import re
+import sqlite3
 import threading
 from typing import Any, Callable
 
@@ -109,6 +110,9 @@ class EdgarResolverService:
     def _issuer_registry_freshness_path(self) -> Path:
         return self._app_global_cache_root() / ".sec" / "issuer-registry" / "freshness.json"
 
+    def _issuer_registry_sqlite_path(self) -> Path:
+        return self._app_global_cache_root() / ".sec" / "issuer-registry" / "issuer-registry.sqlite3"
+
     def _resolved_company_from_payload(self, payload: dict[str, Any], fallback_ticker: str | None = None) -> ResolvedCompany:
         cik10 = str(payload.get("cik") or "").zfill(10)
         if not cik10.strip("0"):
@@ -136,6 +140,8 @@ class EdgarResolverService:
             if cached_payload and cached_is_fresh and not force_refresh:
                 self._company_lookup_cache = list(cached_payload.values()) if isinstance(cached_payload, dict) else None
                 if self._company_lookup_cache is not None:
+                    if not self._issuer_registry_sqlite_path().exists():
+                        self._write_issuer_registry_sqlite(cached_payload)
                     return self._company_lookup_cache
 
             try:
@@ -149,6 +155,7 @@ class EdgarResolverService:
                 raise ValueError("Unexpected SEC company_tickers.json payload.")
             registry_json_path.parent.mkdir(parents=True, exist_ok=True)
             registry_json_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+            self._write_issuer_registry_sqlite(payload)
             freshness_path.parent.mkdir(parents=True, exist_ok=True)
             freshness_path.write_text(
                 json.dumps(
@@ -163,6 +170,49 @@ class EdgarResolverService:
             )
             self._company_lookup_cache = list(payload.values())
             return self._company_lookup_cache
+
+    def _write_issuer_registry_sqlite(self, payload: dict[str, Any]) -> None:
+        sqlite_path = self._issuer_registry_sqlite_path()
+        sqlite_path.parent.mkdir(parents=True, exist_ok=True)
+        imported_at = datetime.now(UTC).isoformat()
+        with sqlite3.connect(sqlite_path) as connection:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS issuers (
+                    cik10 TEXT PRIMARY KEY,
+                    cik INTEGER NOT NULL,
+                    ticker TEXT NOT NULL,
+                    company_name TEXT NOT NULL,
+                    normalized_company_name TEXT NOT NULL,
+                    source_index INTEGER,
+                    imported_at TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_issuers_ticker ON issuers(ticker)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_issuers_normalized_name ON issuers(normalized_company_name)")
+            connection.executemany(
+                """
+                INSERT OR REPLACE INTO issuers(
+                    cik10, cik, ticker, company_name, normalized_company_name, source_index, imported_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        str(item.get("cik_str") or "").zfill(10),
+                        int(item.get("cik_str") or 0),
+                        str(item.get("ticker") or "").upper(),
+                        str(item.get("title") or ""),
+                        self._normalize_company_name(str(item.get("title") or "")),
+                        self._safe_int(index),
+                        imported_at,
+                    )
+                    for index, item in payload.items()
+                    if isinstance(item, dict) and str(item.get("cik_str") or "").strip() and str(item.get("ticker") or "").strip()
+                ],
+            )
+            connection.commit()
 
     def _load_json_document(self, path: Path) -> dict[str, Any] | None:
         if not path.exists():
@@ -192,3 +242,9 @@ class EdgarResolverService:
 
     def _normalize_company_name(self, value: str) -> str:
         return re.sub(r"[^A-Z0-9]+", "", value.upper())
+
+    def _safe_int(self, value: Any) -> int | None:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
