@@ -1087,6 +1087,9 @@ export interface EdgarQuestionCitation {
   filingDate?: string | null;
   documentName: string;
   section?: string | null;
+  sectionCode?: string | null;
+  sectionTitle?: string | null;
+  sectionType?: string | null;
   chunkId: string;
   textRange: EdgarQuestionTextRange;
   snippet: string;

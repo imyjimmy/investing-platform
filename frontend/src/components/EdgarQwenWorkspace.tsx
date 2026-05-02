@@ -385,6 +385,9 @@ function AnswerText({ value }: { value: string }) {
 
 function CitationCard({ citation }: { citation: EdgarQuestionCitation }) {
   const filingDate = citation.filingDate ? formatFilingDate(citation.filingDate) : "Unknown filing date";
+  const sectionLabel =
+    citation.section ??
+    (citation.sectionTitle ? [citation.sectionCode, citation.sectionTitle].filter(Boolean).join(" ") : null);
   return (
     <article className="rounded-[18px] border border-line bg-panelSoft/55 px-4 py-4" data-testid={`edgar-qwen-citation-${citation.citationId}`}>
       <div className="flex flex-wrap items-center gap-2">
@@ -392,6 +395,7 @@ function CitationCard({ citation }: { citation: EdgarQuestionCitation }) {
         <span className="text-sm font-medium text-text">
           {citation.form} · {filingDate}
         </span>
+        {sectionLabel ? <span className="text-xs font-medium text-muted">{sectionLabel}</span> : null}
       </div>
       <p className="mt-3 text-sm leading-6 text-muted">{citation.snippet}</p>
       <div className="mt-3 flex flex-wrap gap-3 text-xs text-muted">
