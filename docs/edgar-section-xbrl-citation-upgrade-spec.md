@@ -443,16 +443,57 @@ class EdgarXbrlFactCitation(DashboardModel):
     secUrl: str | None = None
 ```
 
-Then expose:
+Then expose a type alias for response field annotations only:
 
 ```python
-EdgarQuestionCitation = Annotated[
+EdgarQuestionCitationPayload = Annotated[
     EdgarTextCitation | EdgarXbrlFactCitation,
     Field(discriminator="evidenceType"),
 ]
 ```
 
-For backward compatibility, text citations should keep the existing field names and default `evidenceType` to `"text"` so current fake services and frontend tests can migrate gradually.
+Do not construct the alias directly. It is not a callable Pydantic model. Backend builders that currently call `EdgarQuestionCitation(...)` must be updated to instantiate the concrete model:
+
+```python
+def _citations_for_chunks(...) -> list[EdgarTextCitation]:
+    return [
+        EdgarTextCitation(
+            evidenceType="text",
+            citationId=...,
+            ...
+        )
+    ]
+```
+
+XBRL fact citation builders should instantiate `EdgarXbrlFactCitation(...)`.
+
+For backward compatibility, text citations should keep the existing field names and default `evidenceType` to `"text"` so current frontend renderers can migrate gradually. However, default values on `EdgarTextCitation` are not enough for discriminated-union validation: legacy dict payloads that omit `evidenceType` need a pre-validation adapter.
+
+Add a compatibility validator to every response model that owns citation lists, including `EdgarQuestionResponse` and `EdgarComparisonResponse`:
+
+```python
+def _inject_legacy_text_citation_type(value: Any) -> Any:
+    if not isinstance(value, list):
+        return value
+    normalized: list[Any] = []
+    for citation in value:
+        if isinstance(citation, dict) and "evidenceType" not in citation:
+            normalized.append({**citation, "evidenceType": "text"})
+        else:
+            normalized.append(citation)
+    return normalized
+
+
+class EdgarQuestionResponse(DashboardModel):
+    citations: list[EdgarQuestionCitationPayload] = Field(default_factory=list)
+
+    @field_validator("citations", mode="before")
+    @classmethod
+    def _normalize_legacy_citations(cls, value: Any) -> Any:
+        return _inject_legacy_text_citation_type(value)
+```
+
+Use the same validator for comparison responses and route fake-service payloads. This preserves older tests and cached JSON payloads that still contain text-only citation objects without `evidenceType`.
 
 Text citations should add optional section fields:
 
@@ -497,9 +538,12 @@ The validator should consider both:
 ### Phase 2: Citation Metadata Upgrade
 
 1. Split citations into text and XBRL fact citation models using `evidenceType`.
-2. Pass section code/title/type through retrieved chunks.
-3. Update citation cards to show richer section labels.
-4. Keep existing fields stable for route compatibility.
+2. Rename the union annotation to a payload/type-alias name and stop constructing it directly.
+3. Update `_citations_for_chunks(...)` and any fake services to instantiate `EdgarTextCitation`.
+4. Add pre-validation adapters that inject `evidenceType="text"` for legacy citation dicts before discriminated-union validation.
+5. Pass section code/title/type through retrieved chunks.
+6. Update citation cards to show richer section labels.
+7. Keep existing text citation fields stable for route compatibility.
 
 ### Phase 3: Issuer-Scoped XBRL Facts
 
@@ -571,7 +615,8 @@ Coverage:
 - ask response still serializes old citation fields
 - ask response serializes optional section fields when present
 - ask response serializes text and XBRL fact citation variants using `evidenceType`
-- older fake service responses without new fields remain valid
+- older fake service responses and cached payloads without `evidenceType` validate as text citations
+- backend citation builders instantiate `EdgarTextCitation` rather than the discriminated-union alias
 
 ### Frontend Runtime QA
 
