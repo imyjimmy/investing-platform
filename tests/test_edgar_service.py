@@ -191,7 +191,7 @@ def test_sync_seeds_initial_history_from_normalized_metadata_cache(tmp_path, mon
 
     monkeypatch.setattr(service, "_fetch_submission_payloads", fake_fetch_submission_payloads)
     monkeypatch.setattr(service, "_build_filing_rows", lambda payloads, resolved_company: [live_filing])
-    monkeypatch.setattr(service, "_select_smart_working_set", lambda all_filings: all_filings)
+    monkeypatch.setattr(service, "_select_smart_working_set", lambda all_filings, usage_profile=None: all_filings)
 
     def fake_download_filing_assets(*, filing, request, options, filings_dir, edgar_root, manifest, counters) -> None:
         destination = filings_dir / service._filing_folder_name(filing) / "primary" / str(filing["primaryDocument"])
@@ -211,6 +211,92 @@ def test_sync_seeds_initial_history_from_normalized_metadata_cache(tmp_path, mon
         "0000320193-25-000198",
         "0000320193-24-000001",
     ]
+
+
+def test_sync_advanced_overrides_filter_working_set_and_fetch_exhibits(tmp_path, monkeypatch) -> None:
+    service, _settings = _build_service(tmp_path)
+    resolved = _sample_resolved_company()
+    filings = _sample_filings()
+
+    monkeypatch.setattr(service._resolver_service, "resolve_issuer_query", lambda issuer_query, options, force_refresh=False: resolved)
+    monkeypatch.setattr(service._metadata_cache_service, "ensure_bulk_baseline", lambda options, force_refresh=False: {"status": "ready", "artifacts": {}})
+    monkeypatch.setattr(service, "_fetch_submission_payloads", lambda **kwargs: [{"stub": "payload"}])
+    monkeypatch.setattr(service, "_build_filing_rows", lambda payloads, resolved_company: filings)
+    monkeypatch.setattr(service, "_select_smart_working_set", lambda all_filings, usage_profile=None: all_filings)
+    download_calls: list[tuple[str, str, bool]] = []
+
+    def fake_download_filing_assets(*, filing, request, options, filings_dir, edgar_root, manifest, counters) -> None:
+        download_calls.append((str(filing["accessionNumber"]), request.downloadMode, request.includeExhibits))
+        if request.downloadMode == "primary-document":
+            destination = filings_dir / service._filing_folder_name(filing) / "primary" / str(filing["primaryDocument"])
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text("<html>filing body</html>", encoding="utf-8")
+            counters.downloaded_files += 1
+        else:
+            counters.skipped_files += 1
+
+    monkeypatch.setattr(service, "_download_filing_assets", fake_download_filing_assets)
+
+    response = service.sync(
+        EdgarSyncRequest(
+            issuerQuery="AAPL",
+            startDate="2025-10-01",  # type: ignore[arg-type]
+            endDate="2025-10-31",  # type: ignore[arg-type]
+            formTypes=["8-K/A"],
+            includeExhibits=True,
+        )
+    )
+
+    assert response.bodyCacheState.matchedFilings == 1
+    assert download_calls == [
+        ("0000320193-25-000198", "primary-document", False),
+        ("0000320193-25-000198", "all-attachments", True),
+    ]
+    matched_path = Path(response.workspace.outputDir or _settings.research_root) / "stocks" / "AAPL" / ".edgar" / "exports" / "matched-filings.json"
+    matched = json.loads(matched_path.read_text(encoding="utf-8"))
+    assert [filing["form"] for filing in matched] == ["8-K/A"]
+
+
+def test_smart_working_set_expands_for_historical_and_current_report_usage(tmp_path) -> None:
+    service, _settings = _build_service(tmp_path)
+    filings: list[dict[str, str]] = []
+    for index in range(5):
+        year = 2026 - index
+        filings.append(
+            {
+                "form": "10-K",
+                "filingDate": f"{year}-01-30",
+                "reportDate": f"{year - 1}-09-30",
+                "accessionNumber": f"annual-{index}",
+            }
+        )
+    for index in range(16):
+        year = 2026 - (index // 4)
+        month = 10 - ((index % 4) * 3)
+        filings.append(
+            {
+                "form": "10-Q",
+                "filingDate": f"{year}-{month:02d}-15",
+                "reportDate": f"{year}-{month:02d}-01",
+                "accessionNumber": f"quarter-{index}",
+            }
+        )
+    filings.append({"form": "8-K", "filingDate": "2023-11-01", "reportDate": "2023-11-01", "accessionNumber": "older-current-report"})
+
+    default_selection = service._select_smart_working_set(filings)
+    usage_selection = service._select_smart_working_set(
+        filings,
+        usage_profile={"historicalQuestionCount": 2, "currentReportQuestionCount": 1},
+    )
+
+    default_accessions = {filing["accessionNumber"] for filing in default_selection}
+    usage_accessions = {filing["accessionNumber"] for filing in usage_selection}
+    assert len([accession for accession in default_accessions if accession.startswith("annual-")]) == 3
+    assert len([accession for accession in default_accessions if accession.startswith("quarter-")]) == 12
+    assert "older-current-report" not in default_accessions
+    assert len([accession for accession in usage_accessions if accession.startswith("annual-")]) == 5
+    assert len([accession for accession in usage_accessions if accession.startswith("quarter-")]) == 16
+    assert "older-current-report" in usage_accessions
 
 
 def test_metadata_warm_refreshes_global_snapshot_without_body_workspace(tmp_path, monkeypatch) -> None:
@@ -242,6 +328,44 @@ def test_metadata_warm_refreshes_global_snapshot_without_body_workspace(tmp_path
         "0000320193-25-000198",
     }
     assert not (settings.research_root / "stocks" / "AAPL").exists()
+
+
+def test_warm_defaults_to_watchlist_and_recent_usage_targets(tmp_path, monkeypatch) -> None:
+    research_root = tmp_path / "research-root"
+    settings = DashboardSettings(
+        research_root=research_root,
+        edgar_user_agent="Investing Platform tests@example.com",
+        watchlist_symbols=["NVDA", "AAPL"],
+    )
+    service = EdgarDownloader(settings)
+    service._sync_service._record_usage_event(ticker="TSLA", event="ask", question="What changed in older annual reports?")
+    resolve_calls: list[str] = []
+
+    def fake_resolve_issuer_query(issuer_query, options, force_refresh=False) -> ResolvedCompany:
+        ticker = str(issuer_query).upper()
+        resolve_calls.append(ticker)
+        cik = {"NVDA": "0001045810", "AAPL": "0000320193", "TSLA": "0001318605"}[ticker]
+        return ResolvedCompany(
+            cik=cik.lstrip("0"),
+            cik10=cik,
+            ticker=ticker,
+            company_name=f"{ticker} Corp.",
+            submissions_payload={"name": f"{ticker} Corp.", "cik": cik, "tickers": [ticker]},
+        )
+
+    monkeypatch.setattr(service._resolver_service, "resolve_issuer_query", fake_resolve_issuer_query)
+    monkeypatch.setattr(service._metadata_cache_service, "ensure_bulk_baseline", lambda options, force_refresh=False: {"status": "ready", "artifacts": {}})
+    monkeypatch.setattr(service._metadata_cache_service, "load_filing_rows", lambda resolved_company: [])
+    monkeypatch.setattr(service, "_build_filing_rows", lambda payloads, resolved_company: [])
+
+    response = service.warm(EdgarWarmRequest(mode="metadata-only", maxIssuers=3))
+
+    assert resolve_calls == ["NVDA", "AAPL", "TSLA"]
+    assert response.requestedIssuers == 3
+    assert response.warmedIssuers == 3
+    usage_state = json.loads((research_root / ".sec" / "usage" / "edgar-usage.json").read_text(encoding="utf-8"))
+    assert usage_state["issuers"]["NVDA"]["warmCount"] == 1
+    assert usage_state["issuers"]["TSLA"]["askCount"] == 1
 
 
 def test_workspace_falls_back_to_legacy_last_sync_when_simplified_snapshot_is_missing(tmp_path) -> None:
@@ -321,7 +445,7 @@ def test_ask_time_sync_limits_new_filing_body_downloads(tmp_path, monkeypatch) -
     monkeypatch.setattr(service._metadata_cache_service, "ensure_bulk_baseline", lambda options, force_refresh=False: {"status": "ready", "artifacts": {}})
     monkeypatch.setattr(service, "_fetch_submission_payloads", lambda **kwargs: [{"stub": "payload"}])
     monkeypatch.setattr(service, "_build_filing_rows", lambda payloads, resolved_company: filings)
-    monkeypatch.setattr(service, "_select_smart_working_set", lambda all_filings: all_filings)
+    monkeypatch.setattr(service, "_select_smart_working_set", lambda all_filings, usage_profile=None: all_filings)
     downloaded_accessions: list[str] = []
 
     def fake_download_filing_assets(*, filing, request, options, filings_dir, edgar_root, manifest, counters) -> None:

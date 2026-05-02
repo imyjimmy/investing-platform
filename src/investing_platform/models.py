@@ -1210,6 +1210,10 @@ class EdgarSyncRequest(DashboardModel):
     issuerQuery: str
     outputDir: str | None = None
     forceRefresh: bool = False
+    startDate: date | None = None
+    endDate: date | None = None
+    formTypes: list[str] = Field(default_factory=list)
+    includeExhibits: bool = False
 
     @field_validator("issuerQuery")
     @classmethod
@@ -1219,14 +1223,33 @@ class EdgarSyncRequest(DashboardModel):
             raise ValueError("Provide a ticker, company name, or CIK.")
         return normalized
 
+    @field_validator("formTypes")
+    @classmethod
+    def _normalize_sync_form_types(cls, value: list[str]) -> list[str]:
+        deduped: list[str] = []
+        for form_type in value:
+            normalized = form_type.strip().upper()
+            if normalized and normalized not in deduped:
+                deduped.append(normalized)
+        return deduped
+
+    @model_validator(mode="after")
+    def _validate_sync_date_range(self) -> "EdgarSyncRequest":
+        if self.startDate and self.endDate and self.startDate > self.endDate:
+            raise ValueError("startDate must be on or before endDate.")
+        return self
+
 
 class EdgarWarmRequest(DashboardModel):
-    issuerQueries: list[str]
+    issuerQueries: list[str] = Field(default_factory=list)
     outputDir: str | None = None
     mode: EdgarWarmMode = "metadata-only"
     maxIssuers: int = Field(default=10, ge=1, le=50)
     maxFilingBodiesPerIssuer: int = Field(default=2, ge=0, le=20)
     forceRefresh: bool = False
+    includeWatchlist: bool = True
+    includeRecentIssuers: bool = True
+    includeAskedIssuers: bool = True
 
     @field_validator("issuerQueries")
     @classmethod
@@ -1236,8 +1259,6 @@ class EdgarWarmRequest(DashboardModel):
             normalized = item.strip()
             if normalized and normalized not in deduped:
                 deduped.append(normalized)
-        if not deduped:
-            raise ValueError("Provide at least one ticker, company name, or CIK to warm.")
         return deduped
 
 

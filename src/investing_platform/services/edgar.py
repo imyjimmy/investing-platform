@@ -396,17 +396,22 @@ class EdgarDownloader:
             reverse=True,
         )
 
-    def _select_smart_working_set(self, filings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _select_smart_working_set(self, filings: list[dict[str, Any]], usage_profile: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         if not filings:
             return []
 
         selected: dict[str, dict[str, Any]] = {}
         annual_forms = self._annual_form_family(filings)
         quarterly_forms = {"10-Q", "10-Q/A"} if any(str(filing.get("form") or "").upper() in {"10-Q", "10-Q/A"} for filing in filings) else set()
+        historical_questions = self._usage_count(usage_profile, "historicalQuestionCount")
+        current_report_questions = self._usage_count(usage_profile, "currentReportQuestionCount")
+        annual_limit = 5 if historical_questions else 3
+        quarterly_limit = 16 if historical_questions else 12
+        current_report_window = timedelta(days=1095 if current_report_questions else 730)
         if annual_forms:
-            self._select_distinct_period_filings(filings, annual_forms, limit=3, selected=selected)
+            self._select_distinct_period_filings(filings, annual_forms, limit=annual_limit, selected=selected)
         if quarterly_forms:
-            self._select_distinct_period_filings(filings, quarterly_forms, limit=12, selected=selected)
+            self._select_distinct_period_filings(filings, quarterly_forms, limit=quarterly_limit, selected=selected)
 
         if any(str(filing.get("form") or "").upper() in {"6-K", "6-K/A"} for filing in filings):
             current_forms = {"6-K", "6-K/A"}
@@ -415,7 +420,7 @@ class EdgarDownloader:
         else:
             current_forms = set()
         if current_forms:
-            self._select_recent_filings(filings, current_forms, max_age=timedelta(days=730), selected=selected)
+            self._select_recent_filings(filings, current_forms, max_age=current_report_window, selected=selected)
 
         if not selected:
             for filing in filings[:12]:
@@ -428,6 +433,12 @@ class EdgarDownloader:
             key=lambda filing: (str(filing.get("filingDate") or ""), str(filing.get("accessionNumber") or "")),
             reverse=True,
         )
+
+    def _usage_count(self, usage_profile: dict[str, Any] | None, key: str) -> int:
+        try:
+            return int((usage_profile or {}).get(key) or 0)
+        except (TypeError, ValueError):
+            return 0
 
     def _annual_form_family(self, filings: list[dict[str, Any]]) -> set[str]:
         forms = {str(filing.get("form") or "").upper() for filing in filings}

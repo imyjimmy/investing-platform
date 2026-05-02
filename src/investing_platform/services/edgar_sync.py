@@ -43,6 +43,8 @@ ASK_MAINTENANCE_MAX_CHUNKS = 250
 ASK_MAINTENANCE_MAX_INDEX_SECONDS = 20.0
 ASK_DEEP_HISTORY_MAX_NEW_BODIES = 3
 DEEP_HISTORY_TERMS_RE = re.compile(r"\b(older|history|historical|trend|since|last\s+\d+\s+years?|past\s+\d+\s+years?)\b", re.IGNORECASE)
+CURRENT_REPORT_TERMS_RE = re.compile(r"\b(8-k|6-k|current\s+report|latest\s+filing|recent\s+filing)\b", re.IGNORECASE)
+CURRENT_REPORT_FORMS = {"8-K", "8-K/A", "6-K", "6-K/A"}
 
 
 class EdgarSyncService:
@@ -71,8 +73,9 @@ class EdgarSyncService:
         if not options.user_agent:
             raise ValueError("A descriptive SEC User-Agent is required.")
 
+        issuer_queries = self._warm_targets(request)
         results: list[EdgarWarmIssuerResult] = []
-        for issuer_query in request.issuerQueries[: request.maxIssuers]:
+        for issuer_query in issuer_queries:
             try:
                 if request.mode == "metadata-only":
                     result = self._warm_metadata_only(issuer_query, request=request, options=options)
@@ -111,10 +114,12 @@ class EdgarSyncService:
                     message=str(exc),
                 )
             results.append(result)
+            if result.ticker and result.status in {"warmed", "partial"}:
+                self._record_usage_event(ticker=result.ticker, event="warm")
 
         return EdgarWarmResponse(
             mode=request.mode,
-            requestedIssuers=len(request.issuerQueries),
+            requestedIssuers=len(issuer_queries),
             warmedIssuers=sum(1 for result in results if result.status in {"warmed", "partial"}),
             failedIssuers=sum(1 for result in results if result.status == "failed"),
             results=results,
@@ -183,7 +188,9 @@ class EdgarSyncService:
         self._artifact_store._write_json_artifact(paths.exports_dir / "all-filings.json", all_filings, latest_submission_url, manifest, paths.edgar_root)
         self._artifact_store._write_csv_artifact(paths.exports_dir / "all-filings.csv", all_filings, manifest, paths.edgar_root)
 
-        selected_filings = self._artifact_store._select_smart_working_set(all_filings)
+        usage_profile = self._usage_profile_for_ticker(resolved.ticker)
+        selected_filings = self._artifact_store._select_smart_working_set(all_filings, usage_profile=usage_profile)
+        selected_filings = self._apply_sync_overrides(request=request, all_filings=all_filings, selected_filings=selected_filings)
         self._artifact_store._write_json_artifact(paths.exports_dir / "matched-filings.json", selected_filings, latest_submission_url, manifest, paths.edgar_root)
         self._artifact_store._write_csv_artifact(paths.exports_dir / "matched-filings.csv", selected_filings, manifest, paths.edgar_root)
 
@@ -193,6 +200,17 @@ class EdgarSyncService:
             downloadMode="primary-document",
             includeExhibits=False,
             resume=not request.forceRefresh,
+        )
+        exhibit_request = (
+            EdgarDownloadRequest(
+                ticker=resolved.ticker,
+                outputDir=str(output_root),
+                downloadMode="all-attachments",
+                includeExhibits=True,
+                resume=not request.forceRefresh,
+            )
+            if request.includeExhibits
+            else None
         )
         cached_accessions: set[str] = set()
         downloaded_accessions: set[str] = set()
@@ -227,6 +245,16 @@ class EdgarSyncService:
                     manifest=manifest,
                     counters=counters,
                 )
+                if exhibit_request is not None:
+                    self._artifact_store._download_filing_assets(
+                        filing=filing,
+                        request=exhibit_request,
+                        options=options,
+                        filings_dir=paths.stock_root,
+                        edgar_root=paths.edgar_root,
+                        manifest=manifest,
+                        counters=counters,
+                    )
             except RuntimeError:
                 counters.failed_files += 1
                 if accession:
@@ -290,8 +318,8 @@ class EdgarSyncService:
             downloadedFiles=counters.downloaded_files,
             skippedFiles=counters.skipped_files,
             failedFiles=counters.failed_files,
-            downloadMode=download_request.downloadMode,
-            includeExhibits=download_request.includeExhibits,
+            downloadMode=exhibit_request.downloadMode if exhibit_request is not None else download_request.downloadMode,
+            includeExhibits=request.includeExhibits,
             resume=download_request.resume,
             researchRootPath=str(output_root),
             stockPath=str(paths.stock_root),
@@ -306,6 +334,7 @@ class EdgarSyncService:
         manifest["lastRun"] = legacy_response.model_dump(mode="json")
         self._artifact_store._save_manifest(paths.manifest_path, manifest)
         self._artifact_store._persist_workspace_snapshot_from_download_response(legacy_response, metadata_state=metadata_state, intelligence_state=intelligence_state)
+        self._record_usage_event(ticker=resolved.ticker, company_name=resolved.company_name, event="sync")
 
         return EdgarSyncResponse(
             issuerQuery=request.issuerQuery,
@@ -327,13 +356,15 @@ class EdgarSyncService:
         if paths.workspace_path.exists():
             payload = self._artifact_store._load_json_document(paths.workspace_path)
             if payload:
-                return EdgarWorkspaceResponse.model_validate(payload)
+                workspace = EdgarWorkspaceResponse.model_validate(payload)
+                self._record_usage_event(ticker=workspace.ticker, company_name=workspace.companyName, event="view")
+                return workspace
 
         legacy_request = EdgarDownloadRequest(ticker=request.ticker, outputDir=str(output_root))
         legacy_response = self._artifact_store.last_sync(legacy_request, resolver=self._resolver)
         if legacy_response is None:
             return None
-        return self._artifact_store._build_workspace_snapshot_from_download_response(
+        workspace = self._artifact_store._build_workspace_snapshot_from_download_response(
             legacy_response,
             metadata_state=EdgarMetadataState(
                 status="stale",
@@ -344,6 +375,8 @@ class EdgarSyncService:
             ),
             intelligence_state=self._intelligence.status_for_paths(paths),
         )
+        self._record_usage_event(ticker=workspace.ticker, company_name=workspace.companyName, event="view")
+        return workspace
 
     def intelligence_status(self, ticker: str, output_dir: str | None = None, job_id: str | None = None) -> EdgarIntelligenceState:
         request = EdgarWorkspaceRequest(ticker=ticker, outputDir=output_dir)
@@ -382,6 +415,13 @@ class EdgarSyncService:
                 limitations=maintenance_state.limitations,
             )
         response = self._intelligence.answer_question(workspace=workspace, request=request, paths=paths)
+        self._record_usage_event(
+            ticker=request.ticker,
+            company_name=workspace.companyName if workspace is not None else None,
+            event="ask",
+            question=request.question,
+            forms=request.forms,
+        )
         if maintenance_state.status == "none":
             return response
         return response.model_copy(update={"maintenanceState": maintenance_state})
@@ -402,6 +442,13 @@ class EdgarSyncService:
                 limitations=maintenance_state.limitations,
             )
         response = self._intelligence.compare_filings(workspace=workspace, request=request, paths=paths)
+        self._record_usage_event(
+            ticker=request.ticker,
+            company_name=workspace.companyName if workspace is not None else None,
+            event="ask",
+            question=request.question,
+            forms=request.forms,
+        )
         if maintenance_state.status == "none":
             return response
         return response.model_copy(update={"maintenanceState": maintenance_state})
@@ -425,6 +472,165 @@ class EdgarSyncService:
                 f"Last live check {snapshot.get('lastLiveCheckedAt') or 'unknown'}."
             ),
         )
+
+    def _warm_targets(self, request: EdgarWarmRequest) -> list[str]:
+        targets: list[str] = []
+        self._append_unique_targets(targets, request.issuerQueries)
+        if targets:
+            return targets[: request.maxIssuers]
+
+        if request.includeWatchlist:
+            self._append_unique_targets(targets, self._settings.public_watchlist())
+
+        usage_state = self._load_usage_state()
+        usage_issuers = usage_state.get("issuers")
+        if not isinstance(usage_issuers, dict):
+            usage_issuers = {}
+
+        if request.includeAskedIssuers:
+            asked_targets = self._usage_ranked_tickers(usage_issuers, keys=("lastAskedAt",))
+            self._append_unique_targets(targets, asked_targets)
+
+        if request.includeRecentIssuers:
+            recent_targets = self._usage_ranked_tickers(
+                usage_issuers,
+                keys=("lastViewedAt", "lastSyncedAt", "lastWarmedAt", "lastDeepHydratedAt"),
+            )
+            self._append_unique_targets(targets, recent_targets)
+
+        return targets[: request.maxIssuers]
+
+    def _append_unique_targets(self, targets: list[str], values: list[str]) -> None:
+        seen = {target.upper() for target in targets}
+        for value in values:
+            normalized = value.strip()
+            if not normalized:
+                continue
+            upper = normalized.upper()
+            if upper in seen:
+                continue
+            targets.append(normalized)
+            seen.add(upper)
+
+    def _usage_ranked_tickers(self, issuers: dict[str, Any], *, keys: tuple[str, ...]) -> list[str]:
+        scored: list[tuple[str, str]] = []
+        for ticker, payload in issuers.items():
+            if not isinstance(payload, dict):
+                continue
+            timestamps = [str(payload.get(key) or "") for key in keys]
+            latest = max(timestamps) if timestamps else ""
+            if latest:
+                scored.append((latest, str(ticker).upper()))
+        scored.sort(reverse=True)
+        return [ticker for _timestamp, ticker in scored]
+
+    def _usage_state_path(self) -> Path:
+        return self._settings.research_root / ".sec" / "usage" / "edgar-usage.json"
+
+    def _load_usage_state(self) -> dict[str, Any]:
+        path = self._usage_state_path()
+        if not path.exists():
+            return {"schemaVersion": 1, "issuers": {}}
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {"schemaVersion": 1, "issuers": {}}
+        if not isinstance(payload, dict):
+            return {"schemaVersion": 1, "issuers": {}}
+        if not isinstance(payload.get("issuers"), dict):
+            payload["issuers"] = {}
+        payload.setdefault("schemaVersion", 1)
+        return payload
+
+    def _save_usage_state(self, state: dict[str, Any]) -> None:
+        path = self._usage_state_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
+
+    def _usage_profile_for_ticker(self, ticker: str) -> dict[str, Any]:
+        usage_state = self._load_usage_state()
+        issuers = usage_state.get("issuers")
+        if not isinstance(issuers, dict):
+            return {}
+        payload = issuers.get(ticker.strip().upper())
+        return payload if isinstance(payload, dict) else {}
+
+    def _record_usage_event(
+        self,
+        *,
+        ticker: str,
+        event: str,
+        company_name: str | None = None,
+        question: str | None = None,
+        forms: list[str] | None = None,
+    ) -> None:
+        normalized_ticker = ticker.strip().upper()
+        if not normalized_ticker:
+            return
+
+        state = self._load_usage_state()
+        issuers = state.setdefault("issuers", {})
+        if not isinstance(issuers, dict):
+            issuers = {}
+            state["issuers"] = issuers
+
+        issuer = issuers.setdefault(normalized_ticker, {"ticker": normalized_ticker})
+        if not isinstance(issuer, dict):
+            issuer = {"ticker": normalized_ticker}
+            issuers[normalized_ticker] = issuer
+
+        now = datetime.now(UTC).isoformat()
+        issuer["ticker"] = normalized_ticker
+        issuer["lastUsedAt"] = now
+        if company_name:
+            issuer["companyName"] = company_name
+
+        event_fields = {
+            "view": ("viewCount", "lastViewedAt"),
+            "sync": ("syncCount", "lastSyncedAt"),
+            "warm": ("warmCount", "lastWarmedAt"),
+            "ask": ("askCount", "lastAskedAt"),
+            "deep_hydration": ("deepHydrationCount", "lastDeepHydratedAt"),
+        }
+        counter_key, timestamp_key = event_fields.get(event, ("eventCount", "lastEventAt"))
+        issuer[counter_key] = self._usage_int(issuer.get(counter_key)) + 1
+        issuer[timestamp_key] = now
+
+        normalized_forms = self._normalize_forms(forms or [])
+        if normalized_forms:
+            form_counts = issuer.setdefault("formQuestionCounts", {})
+            if not isinstance(form_counts, dict):
+                form_counts = {}
+                issuer["formQuestionCounts"] = form_counts
+            for form in normalized_forms:
+                form_counts[form] = self._usage_int(form_counts.get(form)) + 1
+
+        if event in {"ask", "deep_hydration"} and self._question_requests_deep_history(question):
+            issuer["historicalQuestionCount"] = self._usage_int(issuer.get("historicalQuestionCount")) + 1
+        if event in {"ask", "deep_hydration"} and self._question_mentions_current_reports(question, normalized_forms):
+            issuer["currentReportQuestionCount"] = self._usage_int(issuer.get("currentReportQuestionCount")) + 1
+
+        self._save_usage_state(state)
+
+    def _usage_int(self, value: Any) -> int:
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    def _normalize_forms(self, forms: list[str]) -> list[str]:
+        deduped: list[str] = []
+        for form in forms:
+            normalized = form.strip().upper()
+            if normalized and normalized not in deduped:
+                deduped.append(normalized)
+        return deduped
+
+    def _question_requests_deep_history(self, question: str | None) -> bool:
+        return bool(question and DEEP_HISTORY_TERMS_RE.search(question))
+
+    def _question_mentions_current_reports(self, question: str | None, forms: list[str]) -> bool:
+        return bool(CURRENT_REPORT_FORMS.intersection(forms)) or bool(question and CURRENT_REPORT_TERMS_RE.search(question))
 
     def _run_ask_time_maintenance(
         self,
@@ -491,6 +697,13 @@ class EdgarSyncService:
         if hydration_state["status"] != "none":
             filing_bodies_downloaded += int(hydration_state.get("downloaded", 0))
             hydration_changed_local_inputs = bool(hydration_state.get("changed"))
+            if hydration_changed_local_inputs:
+                self._record_usage_event(
+                    ticker=request.ticker,
+                    event="deep_hydration",
+                    question=request.question,
+                    forms=request.forms,
+                )
             if hydration_state.get("message"):
                 limitations.append(str(hydration_state["message"]))
             if hydration_state["status"] == "partial":
@@ -769,6 +982,32 @@ class EdgarSyncService:
         if request.endDate and filing_date > request.endDate:
             return False
         return True
+
+    def _apply_sync_overrides(
+        self,
+        *,
+        request: EdgarSyncRequest,
+        all_filings: list[dict[str, Any]],
+        selected_filings: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        if not request.formTypes and request.startDate is None and request.endDate is None:
+            return selected_filings
+
+        allowed_forms = set(request.formTypes)
+        matched: list[dict[str, Any]] = []
+        for filing in all_filings:
+            if allowed_forms and str(filing.get("form") or "").upper() not in allowed_forms:
+                continue
+            filing_date = self._parse_date(str(filing.get("filingDate") or ""))
+            if filing_date is None:
+                if request.startDate or request.endDate:
+                    continue
+            elif request.startDate and filing_date < request.startDate:
+                continue
+            elif request.endDate and filing_date > request.endDate:
+                continue
+            matched.append(filing)
+        return self._sort_filings(matched)
 
     def _parse_date(self, value: str) -> date | None:
         if not value:
