@@ -108,6 +108,7 @@ class GuardrailFakeOmlxClient:
             "limitations": [],
         }
         self.chat_calls = 0
+        self.chat_messages: list[list[dict[str, str]]] = []
 
     def list_models(self) -> list[OmlxModel]:
         return [
@@ -128,6 +129,7 @@ class GuardrailFakeOmlxClient:
 
     def chat_json(self, *, model: str, messages: list[dict[str, str]], max_tokens: int) -> dict:
         self.chat_calls += 1
+        self.chat_messages.append(messages)
         return self.answer_payload
 
     def _vector_for(self, text: str) -> list[float]:
@@ -631,9 +633,35 @@ def test_ask_accepts_grounded_cited_answer(tmp_path) -> None:
 
     assert fake_client.chat_calls == 1
     assert response.answer == "Revenue decreased 12% [C1]."
+    assert response.answerStyle == "paragraph"
     assert response.confidence == "high"
     assert [citation.citationId for citation in response.citations] == ["C1"]
     assert "Revenue decreased 12%" in response.citations[0].snippet
+    assert "Use one or two concise paragraphs" in fake_client.chat_messages[0][0]["content"]
+
+
+def test_ask_uses_bullet_style_for_risk_factor_questions(tmp_path) -> None:
+    service, paths, workspace, fake_client = _indexed_guardrail_service(
+        tmp_path,
+        filing_text="Item 1A. Risk Factors. Supply constraints and competition may affect margins.",
+        answer_payload={
+            "answer": "- Supply constraints may affect margins [C1].\n- Competition may affect margins [C1].",
+            "confidence": "high",
+            "citations": ["C1"],
+            "limitations": [],
+        },
+    )
+
+    response = service.answer_question(
+        workspace=workspace,
+        request=EdgarQuestionRequest(ticker="AAPL", question="What are the risk factors for AAPL?"),
+        paths=paths,
+    )
+
+    assert response.answerStyle == "bullets"
+    assert response.answer.startswith("- Supply constraints")
+    assert "Use concise bullet points" in fake_client.chat_messages[0][0]["content"]
+    assert "Avoid a dense paragraph" in fake_client.chat_messages[0][0]["content"]
 
 
 def test_citation_snippet_centers_risk_factor_anchor(tmp_path) -> None:

@@ -1124,6 +1124,7 @@ export interface EdgarQuestionResponse {
   outputDir?: string | null;
   question: string;
   answer: string;
+  answerStyle?: "bullets" | "paragraph";
   confidence: "low" | "medium" | "high";
   generatedAt: string;
   model: EdgarAnswerModelInfo;

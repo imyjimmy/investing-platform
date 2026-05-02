@@ -45,7 +45,9 @@ test.describe("stock intel EDGAR workspace", () => {
     await openEdgarWorkspace(page);
 
     await expect(page.getByRole("tab", { name: "SEC Tool", exact: true })).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("tab", { name: "Qwen Intelligence", exact: true })).toBeVisible();
     await expect(page.getByTestId("edgar-workspace")).toBeVisible();
+    await expect(page.getByTestId("edgar-qwen-workspace")).toBeHidden();
     await expect(page.getByTestId("edgar-source-status")).toContainText("Ready");
     await expect(page.getByTestId("edgar-company-input")).toHaveValue("NVDA");
     await expect(page.getByTestId("edgar-workspace-empty")).toBeVisible();
@@ -84,8 +86,9 @@ test.describe("stock intel EDGAR workspace", () => {
     });
 
     await openEdgarWorkspace(page);
+    await openQwenIntelligenceTab(page);
 
-    await expect(page.getByTestId("edgar-workspace-empty")).toBeVisible();
+    await expect(page.getByTestId("edgar-qwen-workspace")).toBeVisible();
     await expect(page.getByText("No local EDGAR workspace exists yet for this ticker.", { exact: false })).toBeVisible();
     await page.getByTestId("edgar-qwen-question-input").fill("what are the risk factors for NVDA");
     await expect(page.getByTestId("edgar-qwen-ask-button")).toBeEnabled();
@@ -236,7 +239,9 @@ test.describe("stock intel EDGAR workspace", () => {
       newAccessions: "0",
     });
 
-    await expect(page.getByTestId("edgar-qwen-panel")).toBeVisible();
+    await openQwenIntelligenceTab(page);
+    await page.getByTestId("edgar-qwen-company-input").fill("AAPL");
+    await expect(page.getByTestId("edgar-qwen-workspace")).toBeVisible();
     await expect(page.getByTestId("edgar-qwen-status")).toContainText("ready");
 
     await page.getByTestId("edgar-qwen-index-button").click();
@@ -720,6 +725,11 @@ async function openEdgarWorkspace(page) {
   await page.goto("/", { waitUntil: "domcontentloaded" });
   await ensureSidebarOpen(page);
   await openWorkspace(page, "nav-stocks-intel");
+}
+
+async function openQwenIntelligenceTab(page) {
+  await page.getByRole("tab", { name: "Qwen Intelligence", exact: true }).click();
+  await expect(page.getByRole("tab", { name: "Qwen Intelligence", exact: true })).toHaveAttribute("aria-selected", "true");
 }
 
 async function openWorkspace(page, testId) {

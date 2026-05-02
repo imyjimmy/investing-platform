@@ -1,4 +1,5 @@
 import { EdgarWorkspace } from "../../components/EdgarWorkspace";
+import { EdgarQwenWorkspace } from "../../components/EdgarQwenWorkspace";
 import { InvestorPdfsWorkspace } from "../../components/InvestorPdfsWorkspace";
 import { ChromeTabs } from "../../components/ui/ChromeTabs";
 import { stockIntelTabs } from "./stockIntelTabs";
@@ -44,6 +45,15 @@ export function StockIntelWorkspace({ defaultTicker }: StockIntelWorkspaceProps)
           statusLoading={edgarStatusQuery.isLoading}
           statusError={edgarStatusError}
           syncError={edgarSyncError}
+          syncResult={edgarSyncResult}
+          syncing={edgarSyncing}
+        />
+      ) : activeStockIntelTab === "qwen" ? (
+        <EdgarQwenWorkspace
+          defaultTicker={defaultTicker}
+          status={edgarStatusQuery.data}
+          statusLoading={edgarStatusQuery.isLoading}
+          statusError={edgarStatusError}
           syncResult={edgarSyncResult}
           syncing={edgarSyncing}
         />

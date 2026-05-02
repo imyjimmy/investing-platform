@@ -75,6 +75,7 @@ EdgarIntelligenceJobKind = Literal["none", "index", "ask_maintenance", "sync_tri
 EdgarIntelligenceJobStatus = Literal["idle", "queued", "indexing", "partial", "deferred", "completed", "failed", "cancelled"]
 EdgarMaintenanceStatus = Literal["none", "completed", "partial", "deferred", "failed"]
 EdgarQuestionConfidence = Literal["low", "medium", "high"]
+EdgarAnswerStyle = Literal["bullets", "paragraph"]
 EdgarComparisonMode = Literal["latest-annual-vs-prior-annual", "latest-quarter-vs-prior-quarter", "recent-current-reports-by-topic"]
 
 
@@ -1455,6 +1456,7 @@ class EdgarQuestionResponse(DashboardModel):
     outputDir: str | None = None
     question: str
     answer: str
+    answerStyle: EdgarAnswerStyle = "paragraph"
     confidence: EdgarQuestionConfidence
     generatedAt: datetime
     model: EdgarAnswerModelInfo
