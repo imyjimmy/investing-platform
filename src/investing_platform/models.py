@@ -1444,6 +1444,9 @@ class EdgarQuestionCitation(DashboardModel):
     filingDate: date | None = None
     documentName: str
     section: str | None = None
+    sectionCode: str | None = None
+    sectionTitle: str | None = None
+    sectionType: str | None = None
     chunkId: str
     textRange: EdgarQuestionTextRange
     snippet: str

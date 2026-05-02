@@ -200,6 +200,83 @@ def test_intelligence_index_builds_ticker_scoped_corpus_scaffold(tmp_path) -> No
     assert chunk_count == 1
 
 
+def test_intelligence_index_persists_section_metadata_for_ask_time_retrieval(tmp_path) -> None:
+    settings = DashboardSettings(
+        research_root=tmp_path / "research-root",
+        edgar_user_agent="Investing Platform tests@example.com",
+    )
+    service = EdgarIntelligenceService(settings, omlx_client=FakeOmlxClient())
+    artifact_store = EdgarDownloader(settings)
+    paths = artifact_store._workspace_paths(settings.research_root, "AAPL")
+    paths.exports_dir.mkdir(parents=True, exist_ok=True)
+    filing = {
+        "ticker": "AAPL",
+        "companyName": "Apple Inc.",
+        "cik": "320193",
+        "cik10": "0000320193",
+        "form": "10-K",
+        "filingDate": "2026-01-30",
+        "accessionNumber": "0000320193-26-000001",
+        "accessionNumberNoDashes": "000032019326000001",
+        "primaryDocument": "a10-k2025.htm",
+        "primaryDocumentUrl": "https://www.sec.gov/Archives/edgar/data/320193/000032019326000001/a10-k2025.htm",
+    }
+    (paths.exports_dir / "matched-filings.json").write_text(json.dumps([filing]), encoding="utf-8")
+    primary_path = paths.stock_root / artifact_store._filing_folder_name(filing) / "primary" / "a10-k2025.htm"
+    primary_path.parent.mkdir(parents=True, exist_ok=True)
+    primary_path.write_text(
+        """
+        <html><body>
+          <div>Item 1. Business</div>
+          <p>The company sells products and services.</p>
+          <div>Item 1A. Risk Factors</div>
+          <p>Supply constraints and competition may affect margins.</p>
+          <div>Item 7. Management's Discussion and Analysis</div>
+          <p>Management discussed revenue and operating income.</p>
+        </body></html>
+        """,
+        encoding="utf-8",
+    )
+
+    response = service.index_workspace(
+        workspace=object(),
+        request=EdgarIntelligenceIndexRequest(ticker="AAPL"),
+        paths=paths,
+    )
+
+    assert response.indexState.indexedChunks == 3
+    sections = [
+        json.loads(line)
+        for line in (paths.intelligence_dir / "corpus" / "sections.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    chunks = [
+        json.loads(line)
+        for line in (paths.intelligence_dir / "corpus" / "chunks.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert [section["sectionCode"] for section in sections] == ["1", "1A", "7"]
+    assert chunks[1]["section"] == "Item 1A. Risk Factors"
+    assert chunks[1]["sectionType"] == "risk_factors"
+
+    with sqlite3.connect(paths.intelligence_dir / "index" / "retrieval.sqlite3") as connection:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(chunks)").fetchall()}
+        row = connection.execute(
+            "SELECT section, section_code, section_title, section_type FROM chunks WHERE section_code = '1A'"
+        ).fetchone()
+    assert {"section_code", "section_title", "section_type"} <= columns
+    assert row == ("Item 1A. Risk Factors", "1A", "Risk Factors", "risk_factors")
+
+    retrieved = service._load_retrieval_chunks(paths, EdgarQuestionRequest(ticker="AAPL", question="What are the risk factors?"))
+    risk_chunk = next(chunk for chunk in retrieved if chunk.section_code == "1A")
+    risk_chunk.citation_id = "C1"
+    citations = service._citations_for_chunks([risk_chunk], ["C1"], question="What are the risk factors?")
+    assert citations[0].section == "Item 1A. Risk Factors"
+    assert citations[0].sectionCode == "1A"
+    assert citations[0].sectionTitle == "Risk Factors"
+    assert citations[0].sectionType == "risk_factors"
+
+
 def test_embedding_builder_retries_failed_batch_one_chunk_at_a_time_without_losing_chunks(tmp_path) -> None:
     settings = DashboardSettings(
         research_root=tmp_path / "research-root",

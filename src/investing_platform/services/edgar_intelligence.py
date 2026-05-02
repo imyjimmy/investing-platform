@@ -39,6 +39,7 @@ from investing_platform.models import (
     EdgarWorkspaceRequest,
 )
 from investing_platform.services.edgar_common import CHUNKING_VERSION, EMBEDDING_MODEL_VERSION, INDEX_SCHEMA_VERSION, WorkspacePaths
+from investing_platform.services.edgar_filing_sections import extract_filing_sections
 from investing_platform.services.omlx_client import OmlxClient, OmlxClientError
 
 
@@ -123,6 +124,9 @@ class RetrievedChunk:
     sec_url: str
     text: str
     score: float
+    section_code: str | None = None
+    section_title: str | None = None
+    section_type: str | None = None
 
 
 @dataclass(slots=True)
@@ -543,6 +547,9 @@ class EdgarIntelligenceService:
                     sec_url=chunk.sec_url,
                     text=chunk.text,
                     score=score,
+                    section_code=chunk.section_code,
+                    section_title=chunk.section_title,
+                    section_type=chunk.section_type,
                 )
             )
         scored.sort(key=lambda chunk: chunk.score, reverse=True)
@@ -572,6 +579,9 @@ class EdgarIntelligenceService:
                     sec_url=chunk.sec_url,
                     text=chunk.text,
                     score=chunk.score,
+                    section_code=chunk.section_code,
+                    section_title=chunk.section_title,
+                    section_type=chunk.section_type,
                 )
             )
         return selected, rerank_limitations
@@ -583,7 +593,9 @@ class EdgarIntelligenceService:
         section queries like "risk factors" without overwhelming semantic rank.
         """
         normalized_question = question.lower()
-        searchable = " ".join([chunk.section, chunk.form, chunk.document_name, chunk.text]).lower()
+        searchable = " ".join(
+            [chunk.section, chunk.section_code or "", chunk.section_title or "", chunk.section_type or "", chunk.form, chunk.document_name, chunk.text]
+        ).lower()
         boost = 0.0
         if "risk" in normalized_question:
             if "item 1a" in searchable or "risk factors" in searchable:
@@ -648,6 +660,9 @@ class EdgarIntelligenceService:
                     sec_url=chunk.sec_url,
                     text=chunk.text,
                     score=result.relevance_score,
+                    section_code=chunk.section_code,
+                    section_title=chunk.section_title,
+                    section_type=chunk.section_type,
                 )
             )
         if not selected:
@@ -702,6 +717,9 @@ class EdgarIntelligenceService:
                     sec_url=str(row["sec_url"] or "") if "sec_url" in row.keys() else "",
                     text=text,
                     score=0.0,
+                    section_code=str(row["section_code"] or "") if "section_code" in row.keys() and row["section_code"] else None,
+                    section_title=str(row["section_title"] or "") if "section_title" in row.keys() and row["section_title"] else None,
+                    section_type=str(row["section_type"] or "") if "section_type" in row.keys() and row["section_type"] else None,
                 )
             )
         return chunks
@@ -727,6 +745,9 @@ class EdgarIntelligenceService:
                         f"filingDate: {chunk.filing_date}",
                         f"documentName: {chunk.document_name}",
                         f"section: {chunk.section}",
+                        f"sectionCode: {chunk.section_code or ''}",
+                        f"sectionTitle: {chunk.section_title or ''}",
+                        f"sectionType: {chunk.section_type or ''}",
                         "excerpt:",
                         chunk.text,
                     ]
@@ -857,6 +878,9 @@ class EdgarIntelligenceService:
                     filingDate=self._parse_date(chunk.filing_date),
                     documentName=chunk.document_name,
                     section=chunk.section,
+                    sectionCode=chunk.section_code,
+                    sectionTitle=chunk.section_title,
+                    sectionType=chunk.section_type,
                     chunkId=chunk.chunk_id,
                     textRange=EdgarQuestionTextRange(startChar=chunk.start_char, endChar=chunk.end_char),
                     snippet=snippet,
@@ -1037,6 +1061,9 @@ class EdgarIntelligenceService:
                     chunk.filing_date,
                     chunk.document_name,
                     chunk.section,
+                    chunk.section_code or "",
+                    chunk.section_title or "",
+                    chunk.section_type or "",
                     chunk.text,
                 ]
             )
@@ -1137,7 +1164,7 @@ class EdgarIntelligenceService:
             source_path = paths.stock_root / self._filing_folder_name(filing) / "primary" / primary_document
             if not source_path.exists():
                 continue
-            text = self._extract_text(source_path)
+            text = self._extract_structured_text(source_path)
             if not text:
                 continue
             accession = str(filing.get("accessionNumber") or "")
@@ -1152,19 +1179,41 @@ class EdgarIntelligenceService:
                 "textLength": len(text),
             }
             documents.append(document)
-            sections.append({**document, "section": "Primary Document", "startChar": 0, "endChar": len(text)})
-            for chunk_index, chunk in enumerate(self._chunk_text(text), start=1):
-                chunk_id = f"{accession}:primary:{chunk_index:04d}"
-                chunks.append(
-                    {
-                        **document,
-                        "chunkId": chunk_id,
-                        "section": "Primary Document",
-                        "startChar": chunk["startChar"],
-                        "endChar": chunk["endChar"],
-                        "text": chunk["text"],
-                    }
-                )
+            parsed_sections = extract_filing_sections(
+                form=str(filing.get("form") or ""),
+                text=text,
+                filing_items=str(filing.get("items") or "").strip() or None,
+            )
+            chunk_index = 1
+            for parsed_section in parsed_sections:
+                section_start = int(parsed_section.get("startChar") or 0)
+                section_end = int(parsed_section.get("endChar") or section_start)
+                section_text = str(parsed_section.get("text") or text[section_start:section_end]).strip()
+                if not section_text:
+                    continue
+                section_metadata = {
+                    "section": str(parsed_section.get("section") or "Primary Document"),
+                    "sectionCode": parsed_section.get("sectionCode"),
+                    "sectionTitle": parsed_section.get("sectionTitle"),
+                    "sectionType": parsed_section.get("sectionType"),
+                    "startChar": section_start,
+                    "endChar": section_end,
+                }
+                sections.append({**document, **section_metadata})
+                section_key = self._section_chunk_key(section_metadata)
+                for chunk in self._chunk_text(section_text):
+                    chunk_id = f"{accession}:{section_key}:{chunk_index:04d}"
+                    chunks.append(
+                        {
+                            **document,
+                            **section_metadata,
+                            "chunkId": chunk_id,
+                            "startChar": section_start + chunk["startChar"],
+                            "endChar": section_start + chunk["endChar"],
+                            "text": chunk["text"],
+                        }
+                    )
+                    chunk_index += 1
         return documents, chunks, sections
 
     def _write_corpus_artifacts(
@@ -1204,6 +1253,11 @@ class EdgarIntelligenceService:
             encoding="utf-8",
         )
         self._write_retrieval_sqlite(index_dir / "retrieval.sqlite3", chunks)
+
+    def _section_chunk_key(self, section: dict[str, Any]) -> str:
+        raw_key = str(section.get("sectionType") or section.get("sectionCode") or section.get("section") or "primary")
+        slug = re.sub(r"[^a-z0-9]+", "-", raw_key.lower()).strip("-")
+        return slug or "primary"
 
     def _build_embeddings(self, chunks: list[dict[str, Any]]) -> tuple[np.ndarray | None, list[str]]:
         if not chunks:
@@ -1294,6 +1348,9 @@ class EdgarIntelligenceService:
                     filing_date TEXT,
                     document_name TEXT,
                     section TEXT,
+                    section_code TEXT,
+                    section_title TEXT,
+                    section_type TEXT,
                     start_char INTEGER,
                     end_char INTEGER,
                     source_path TEXT,
@@ -1306,8 +1363,8 @@ class EdgarIntelligenceService:
                 """
                 INSERT INTO chunks (
                     chunk_index, chunk_id, ticker, accession_number, form, filing_date, document_name,
-                    section, start_char, end_char, source_path, sec_url, text
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    section, section_code, section_title, section_type, start_char, end_char, source_path, sec_url, text
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
@@ -1319,6 +1376,9 @@ class EdgarIntelligenceService:
                         str(chunk.get("filingDate") or ""),
                         str(chunk.get("documentName") or ""),
                         str(chunk.get("section") or ""),
+                        str(chunk.get("sectionCode") or ""),
+                        str(chunk.get("sectionTitle") or ""),
+                        str(chunk.get("sectionType") or ""),
                         int(chunk.get("startChar") or 0),
                         int(chunk.get("endChar") or 0),
                         str(chunk.get("sourcePath") or ""),
@@ -1336,7 +1396,7 @@ class EdgarIntelligenceService:
                 handle.write(json.dumps(row, sort_keys=True))
                 handle.write("\n")
 
-    def _extract_text(self, path: Path) -> str:
+    def _extract_structured_text(self, path: Path) -> str:
         try:
             raw_text = path.read_text(encoding="utf-8", errors="ignore")
         except OSError:
@@ -1345,7 +1405,37 @@ class EdgarIntelligenceService:
             soup = BeautifulSoup(raw_text, "html.parser")
             for tag in soup(["script", "style"]):
                 tag.decompose()
-            raw_text = soup.get_text(" ")
+            for tag in soup.find_all(
+                [
+                    "address",
+                    "article",
+                    "br",
+                    "div",
+                    "footer",
+                    "h1",
+                    "h2",
+                    "h3",
+                    "h4",
+                    "h5",
+                    "h6",
+                    "header",
+                    "li",
+                    "p",
+                    "section",
+                    "table",
+                    "td",
+                    "th",
+                    "tr",
+                ]
+            ):
+                tag.insert_before("\n")
+                tag.insert_after("\n")
+            raw_text = soup.get_text("\n")
+        lines = [re.sub(r"[ \t\r\f\v]+", " ", line).strip() for line in raw_text.splitlines()]
+        return "\n".join(line for line in lines if line).strip()
+
+    def _extract_text(self, path: Path) -> str:
+        raw_text = self._extract_structured_text(path)
         return re.sub(r"\s+", " ", raw_text).strip()
 
     def _chunk_text(self, text: str) -> list[dict[str, Any]]:

@@ -21,7 +21,9 @@ from investing_platform.models import (
     EdgarMaintenanceState,
     EdgarMetadataState,
     EdgarPollSelector,
+    EdgarQuestionCitation,
     EdgarQuestionResponse,
+    EdgarQuestionTextRange,
     EdgarRetrievalState,
     EdgarSourceStatus,
     EdgarSyncResponse,
@@ -198,6 +200,45 @@ class FakeEdgarService:
         )
 
     def intelligence_ask(self, request) -> EdgarQuestionResponse:
+        if "risk factors" in request.question.lower():
+            citations = [
+                EdgarQuestionCitation(
+                    citationId="C1",
+                    ticker=request.ticker,
+                    accessionNumber="0000320193-26-000001",
+                    form="10-K",
+                    filingDate=NOW.date(),
+                    documentName="a10-k2025.htm",
+                    section="Item 1A. Risk Factors",
+                    sectionCode="1A",
+                    sectionTitle="Risk Factors",
+                    sectionType="risk_factors",
+                    chunkId="0000320193-26-000001:risk-factors:0001",
+                    textRange=EdgarQuestionTextRange(startChar=120, endChar=260),
+                    snippet="Item 1A. Risk Factors. Supply constraints may affect margins.",
+                    sourcePath="/tmp/research-root/stocks/AAPL/filing/primary/a10-k2025.htm",
+                    secUrl="https://www.sec.gov/Archives/edgar/data/320193/000032019326000001/a10-k2025.htm",
+                )
+            ]
+            return EdgarQuestionResponse(
+                ticker=request.ticker,
+                outputDir=request.outputDir,
+                question=request.question,
+                answer="Supply constraints are listed as a risk [C1].",
+                confidence="medium",
+                generatedAt=NOW,
+                model=EdgarAnswerModelInfo(
+                    provider="omlx",
+                    chatModel="Qwen3.6-35B-A3B-4bit",
+                    embeddingModel="nomicai-modernbert-embed-base-4bit",
+                    rerankerModel="Qwen3-Reranker-0.6B-mxfp8",
+                ),
+                freshnessState=EdgarFreshnessState(status="fresh", liveCheckStatus="succeeded", lastMetadataRefreshAt=NOW, lastLiveCheckAt=NOW),
+                maintenanceState=EdgarMaintenanceState(status="none", elapsedMs=12),
+                retrievalState=EdgarRetrievalState(chunksRetrieved=1, chunksUsed=1, eligibleAccessionsSearched=1, indexVersion="edgar-intelligence-index-v1"),
+                citations=citations,
+                limitations=[],
+            )
         return EdgarQuestionResponse(
             ticker=request.ticker,
             outputDir=request.outputDir,
@@ -346,6 +387,28 @@ def test_edgar_intelligence_ask_route_returns_guarded_response_shape(monkeypatch
     assert payload["confidence"] == "low"
     assert payload["citations"] == []
     assert payload["retrievalState"]["chunksRetrieved"] == 0
+
+
+def test_edgar_intelligence_ask_route_serializes_section_citation_fields(monkeypatch) -> None:
+    fake_service = FakeEdgarService()
+    monkeypatch.setattr(research_routes, "edgar_service", lambda: fake_service)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/sources/edgar/intelligence/ask",
+            json={
+                "ticker": "AAPL",
+                "question": "What changed in risk factors?",
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["answer"] == "Supply constraints are listed as a risk [C1]."
+    assert payload["citations"][0]["section"] == "Item 1A. Risk Factors"
+    assert payload["citations"][0]["sectionCode"] == "1A"
+    assert payload["citations"][0]["sectionTitle"] == "Risk Factors"
+    assert payload["citations"][0]["sectionType"] == "risk_factors"
 
 
 def test_edgar_intelligence_compare_route_returns_targeted_response_shape(monkeypatch) -> None:
