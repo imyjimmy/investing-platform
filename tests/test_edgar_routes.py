@@ -21,16 +21,17 @@ from investing_platform.models import (
     EdgarMaintenanceState,
     EdgarMetadataState,
     EdgarPollSelector,
-    EdgarQuestionCitation,
     EdgarQuestionResponse,
     EdgarQuestionTextRange,
     EdgarRetrievalState,
     EdgarSourceStatus,
     EdgarSyncResponse,
+    EdgarTextCitation,
     EdgarWarmIssuerResult,
     EdgarWarmResponse,
     EdgarWorkspaceResponse,
     EdgarWorkspaceSelector,
+    EdgarXbrlFactCitation,
 )
 from investing_platform.services.edgar_intelligence import EdgarIntelligenceApiError
 
@@ -225,7 +226,8 @@ class FakeEdgarService:
     def intelligence_ask(self, request) -> EdgarQuestionResponse:
         if "risk factors" in request.question.lower():
             citations = [
-                EdgarQuestionCitation(
+                EdgarTextCitation(
+                    evidenceType="text",
                     citationId="C1",
                     ticker=request.ticker,
                     accessionNumber="0000320193-26-000001",
@@ -260,6 +262,55 @@ class FakeEdgarService:
                 maintenanceState=EdgarMaintenanceState(status="none", elapsedMs=12),
                 retrievalState=EdgarRetrievalState(chunksRetrieved=1, chunksUsed=1, eligibleAccessionsSearched=1, indexVersion="edgar-intelligence-index-v1"),
                 citations=citations,
+                limitations=[],
+            )
+        if "revenue" in request.question.lower():
+            return EdgarQuestionResponse(
+                ticker=request.ticker,
+                outputDir=request.outputDir,
+                question=request.question,
+                answer="Revenue was supported by the XBRL revenue fact [C1].",
+                confidence="medium",
+                generatedAt=NOW,
+                model=EdgarAnswerModelInfo(
+                    provider="omlx",
+                    chatModel="Qwen3.6-35B-A3B-4bit",
+                    embeddingModel="nomicai-modernbert-embed-base-4bit",
+                    rerankerModel="Qwen3-Reranker-0.6B-mxfp8",
+                ),
+                freshnessState=EdgarFreshnessState(status="fresh", liveCheckStatus="succeeded", lastMetadataRefreshAt=NOW, lastLiveCheckAt=NOW),
+                maintenanceState=EdgarMaintenanceState(status="none", elapsedMs=12),
+                retrievalState=EdgarRetrievalState(
+                    chunksRetrieved=0,
+                    chunksUsed=0,
+                    xbrlFactsRetrieved=1,
+                    xbrlFactsUsed=1,
+                    eligibleAccessionsSearched=1,
+                    indexVersion="edgar-intelligence-index-v1",
+                ),
+                citations=[
+                    EdgarXbrlFactCitation(
+                        evidenceType="xbrl_fact",
+                        citationId="C1",
+                        ticker=request.ticker,
+                        cik="0000320193",
+                        accessionNumber="0000320193-26-000001",
+                        form="10-K",
+                        filingDate=NOW.date(),
+                        factId="fact-revenue-2025",
+                        xbrlConcept="us-gaap:Revenues",
+                        xbrlLabel="Revenue",
+                        xbrlTaxonomy="us-gaap",
+                        xbrlUnit="USD",
+                        xbrlPeriod="2025-01-01 to 2025-12-31",
+                        xbrlValue="391035000000",
+                        fiscalYear=2025,
+                        fiscalPeriod="FY",
+                        snippet="Revenue - 391035000000 - USD - 2025-01-01 to 2025-12-31 - FY - 2025",
+                        sourcePath="/tmp/research-root/stocks/AAPL/.edgar/intelligence/xbrl/facts.jsonl",
+                        secUrl="https://www.sec.gov/Archives/edgar/data/320193/000032019326000001/a10-k2025.htm",
+                    )
+                ],
                 limitations=[],
             )
         return EdgarQuestionResponse(
@@ -454,6 +505,27 @@ def test_edgar_intelligence_ask_route_serializes_section_citation_fields(monkeyp
     assert payload["citations"][0]["sectionCode"] == "1A"
     assert payload["citations"][0]["sectionTitle"] == "Risk Factors"
     assert payload["citations"][0]["sectionType"] == "risk_factors"
+
+
+def test_edgar_intelligence_ask_route_serializes_xbrl_fact_citations(monkeypatch) -> None:
+    fake_service = FakeEdgarService()
+    monkeypatch.setattr(research_routes, "edgar_service", lambda: fake_service)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/sources/edgar/intelligence/ask",
+            json={
+                "ticker": "AAPL",
+                "question": "Which XBRL facts support revenue?",
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["citations"][0]["evidenceType"] == "xbrl_fact"
+    assert payload["citations"][0]["xbrlConcept"] == "us-gaap:Revenues"
+    assert payload["citations"][0]["xbrlValue"] == "391035000000"
+    assert payload["retrievalState"]["xbrlFactsUsed"] == 1
 
 
 def test_edgar_intelligence_compare_route_returns_targeted_response_shape(monkeypatch) -> None:

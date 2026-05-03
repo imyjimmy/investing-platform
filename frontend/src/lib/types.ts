@@ -1040,6 +1040,7 @@ export interface EdgarIndexState {
   eligibleAccessions: number;
   indexedAccessions: number;
   indexedChunks: number;
+  indexedXbrlFacts: number;
   staleAccessions: string[];
   lastIndexedAt?: string | null;
   limitations: string[];
@@ -1116,7 +1117,8 @@ export interface EdgarQuestionTextRange {
   endChar: number;
 }
 
-export interface EdgarQuestionCitation {
+export interface EdgarTextCitation {
+  evidenceType: "text";
   citationId: string;
   ticker: string;
   accessionNumber: string;
@@ -1133,6 +1135,30 @@ export interface EdgarQuestionCitation {
   sourcePath: string;
   secUrl: string;
 }
+
+export interface EdgarXbrlFactCitation {
+  evidenceType: "xbrl_fact";
+  citationId: string;
+  ticker: string;
+  cik: string;
+  accessionNumber?: string | null;
+  form?: string | null;
+  filingDate?: string | null;
+  factId: string;
+  xbrlConcept: string;
+  xbrlLabel?: string | null;
+  xbrlTaxonomy?: string | null;
+  xbrlUnit?: string | null;
+  xbrlPeriod?: string | null;
+  xbrlValue: string;
+  fiscalYear?: number | null;
+  fiscalPeriod?: string | null;
+  snippet: string;
+  sourcePath: string;
+  secUrl?: string | null;
+}
+
+export type EdgarCitation = EdgarTextCitation | EdgarXbrlFactCitation;
 
 export interface EdgarAnswerModelInfo {
   provider: string;
@@ -1155,6 +1181,8 @@ export interface EdgarMaintenanceState {
 export interface EdgarRetrievalState {
   chunksRetrieved: number;
   chunksUsed: number;
+  xbrlFactsRetrieved: number;
+  xbrlFactsUsed: number;
   eligibleAccessionsSearched: number;
   indexVersion: string;
 }
@@ -1171,7 +1199,7 @@ export interface EdgarQuestionResponse {
   freshnessState: EdgarFreshnessState;
   maintenanceState: EdgarMaintenanceState;
   retrievalState: EdgarRetrievalState;
-  citations: EdgarQuestionCitation[];
+  citations: EdgarCitation[];
   limitations: string[];
 }
 
@@ -1191,7 +1219,7 @@ export interface EdgarComparisonResponse {
   freshnessState: EdgarFreshnessState;
   maintenanceState: EdgarMaintenanceState;
   retrievalState: EdgarRetrievalState;
-  citations: EdgarQuestionCitation[];
+  citations: EdgarCitation[];
   limitations: string[];
 }
 

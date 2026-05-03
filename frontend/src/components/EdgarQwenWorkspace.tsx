@@ -7,8 +7,8 @@ import { useEdgarQuestion } from "../features/stock-intel/useEdgarQuestion";
 import { sourceApi } from "../lib/api";
 import { queryKeys } from "../lib/queryKeys";
 import type {
+  EdgarCitation,
   EdgarIntelligenceStatus,
-  EdgarQuestionCitation,
   EdgarQuestionResponse,
   EdgarSourceStatus,
   EdgarSyncResponse,
@@ -391,7 +391,14 @@ function AnswerText({ value }: { value: string }) {
   );
 }
 
-function CitationCard({ citation }: { citation: EdgarQuestionCitation }) {
+function CitationCard({ citation }: { citation: EdgarCitation }) {
+  if (citation.evidenceType === "xbrl_fact") {
+    return <XbrlCitationCard citation={citation} />;
+  }
+  return <TextCitationCard citation={citation} />;
+}
+
+function TextCitationCard({ citation }: { citation: Extract<EdgarCitation, { evidenceType: "text" }> }) {
   const filingDate = citation.filingDate ? formatFilingDate(citation.filingDate) : "Unknown filing date";
   const sectionLabel =
     citation.section ??
@@ -408,6 +415,36 @@ function CitationCard({ citation }: { citation: EdgarQuestionCitation }) {
       <p className="mt-3 text-sm leading-6 text-muted">{citation.snippet}</p>
       <div className="mt-3 flex flex-wrap gap-3 text-xs text-muted">
         <span className="mono break-all">{citation.accessionNumber}</span>
+        {citation.secUrl ? (
+          <a className="text-accent hover:text-white" href={citation.secUrl} rel="noreferrer" target="_blank">
+            Open SEC source
+          </a>
+        ) : null}
+      </div>
+    </article>
+  );
+}
+
+function XbrlCitationCard({ citation }: { citation: Extract<EdgarCitation, { evidenceType: "xbrl_fact" }> }) {
+  const filingDate = citation.filingDate ? formatFilingDate(citation.filingDate) : "Unknown filing date";
+  const factLabel = citation.xbrlLabel || citation.xbrlConcept;
+  const periodLabel = [citation.fiscalPeriod, citation.fiscalYear, citation.xbrlPeriod].filter(Boolean).join(" · ");
+  return (
+    <article className="rounded-[18px] border border-line bg-panelSoft/55 px-4 py-4" data-testid={`edgar-qwen-citation-${citation.citationId}`}>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="rounded-full border border-accent/35 bg-accent/10 px-3 py-1 text-xs font-semibold text-accent">{citation.citationId}</span>
+        <span className="text-sm font-medium text-text">
+          {citation.form || "XBRL"} · {filingDate}
+        </span>
+        <span className="text-xs font-medium text-muted">{citation.xbrlConcept}</span>
+      </div>
+      <p className="mt-3 text-sm leading-6 text-muted">
+        {factLabel}: {citation.xbrlValue}
+        {citation.xbrlUnit ? ` ${citation.xbrlUnit}` : ""}
+      </p>
+      {periodLabel ? <div className="mt-2 text-xs text-muted">{periodLabel}</div> : null}
+      <div className="mt-3 flex flex-wrap gap-3 text-xs text-muted">
+        {citation.accessionNumber ? <span className="mono break-all">{citation.accessionNumber}</span> : null}
         {citation.secUrl ? (
           <a className="text-accent hover:text-white" href={citation.secUrl} rel="noreferrer" target="_blank">
             Open SEC source

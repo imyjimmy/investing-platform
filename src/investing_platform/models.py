@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Literal
+from typing import Annotated, Literal
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -1337,6 +1337,7 @@ class EdgarIndexState(DashboardModel):
     eligibleAccessions: int = 0
     indexedAccessions: int = 0
     indexedChunks: int = 0
+    indexedXbrlFacts: int = 0
     staleAccessions: list[str] = Field(default_factory=list)
     lastIndexedAt: datetime | None = None
     limitations: list[str] = Field(default_factory=list)
@@ -1374,6 +1375,8 @@ class EdgarMaintenanceState(DashboardModel):
 class EdgarRetrievalState(DashboardModel):
     chunksRetrieved: int = 0
     chunksUsed: int = 0
+    xbrlFactsRetrieved: int = 0
+    xbrlFactsUsed: int = 0
     eligibleAccessionsSearched: int = 0
     indexVersion: str
 
@@ -1501,7 +1504,8 @@ class EdgarQuestionTextRange(DashboardModel):
     endChar: int
 
 
-class EdgarQuestionCitation(DashboardModel):
+class EdgarTextCitation(DashboardModel):
+    evidenceType: Literal["text"] = "text"
     citationId: str
     ticker: str
     accessionNumber: str
@@ -1519,6 +1523,34 @@ class EdgarQuestionCitation(DashboardModel):
     secUrl: str
 
 
+class EdgarXbrlFactCitation(DashboardModel):
+    evidenceType: Literal["xbrl_fact"] = "xbrl_fact"
+    citationId: str
+    ticker: str
+    cik: str
+    accessionNumber: str | None = None
+    form: str | None = None
+    filingDate: date | None = None
+    factId: str
+    xbrlConcept: str
+    xbrlLabel: str | None = None
+    xbrlTaxonomy: str | None = None
+    xbrlUnit: str | None = None
+    xbrlPeriod: str | None = None
+    xbrlValue: str
+    fiscalYear: int | None = None
+    fiscalPeriod: str | None = None
+    snippet: str
+    sourcePath: str
+    secUrl: str | None = None
+
+
+EdgarQuestionCitationPayload = Annotated[
+    EdgarTextCitation | EdgarXbrlFactCitation,
+    Field(discriminator="evidenceType"),
+]
+
+
 class EdgarQuestionResponse(DashboardModel):
     ticker: str
     outputDir: str | None = None
@@ -1531,7 +1563,7 @@ class EdgarQuestionResponse(DashboardModel):
     freshnessState: EdgarFreshnessState
     maintenanceState: EdgarMaintenanceState
     retrievalState: EdgarRetrievalState
-    citations: list[EdgarQuestionCitation] = Field(default_factory=list)
+    citations: list[EdgarQuestionCitationPayload] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
 
 
@@ -1551,7 +1583,7 @@ class EdgarComparisonResponse(DashboardModel):
     freshnessState: EdgarFreshnessState
     maintenanceState: EdgarMaintenanceState
     retrievalState: EdgarRetrievalState
-    citations: list[EdgarQuestionCitation] = Field(default_factory=list)
+    citations: list[EdgarQuestionCitationPayload] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
 
 

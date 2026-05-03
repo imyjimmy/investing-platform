@@ -21,6 +21,7 @@ from investing_platform.models import (
 )
 from investing_platform.services.edgar_intelligence import EdgarIntelligenceApiError, EdgarIntelligenceService
 from investing_platform.services.edgar import EdgarDownloader
+from investing_platform.services.edgar_xbrl_facts import XbrlFact
 from investing_platform.services.omlx_client import OmlxClientError, OmlxModel, OmlxRerankResult
 
 
@@ -299,6 +300,7 @@ def test_intelligence_index_persists_section_metadata_for_ask_time_retrieval(tmp
     risk_chunk = next(chunk for chunk in retrieved if chunk.section_code == "1A")
     risk_chunk.citation_id = "C1"
     citations = service._citations_for_chunks([risk_chunk], ["C1"], question="What are the risk factors?")
+    assert citations[0].evidenceType == "text"
     assert citations[0].section == "Item 1A. Risk Factors"
     assert citations[0].sectionCode == "1A"
     assert citations[0].sectionTitle == "Risk Factors"
@@ -966,6 +968,54 @@ def test_ask_blocks_unsupported_numbers(tmp_path) -> None:
 
     assert response.answer == "I cannot answer this from the retrieved SEC filing excerpts."
     assert response.citations == []
+
+
+def test_validator_accepts_cited_numbers_from_xbrl_fact_evidence(tmp_path) -> None:
+    service = EdgarIntelligenceService(
+        DashboardSettings(
+            research_root=tmp_path / "research-root",
+            edgar_user_agent="Investing Platform tests@example.com",
+        ),
+        omlx_client=FakeOmlxClient(),
+    )
+    fact = XbrlFact(
+        citation_id="C1",
+        fact_id="fact-revenue-2025",
+        ticker="AAPL",
+        cik="0000320193",
+        accession_number="0000320193-26-000001",
+        form="10-K",
+        filing_date="2026-01-30",
+        concept="us-gaap:Revenues",
+        label="Revenue",
+        taxonomy="us-gaap",
+        unit="USD",
+        value_text="391035000000",
+        period_start="2025-01-01",
+        period_end="2025-12-31",
+        fiscal_year=2025,
+        fiscal_period="FY",
+        source_path="/tmp/facts.jsonl",
+        source_url="https://www.sec.gov/Archives/edgar/data/320193/000032019326000001/a10-k2025.htm",
+    )
+
+    validated = service._validate_generated_answer(
+        {
+            "answer": "Revenue was $391,035,000,000 [C1].",
+            "confidence": "high",
+            "citations": ["C1"],
+            "limitations": [],
+        },
+        [],
+        EdgarQuestionRequest(ticker="AAPL", question="What was revenue?"),
+        facts=[fact],
+    )
+    citations = service._citations_for_evidence([], [fact], ["C1"], question="What was revenue?")
+
+    assert validated is not None
+    assert citations[0].evidenceType == "xbrl_fact"
+    assert citations[0].xbrlConcept == "us-gaap:Revenues"
+    assert citations[0].xbrlValue == "391035000000"
 
 
 def test_ask_blocks_parametric_memory_proper_nouns(tmp_path) -> None:
