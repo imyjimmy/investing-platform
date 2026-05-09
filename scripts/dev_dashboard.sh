@@ -4,6 +4,15 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+PORTS_FILE="${INVESTING_PLATFORM_DEV_PORTS_FILE:-${PROJECT_ROOT}/configs/dev_ports.env}"
+
+if [[ -f "${PORTS_FILE}" ]]; then
+  set -a
+  # shellcheck source=/dev/null
+  source "${PORTS_FILE}"
+  set +a
+fi
+
 OMLX_AUTOSTART="${INVESTING_PLATFORM_AUTOSTART_OMLX:-1}"
 OMLX_PORT="${OMLX_PORT:-8001}"
 VENV_DIR="${VENV_DIR:-${PROJECT_ROOT}/.venv}"

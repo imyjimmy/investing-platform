@@ -78,7 +78,7 @@ fn reveal_window(window: &WebviewWindow) -> tauri::Result<()> {
 }
 
 fn backend_is_available() -> bool {
-  let address: SocketAddr = "127.0.0.1:8000".parse().expect("socket address should parse");
+  let address = SocketAddr::from(([127, 0, 0, 1], backend_port()));
   TcpStream::connect_timeout(&address, Duration::from_millis(250)).is_ok()
 }
 
@@ -95,6 +95,7 @@ fn wait_for_backend(timeout: Duration) {
 fn spawn_backend() -> tauri::Result<Child> {
   let project_root = project_root();
   let venv_python = project_root.join(".venv/bin/python");
+  let port = backend_port();
   let python = if venv_python.exists() {
     venv_python
   } else {
@@ -113,13 +114,20 @@ fn spawn_backend() -> tauri::Result<Child> {
     .arg("--host")
     .arg("127.0.0.1")
     .arg("--port")
-    .arg("8000")
+    .arg(port.to_string())
     .stdout(Stdio::null())
     .stderr(Stdio::null())
     .spawn()
     .map_err(tauri::Error::from)?;
 
   Ok(child)
+}
+
+fn backend_port() -> u16 {
+  std::env::var("INVESTING_PLATFORM_BACKEND_PORT")
+    .ok()
+    .and_then(|value| value.parse::<u16>().ok())
+    .unwrap_or(8000)
 }
 
 fn project_root() -> PathBuf {
