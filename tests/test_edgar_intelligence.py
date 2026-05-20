@@ -512,12 +512,12 @@ def test_retrieve_chunks_filters_to_requested_accessions_before_reranking(tmp_pa
     assert [chunk.chunk_id for chunk in retrieved] == ["chunk:third", "chunk:first"]
 
 
-def test_retrieve_chunks_boosts_obvious_risk_factor_matches(tmp_path) -> None:
+def test_retrieve_chunks_uses_model_scores_without_section_keyword_boost(tmp_path) -> None:
     settings = DashboardSettings(
         research_root=tmp_path / "research-root",
         edgar_user_agent="Investing Platform tests@example.com",
     )
-    fake_client = RerankingFakeOmlxClient(rerank_order=[0, 1])
+    fake_client = RerankingFakeOmlxClient(rerank_order=[1, 0])
     service = EdgarIntelligenceService(settings, omlx_client=fake_client)
     artifact_store = EdgarDownloader(settings)
     paths = artifact_store._workspace_paths(settings.research_root, "NVDA")
@@ -554,7 +554,7 @@ def test_retrieve_chunks_boosts_obvious_risk_factor_matches(tmp_path) -> None:
         },
     ]
     service._write_retrieval_sqlite(index_dir / "retrieval.sqlite3", chunks)
-    np.save(index_dir / "embeddings.f16.npy", np.asarray([[0.2, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float16))
+    np.save(index_dir / "embeddings.f16.npy", np.asarray([[0.2, 0.0, 0.0], [0.2, 0.0, 0.0]], dtype=np.float16))
 
     retrieved, limitations = service._retrieve_chunks(
         paths,
@@ -563,7 +563,89 @@ def test_retrieve_chunks_boosts_obvious_risk_factor_matches(tmp_path) -> None:
 
     assert limitations == []
     assert [chunk.chunk_id for chunk in retrieved] == ["chunk:item-1a-risk-factors", "chunk:generic-business"]
-    assert "Risk Factors" in fake_client.rerank_documents[0]
+    assert fake_client.rerank_documents == [
+        "NVIDIA sells accelerated computing products to many customers.",
+        "Item 1A. Risk Factors. Export controls, supply constraints, competition, and customer concentration could harm the business.",
+    ]
+
+
+def test_retrieval_has_no_hand_authored_keyword_helpers() -> None:
+    assert not hasattr(EdgarIntelligenceService, "_lexical_retrieval_boost")
+    assert not hasattr(EdgarIntelligenceService, "_question_focus_terms")
+    assert not hasattr(EdgarIntelligenceService, "_focus_match_count")
+
+
+def test_answer_question_scopes_latest_filing_before_vector_retrieval(tmp_path) -> None:
+    settings = DashboardSettings(
+        research_root=tmp_path / "research-root",
+        edgar_user_agent="Investing Platform tests@example.com",
+    )
+    fake_client = GuardrailFakeOmlxClient(
+        {
+            "answer": "The latest filing reported revenue of $10 million [C1].",
+            "confidence": "high",
+            "citations": ["C1"],
+            "limitations": [],
+        }
+    )
+    service = EdgarIntelligenceService(settings, omlx_client=fake_client)
+    artifact_store = EdgarDownloader(settings)
+    paths = artifact_store._workspace_paths(settings.research_root, "AAPL")
+    paths.exports_dir.mkdir(parents=True, exist_ok=True)
+    filings = [
+        {
+            "ticker": "AAPL",
+            "companyName": "Apple Inc.",
+            "cik": "320193",
+            "cik10": "0000320193",
+            "form": "10-Q",
+            "filingDate": "2026-02-08",
+            "accessionNumber": "old-quarter",
+            "accessionNumberNoDashes": "oldquarter",
+            "primaryDocument": "old.htm",
+            "primaryDocumentUrl": "https://www.sec.gov/old.htm",
+        },
+        {
+            "ticker": "AAPL",
+            "companyName": "Apple Inc.",
+            "cik": "320193",
+            "cik10": "0000320193",
+            "form": "10-Q",
+            "filingDate": "2026-05-08",
+            "accessionNumber": "latest-quarter",
+            "accessionNumberNoDashes": "latestquarter",
+            "primaryDocument": "latest.htm",
+            "primaryDocumentUrl": "https://www.sec.gov/latest.htm",
+        },
+    ]
+    (paths.exports_dir / "matched-filings.json").write_text(json.dumps(filings), encoding="utf-8")
+    for filing, text in [
+        (filings[0], "Revenue was $5 million in the older quarter."),
+        (filings[1], "Revenue was $10 million in the latest quarter."),
+    ]:
+        primary_path = paths.stock_root / artifact_store._filing_folder_name(filing) / "primary" / filing["primaryDocument"]
+        primary_path.parent.mkdir(parents=True, exist_ok=True)
+        primary_path.write_text(f"<html><body><p>{text}</p></body></html>", encoding="utf-8")
+    service.index_workspace(workspace=object(), request=EdgarIntelligenceIndexRequest(ticker="AAPL"), paths=paths)
+    workspace = SimpleNamespace(
+        metadataState=EdgarMetadataState(
+            status="fresh",
+            lastRefreshedAt=datetime.now(UTC),
+            lastLiveCheckedAt=datetime.now(UTC),
+        )
+    )
+
+    response = service.answer_question(
+        workspace=workspace,
+        request=EdgarQuestionRequest(ticker="AAPL", question="From AAPL's latest filing, what revenue did they report?"),
+        paths=paths,
+    )
+
+    prompt = fake_client.chat_messages[0][1]["content"]
+    assert "accessionNumber: latest-quarter" in prompt
+    assert "accessionNumber: old-quarter" not in prompt
+    assert response.retrievalState.eligibleAccessionsSearched == 1
+    assert response.citations[0].accessionNumber == "latest-quarter"
 
 
 def test_compare_passes_resolved_target_accessions_to_question_retrieval(tmp_path) -> None:
@@ -713,8 +795,94 @@ def test_index_state_marks_ready_index_stale_when_selected_filings_change(tmp_pa
     assert index_state.eligibleAccessions == 2
     assert index_state.indexedAccessions == 1
     assert index_state.staleAccessions == ["0000320193-26-000002"]
-    assert status.readyForAsk is False
+    assert status.readyForAsk is True
     assert "missing 1 selected accession" in " ".join(status.limitations)
+
+
+def test_answer_question_uses_partial_stale_index_with_limitations(tmp_path) -> None:
+    service, paths, workspace, fake_client = _indexed_guardrail_service(
+        tmp_path,
+        filing_text="Revenue decreased 12% because component supply constraints affected product availability.",
+    )
+    matched_path = paths.exports_dir / "matched-filings.json"
+    filings = json.loads(matched_path.read_text(encoding="utf-8"))
+    deferred_filing = {
+        **filings[0],
+        "filingDate": "2026-02-15",
+        "accessionNumber": "0000320193-26-000002",
+        "accessionNumberNoDashes": "000032019326000002",
+        "primaryDocument": "a10-k2026.htm",
+        "primaryDocumentUrl": "https://www.sec.gov/Archives/edgar/data/320193/000032019326000002/a10-k2026.htm",
+    }
+    matched_path.write_text(json.dumps([deferred_filing, *filings]), encoding="utf-8")
+    artifact_store = EdgarDownloader(service._settings)
+    deferred_primary_path = paths.stock_root / artifact_store._filing_folder_name(deferred_filing) / "primary" / "a10-k2026.htm"
+    deferred_primary_path.parent.mkdir(parents=True, exist_ok=True)
+    deferred_primary_path.write_text("<html><body><p>Deferred filing text.</p></body></html>", encoding="utf-8")
+
+    response = service.answer_question(
+        workspace=workspace,
+        request=EdgarQuestionRequest(ticker="AAPL", question="What changed in revenue?"),
+        paths=paths,
+    )
+
+    assert fake_client.chat_calls == 1
+    assert response.answer == "Revenue decreased 12% [C1]."
+    assert response.retrievalState.chunksUsed == 1
+    assert "missing 1 selected accession" in " ".join(response.limitations)
+    assert "indexed subset" in " ".join(response.limitations)
+
+
+def test_answer_question_trims_prompt_evidence_to_context_budget(tmp_path) -> None:
+    service, paths, workspace, fake_client = _indexed_guardrail_service(
+        tmp_path,
+        filing_text=(
+            "Revenue decreased 12% because component supply constraints affected product availability. "
+            * 1200
+        ),
+        settings_overrides={"llm_max_context_tokens": 4096, "llm_max_answer_tokens": 512},
+    )
+
+    response = service.answer_question(
+        workspace=workspace,
+        request=EdgarQuestionRequest(ticker="AAPL", question="What changed in revenue?", maxAnswerTokens=512),
+        paths=paths,
+    )
+
+    assert fake_client.chat_calls == 1
+    assert response.answer == "Revenue decreased 12% [C1]."
+    assert response.retrievalState.chunksUsed > 0
+    assert "shortened to fit" in " ".join(response.limitations)
+    assert service._estimate_prompt_tokens(fake_client.chat_messages[0]) <= service._prompt_token_budget(
+        EdgarQuestionRequest(ticker="AAPL", question="What changed in revenue?", maxAnswerTokens=512)
+    )
+
+
+def test_answer_question_accepts_bullet_array_answer_payload(tmp_path) -> None:
+    service, paths, workspace, fake_client = _indexed_guardrail_service(
+        tmp_path,
+        filing_text="Revenue decreased 12% because component supply constraints affected product availability.",
+    )
+    fake_client.answer_payload = {
+        "answer": [
+            "Revenue decreased 12% because component supply constraints affected product availability [C1].",
+            "The cited excerpt identifies supply constraints as the main driver [C1].",
+        ],
+        "confidence": "high",
+        "citations": ["C1"],
+        "limitations": [],
+    }
+
+    response = service.answer_question(
+        workspace=workspace,
+        request=EdgarQuestionRequest(ticker="AAPL", question="Summarize what changed in revenue."),
+        paths=paths,
+    )
+
+    assert response.confidence == "high"
+    assert response.answer.startswith("- Revenue decreased 12%")
+    assert "\n- The cited excerpt identifies supply constraints" in response.answer
+    assert [citation.citationId for citation in response.citations] == ["C1"]
 
 
 def test_status_reports_completed_job_only_when_polled_by_job_id(tmp_path) -> None:
@@ -872,9 +1040,9 @@ def test_ask_returns_generation_timeout_error(tmp_path) -> None:
 def test_ask_uses_bullet_style_for_risk_factor_questions(tmp_path) -> None:
     service, paths, workspace, fake_client = _indexed_guardrail_service(
         tmp_path,
-        filing_text="Item 1A. Risk Factors. Supply constraints and competition may affect margins.",
+        filing_text="Item 1A. Risk Factors. Supply constraints and competition could harm the business.",
         answer_payload={
-            "answer": "- Supply constraints may affect margins [C1].\n- Competition may affect margins [C1].",
+            "answer": "- Supply constraints could harm the business [C1].\n- Competition could harm the business [C1].",
             "confidence": "high",
             "citations": ["C1"],
             "limitations": [],
@@ -893,7 +1061,7 @@ def test_ask_uses_bullet_style_for_risk_factor_questions(tmp_path) -> None:
     assert "Avoid a dense paragraph" in fake_client.chat_messages[0][0]["content"]
 
 
-def test_citation_snippet_centers_risk_factor_anchor(tmp_path) -> None:
+def test_citation_snippet_uses_retrieved_excerpt_without_question_keyword_anchors(tmp_path) -> None:
     service = EdgarIntelligenceService(
         DashboardSettings(
             research_root=tmp_path / "research-root",
@@ -909,10 +1077,9 @@ def test_citation_snippet_centers_risk_factor_anchor(tmp_path) -> None:
 
     snippet = service._citation_snippet(text, question="What are the risk factors for NVDA?")
 
-    assert snippet.startswith("...")
-    assert "Item 1A. Risk Factors" in snippet
-    assert "Export controls" in snippet
-    assert "Executive biography and available information. Executive biography" not in snippet
+    assert snippet.startswith("Executive biography and available information.")
+    assert len(snippet) == 500
+    assert "Item 1A. Risk Factors" not in snippet
 
 
 def test_ask_refuses_when_retrieval_has_no_relevant_evidence(tmp_path) -> None:
@@ -1148,11 +1315,14 @@ def _indexed_guardrail_service(
     *,
     filing_text: str,
     answer_payload: dict | None = None,
+    settings_overrides: dict | None = None,
 ):
-    settings = DashboardSettings(
-        research_root=tmp_path / "research-root",
-        edgar_user_agent="Investing Platform tests@example.com",
-    )
+    settings_kwargs = {
+        "research_root": tmp_path / "research-root",
+        "edgar_user_agent": "Investing Platform tests@example.com",
+    }
+    settings_kwargs.update(settings_overrides or {})
+    settings = DashboardSettings(**settings_kwargs)
     artifact_store = EdgarDownloader(settings)
     fake_client = GuardrailFakeOmlxClient(answer_payload)
     service = EdgarIntelligenceService(settings, omlx_client=fake_client)

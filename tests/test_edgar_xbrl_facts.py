@@ -7,7 +7,8 @@ import zipfile
 from investing_platform.config import DashboardSettings
 from investing_platform.models import EdgarQuestionRequest
 from investing_platform.services.edgar import EdgarDownloader
-from investing_platform.services.edgar_xbrl_facts import CONCEPT_ALIASES, EdgarXbrlFactService
+from investing_platform.services.edgar_intelligence_terms import XBRL_CONCEPT_ALIASES
+from investing_platform.services.edgar_xbrl_facts import EdgarXbrlFactService
 
 
 def test_xbrl_fact_service_extracts_companyfacts_into_ticker_artifacts(tmp_path) -> None:
@@ -86,7 +87,7 @@ def test_xbrl_fact_retrieval_uses_aliases_units_periods_and_dedupes(tmp_path) ->
     assert [fact.value_text for fact in revenue_facts if fact.concept == "us-gaap:Revenues"].count("391035000000") == 1
     assert {"us-gaap:GrossProfit", "us-gaap:Revenues"} <= {fact.concept for fact in margin_facts}
     assert shares_facts[0].concept == "dei:EntityCommonStockSharesOutstanding"
-    assert "us-gaap:CommonStocksIncludingAdditionalPaidInCapital" not in CONCEPT_ALIASES["shares"]
+    assert "us-gaap:CommonStocksIncludingAdditionalPaidInCapital" not in XBRL_CONCEPT_ALIASES["shares"]
 
 
 def _paths_and_filings(settings: DashboardSettings):

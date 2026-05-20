@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from bs4 import BeautifulSoup
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
+from math import ceil
 import json
 import numpy as np
 from pathlib import Path
@@ -41,6 +42,16 @@ from investing_platform.models import (
 )
 from investing_platform.services.edgar_common import CHUNKING_VERSION, EMBEDDING_MODEL_VERSION, INDEX_SCHEMA_VERSION, WorkspacePaths
 from investing_platform.services.edgar_filing_sections import extract_filing_sections
+from investing_platform.services.edgar_intelligence_terms import (
+    ANSWER_BULLET_STYLE_TERMS,
+    ANSWER_PARAGRAPH_EXCLUSION_SUBSTRINGS,
+    ANSWER_PARAGRAPH_EXCLUSION_TERMS,
+    DIRECTION_GUARD_TERMS,
+    FRESHNESS_SENSITIVE_TERMS,
+    PROMPT_INJECTION_RE,
+    REFUSAL_ANSWER_MARKERS,
+)
+from investing_platform.services.edgar_retrieval_planner import EdgarRetrievalPlan, EdgarRetrievalPlanner
 from investing_platform.services.edgar_xbrl_facts import EdgarXbrlFactService, XbrlFact
 from investing_platform.services.omlx_client import OmlxClient, OmlxClientError
 
@@ -48,65 +59,18 @@ from investing_platform.services.omlx_client import OmlxClient, OmlxClientError
 CORPUS_VERSION = "primary-documents-v1"
 EMBEDDING_BATCH_SIZE = 16
 MIN_RETRIEVAL_SCORE = 0.15
-LEXICAL_RETRIEVAL_BOOST_CAP = 0.35
+PROMPT_TOKEN_SAFETY_MARGIN = 12000
+PROMPT_MIN_CHUNK_TOKENS = 256
+PROMPT_MAX_CHUNK_TOKENS = 1000
+PROMPT_MIN_FACT_TOKENS = 64
+PROMPT_TRUNCATION_SUFFIX = "\n[Excerpt truncated to fit the local model context window.]"
+PROMPT_RUNTIME_MAX_CHUNKS = 5
+RERANK_MAX_DOCUMENT_TOKENS = 350
+RERANK_TRUNCATION_SUFFIX = "\n[Rerank excerpt truncated.]"
 CITATION_MARKER_RE = re.compile(r"\[C(\d+)\]")
 GUARDED_NUMBER_RE = re.compile(r"(?<![A-Za-z])\$?\d+(?:,\d{3})*(?:\.\d+)?%?")
 PROPER_NOUN_RE = re.compile(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\b")
-PROMPT_INJECTION_RE = re.compile(
-    r"(?i)\b(ignore\s+(?:all\s+)?(?:previous|prior)\s+instructions|system\s+prompt|developer\s+message|answer\s+with|you\s+are\s+now)\b"
-)
 SAFE_REFUSAL_ANSWER = "I cannot answer this from the retrieved SEC filing excerpts."
-BULLET_ANSWER_TERMS = {
-    "summarize",
-    "summarise",
-    "summary",
-    "list",
-    "risks",
-    "risk",
-    "factors",
-    "drivers",
-    "driver",
-    "headwinds",
-    "tailwinds",
-    "highlights",
-    "overview",
-    "breakdown",
-    "compare",
-    "comparison",
-    "changed",
-    "changes",
-    "change",
-    "key",
-    "main",
-    "major",
-    "primary",
-    "important",
-    "notable",
-    "pros",
-    "cons",
-    "opportunities",
-    "threats",
-    "weaknesses",
-    "strengths",
-}
-DIRECTION_TERMS = {
-    "decrease",
-    "decreased",
-    "decline",
-    "declined",
-    "fall",
-    "fell",
-    "increase",
-    "increased",
-    "improve",
-    "improved",
-    "higher",
-    "lower",
-    "rise",
-    "rose",
-    "doubled",
-    "halved",
-}
 
 
 @dataclass(slots=True)
@@ -171,15 +135,17 @@ class EdgarIntelligenceService:
     def __init__(self, settings: DashboardSettings, *, omlx_client: OmlxClient | None = None) -> None:
         self._settings = settings
         self._omlx_client = omlx_client or OmlxClient(settings)
+        self._retrieval_planner = EdgarRetrievalPlanner()
         self._xbrl_fact_service = EdgarXbrlFactService(settings)
 
     def status_for_paths(self, paths: WorkspacePaths, *, job_id: str | None = None) -> EdgarIntelligenceState:
         index_state = self._index_state(paths)
         active_job = self._job_state(paths, job_id=job_id)
         if index_state.indexedAccessions > 0:
+            answerable = self._index_state_is_usable_for_answer(index_state)
             return EdgarIntelligenceState(
-                status="ready" if index_state.status == "ready" else "not-ready",
-                questionAnsweringEnabled=index_state.status == "ready",
+                status="ready" if answerable else "not-ready",
+                questionAnsweringEnabled=answerable,
                 detail="EDGAR intelligence artifacts are present." if index_state.status == "ready" else "; ".join(index_state.limitations),
                 lastIndexedAt=index_state.lastIndexedAt,
                 indexedFilings=index_state.indexedAccessions,
@@ -245,7 +211,7 @@ class EdgarIntelligenceService:
             outputDir=request.outputDir,
             workspaceRoot=str(paths.output_root),
             generatedAt=now,
-            readyForAsk=workspace is not None and index_state.status == "ready" and model_state.status == "ready",
+            readyForAsk=workspace is not None and self._index_state_is_usable_for_answer(index_state) and model_state.status == "ready",
             modelState=model_state,
             freshnessState=freshness_state,
             indexState=index_state,
@@ -372,7 +338,7 @@ class EdgarIntelligenceService:
                 ticker=request.ticker,
             )
         index_state = self._index_state(paths)
-        if index_state.status != "ready":
+        if not self._index_state_is_usable_for_answer(index_state):
             raise EdgarIntelligenceApiError(
                 status_code=409,
                 code="index_not_ready",
@@ -381,6 +347,7 @@ class EdgarIntelligenceService:
                 retry_after_seconds=10,
                 limitations=index_state.limitations,
             )
+        index_limitations = self._index_limitations_for_answer(index_state)
         model_state = self._model_state(datetime.now(UTC))
         if model_state.status != "ready":
             self._raise_model_dependency_error(model_state, ticker=request.ticker)
@@ -395,11 +362,15 @@ class EdgarIntelligenceService:
                 limitations=["Retry refresh or explicitly allow stale answers before asking freshness-sensitive filing questions."],
             )
         baseline_limitations = self._freshness_limitations(freshness_state)
-        retrieved_chunks, retrieval_limitations = self._retrieve_chunks(paths, request)
-        retrieved_facts, fact_limitations = self._retrieve_xbrl_facts(paths, request)
+        retrieval_request, _retrieval_plan = self._planned_retrieval_request(paths, request)
+        retrieved_chunks, retrieval_limitations = self._retrieve_chunks(paths, retrieval_request)
+        retrieved_facts, fact_limitations = self._retrieve_xbrl_facts(paths, retrieval_request)
         self._raise_retrieval_dependency_error(retrieval_limitations, ticker=request.ticker)
-        prompt_chunks = retrieved_chunks[: self._settings.llm_max_prompt_chunks]
-        prompt_facts = retrieved_facts[: self._settings.llm_max_prompt_chunks]
+        prompt_chunks, prompt_facts, prompt_limitations = self._select_prompt_evidence(
+            request=request,
+            chunks=retrieved_chunks,
+            facts=retrieved_facts,
+        )
         self._assign_xbrl_citation_ids(prompt_facts, start=len(prompt_chunks) + 1)
         retrieval_state = EdgarRetrievalState(
             chunksRetrieved=len(retrieved_chunks),
@@ -418,15 +389,17 @@ class EdgarIntelligenceService:
             ),
             indexVersion=index_state.indexVersion,
         )
-        if not retrieved_chunks and not retrieved_facts:
+        if not prompt_chunks and not prompt_facts:
             return self._safe_refusal_response(
                 request=request,
                 freshness_state=freshness_state,
                 retrieval_state=retrieval_state,
                 started=started,
                 limitations=baseline_limitations
+                + index_limitations
                 + retrieval_limitations
                 + fact_limitations
+                + prompt_limitations
                 + ["No retrieved filing evidence was strong enough to answer safely."],
             )
         try:
@@ -445,7 +418,7 @@ class EdgarIntelligenceService:
                 freshness_state=freshness_state,
                 retrieval_state=retrieval_state,
                 started=started,
-                limitations=baseline_limitations + fact_limitations + [str(exc)],
+                limitations=baseline_limitations + index_limitations + fact_limitations + prompt_limitations + [str(exc)],
             )
         if validated is None:
             return self._safe_refusal_response(
@@ -453,7 +426,11 @@ class EdgarIntelligenceService:
                 freshness_state=freshness_state,
                 retrieval_state=retrieval_state,
                 started=started,
-                limitations=baseline_limitations + fact_limitations + ["The generated answer did not pass evidence validation."],
+                limitations=baseline_limitations
+                + index_limitations
+                + fact_limitations
+                + prompt_limitations
+                + ["The generated answer did not pass evidence validation."],
             )
         citations = self._citations_for_evidence(prompt_chunks, prompt_facts, validated.citation_ids, question=request.question)
         generated_at = datetime.now(UTC)
@@ -470,7 +447,12 @@ class EdgarIntelligenceService:
             maintenanceState=EdgarMaintenanceState(status="none", elapsedMs=int((time.monotonic() - started) * 1000)),
             retrievalState=retrieval_state,
             citations=citations,
-            limitations=baseline_limitations + retrieval_limitations + fact_limitations + validated.limitations,
+            limitations=baseline_limitations
+            + index_limitations
+            + retrieval_limitations
+            + fact_limitations
+            + prompt_limitations
+            + validated.limitations,
         )
 
     def compare_filings(
@@ -580,6 +562,54 @@ class EdgarIntelligenceService:
         message = str(exc).lower()
         return "timeout" in message or "timed out" in message
 
+    def _index_state_is_usable_for_answer(self, index_state: EdgarIndexState) -> bool:
+        if index_state.status == "ready":
+            return index_state.indexedChunks > 0
+        if index_state.status != "stale" or index_state.indexedChunks <= 0 or index_state.indexedAccessions <= 0:
+            return False
+        incompatible_limitations = (
+            "older index schema",
+            "older corpus version",
+            "older chunking version",
+            "different embedding model",
+            "missing retrieval artifacts",
+        )
+        normalized_limitations = " ".join(index_state.limitations).lower()
+        return not any(marker in normalized_limitations for marker in incompatible_limitations)
+
+    def _index_limitations_for_answer(self, index_state: EdgarIndexState) -> list[str]:
+        if index_state.status == "ready":
+            return []
+        if not self._index_state_is_usable_for_answer(index_state):
+            return index_state.limitations
+        return [
+            *index_state.limitations,
+            "Answer is limited to the indexed subset of the selected EDGAR workspace.",
+        ]
+
+    def _planned_retrieval_request(
+        self,
+        paths: WorkspacePaths,
+        request: EdgarQuestionRequest,
+    ) -> tuple[EdgarQuestionRequest, EdgarRetrievalPlan]:
+        filings = self._load_selected_filings(paths, [])
+        plan = self._retrieval_planner.plan(
+            question=request.question,
+            filings=filings,
+            forms=request.forms,
+            accession_numbers=request.accessionNumbers,
+            start_date=request.startDate,
+            end_date=request.endDate,
+        )
+        updates: dict[str, Any] = {}
+        if plan.forms and not request.forms:
+            updates["forms"] = list(plan.forms)
+        if plan.accession_numbers and not request.accessionNumbers:
+            updates["accessionNumbers"] = list(plan.accession_numbers)
+        if not updates:
+            return request, plan
+        return request.model_copy(update=updates), plan
+
     def _retrieve_chunks(self, paths: WorkspacePaths, request: EdgarQuestionRequest) -> tuple[list[RetrievedChunk], list[str]]:
         embeddings_path = paths.intelligence_dir / "index" / "embeddings.f16.npy"
         if not embeddings_path.exists():
@@ -608,7 +638,6 @@ class EdgarIntelligenceService:
             if chunk.chunk_index >= embeddings.shape[0]:
                 continue
             vector_score = float(np.dot(embeddings[chunk.chunk_index], query))
-            score = vector_score + self._lexical_retrieval_boost(request.question, chunk)
             scored.append(
                 RetrievedChunk(
                     citation_id=chunk.citation_id,
@@ -625,7 +654,7 @@ class EdgarIntelligenceService:
                     source_path=chunk.source_path,
                     sec_url=chunk.sec_url,
                     text=chunk.text,
-                    score=score,
+                    score=vector_score,
                     section_code=chunk.section_code,
                     section_title=chunk.section_title,
                     section_type=chunk.section_type,
@@ -665,39 +694,6 @@ class EdgarIntelligenceService:
             )
         return selected, rerank_limitations
 
-    def _lexical_retrieval_boost(self, question: str, chunk: RetrievedChunk) -> float:
-        """Give exact filing vocabulary a small say alongside embeddings.
-
-        This is intentionally capped so lexical matching can rescue obvious
-        section queries like "risk factors" without overwhelming semantic rank.
-        """
-        normalized_question = question.lower()
-        searchable = " ".join(
-            [chunk.section, chunk.section_code or "", chunk.section_title or "", chunk.section_type or "", chunk.form, chunk.document_name, chunk.text]
-        ).lower()
-        boost = 0.0
-        if "risk" in normalized_question:
-            if "item 1a" in searchable or "risk factors" in searchable:
-                boost += 0.25
-            elif "risk" in searchable:
-                boost += 0.12
-        if "management discussion" in normalized_question or "md&a" in normalized_question or "mda" in normalized_question:
-            if "item 7" in searchable or "management's discussion" in searchable or "management discussion" in searchable:
-                boost += 0.2
-        if "market risk" in normalized_question:
-            if "item 7a" in searchable or "market risk" in searchable:
-                boost += 0.2
-        question_terms = {
-            term
-            for term in re.findall(r"\b[a-z][a-z0-9]{3,}\b", normalized_question)
-            if term not in {"what", "which", "where", "when", "were", "with", "from", "that", "this", "there", "their", "about", "latest"}
-        }
-        if question_terms:
-            searchable_terms = set(re.findall(r"\b[a-z][a-z0-9]{3,}\b", searchable))
-            overlap = len(question_terms.intersection(searchable_terms))
-            boost += min(0.1, overlap * 0.025)
-        return min(boost, LEXICAL_RETRIEVAL_BOOST_CAP)
-
     def _rerank_chunks(self, request: EdgarQuestionRequest, chunks: list[RetrievedChunk]) -> tuple[list[RetrievedChunk], list[str]]:
         if not chunks:
             return [], []
@@ -707,7 +703,7 @@ class EdgarIntelligenceService:
             reranked = self._omlx_client.rerank_texts(
                 model=self._settings.llm_rerank_model,
                 query=request.question,
-                documents=[chunk.text for chunk in chunks],
+                documents=[self._rerank_document_text(chunk) for chunk in chunks],
                 top_n=len(chunks),
             )
         except OmlxClientError as exc:
@@ -747,6 +743,14 @@ class EdgarIntelligenceService:
         if not selected:
             return [], ["The reranker returned no usable candidate chunks."]
         return selected, []
+
+    def _rerank_document_text(self, chunk: RetrievedChunk) -> str:
+        text, _truncated = self._truncate_text_to_token_budget(
+            chunk.text,
+            RERANK_MAX_DOCUMENT_TOKENS,
+            suffix=RERANK_TRUNCATION_SUFFIX,
+        )
+        return text
 
     def _load_retrieval_chunks(self, paths: WorkspacePaths, request: EdgarQuestionRequest) -> list[RetrievedChunk]:
         retrieval_path = paths.intelligence_dir / "index" / "retrieval.sqlite3"
@@ -814,6 +818,75 @@ class EdgarIntelligenceService:
         for offset, fact in enumerate(facts):
             fact.citation_id = f"C{start + offset}"
 
+    def _select_prompt_evidence(
+        self,
+        *,
+        request: EdgarQuestionRequest,
+        chunks: list[RetrievedChunk],
+        facts: list[XbrlFact],
+    ) -> tuple[list[RetrievedChunk], list[XbrlFact], list[str]]:
+        prompt_budget = self._prompt_token_budget(request)
+        base_tokens = self._estimate_prompt_tokens(self._answer_messages(request, [], []))
+        remaining_tokens = max(0, prompt_budget - base_tokens)
+        max_prompt_chunks = max(1, min(self._settings.llm_max_prompt_chunks, PROMPT_RUNTIME_MAX_CHUNKS))
+        selected_chunks: list[RetrievedChunk] = []
+        selected_facts: list[XbrlFact] = []
+        limitations: list[str] = []
+        truncated_chunks = 0
+
+        candidate_chunks = chunks[:max_prompt_chunks]
+        for chunk in candidate_chunks:
+            if remaining_tokens < PROMPT_MIN_CHUNK_TOKENS:
+                break
+            remaining_chunk_slots = max(1, max_prompt_chunks - len(selected_chunks))
+            metadata_tokens = self._estimate_text_tokens(self._chunk_evidence_block(replace(chunk, text="")))
+            text_budget = min(
+                max(PROMPT_MIN_CHUNK_TOKENS, remaining_tokens // remaining_chunk_slots),
+                max(0, remaining_tokens - metadata_tokens),
+                PROMPT_MAX_CHUNK_TOKENS,
+            )
+            if text_budget < PROMPT_MIN_CHUNK_TOKENS:
+                break
+            prompt_text, truncated = self._truncate_text_to_token_budget(
+                chunk.text,
+                text_budget,
+            )
+            if not prompt_text.strip():
+                continue
+            prompt_chunk = replace(chunk, text=prompt_text)
+            block_tokens = self._estimate_text_tokens(self._chunk_evidence_block(prompt_chunk))
+            if block_tokens > remaining_tokens:
+                prompt_text, truncated_again = self._truncate_text_to_token_budget(
+                    chunk.text,
+                    max(PROMPT_MIN_CHUNK_TOKENS, remaining_tokens - metadata_tokens),
+                )
+                if not prompt_text.strip():
+                    break
+                prompt_chunk = replace(chunk, text=prompt_text)
+                block_tokens = self._estimate_text_tokens(self._chunk_evidence_block(prompt_chunk))
+                truncated = truncated or truncated_again
+            if block_tokens > remaining_tokens:
+                break
+            selected_chunks.append(prompt_chunk)
+            remaining_tokens -= block_tokens
+            if truncated:
+                truncated_chunks += 1
+
+        for fact in facts[:max_prompt_chunks]:
+            if remaining_tokens < PROMPT_MIN_FACT_TOKENS:
+                break
+            block_tokens = self._estimate_text_tokens(self._fact_evidence_block(fact))
+            if block_tokens > remaining_tokens:
+                break
+            selected_facts.append(fact)
+            remaining_tokens -= block_tokens
+
+        if truncated_chunks:
+            limitations.append(f"{truncated_chunks} retrieved filing excerpt(s) were shortened to fit the local model context window.")
+        if len(selected_chunks) < len(candidate_chunks) or len(selected_facts) < min(len(facts), max_prompt_chunks):
+            limitations.append("Prompt evidence was capped to fit the configured local model context window.")
+        return selected_chunks, selected_facts, limitations
+
     def _generate_answer_json(self, request: EdgarQuestionRequest, chunks: list[RetrievedChunk], facts: list[XbrlFact] | None = None) -> dict[str, Any]:
         return self._omlx_client.chat_json(
             model=self._settings.llm_chat_model,
@@ -823,49 +896,8 @@ class EdgarIntelligenceService:
 
     def _answer_messages(self, request: EdgarQuestionRequest, chunks: list[RetrievedChunk], facts: list[XbrlFact] | None = None) -> list[dict[str, str]]:
         answer_style = self._answer_style(request.question)
-        evidence_blocks = []
-        for chunk in chunks:
-            evidence_blocks.append(
-                "\n".join(
-                    [
-                        f"[{chunk.citation_id}]",
-                        f"ticker: {chunk.ticker}",
-                        f"accessionNumber: {chunk.accession_number}",
-                        f"form: {chunk.form}",
-                        f"filingDate: {chunk.filing_date}",
-                        f"documentName: {chunk.document_name}",
-                        f"section: {chunk.section}",
-                        f"sectionCode: {chunk.section_code or ''}",
-                        f"sectionTitle: {chunk.section_title or ''}",
-                        f"sectionType: {chunk.section_type or ''}",
-                        "excerpt:",
-                        chunk.text,
-                    ]
-                )
-            )
-        fact_blocks = []
-        for fact in facts or []:
-            fact_blocks.append(
-                "\n".join(
-                    [
-                        f"[{fact.citation_id}]",
-                        "evidenceType: xbrl_fact",
-                        f"ticker: {fact.ticker}",
-                        f"cik: {fact.cik}",
-                        f"accessionNumber: {fact.accession_number or ''}",
-                        f"form: {fact.form or ''}",
-                        f"filingDate: {fact.filing_date or ''}",
-                        f"concept: {fact.concept}",
-                        f"label: {fact.label or ''}",
-                        f"taxonomy: {fact.taxonomy or ''}",
-                        f"unit: {fact.unit or ''}",
-                        f"value: {fact.value_text}",
-                        f"period: {fact.period_label or ''}",
-                        f"fiscalYear: {fact.fiscal_year or ''}",
-                        f"fiscalPeriod: {fact.fiscal_period or ''}",
-                    ]
-                )
-            )
+        evidence_blocks = [self._chunk_evidence_block(chunk) for chunk in chunks]
+        fact_blocks = [self._fact_evidence_block(fact) for fact in facts or []]
         style_instruction = (
             "Use concise bullet points in the answer field. Start each bullet with '- '. "
             "Each bullet should be a compact claim bundle with one or two citation markers at the end. "
@@ -880,6 +912,7 @@ class EdgarIntelligenceService:
             "Every factual claim in the answer must include citation markers like [C1]. "
             "For margin or ratio questions, compute a derived value only when every input fact used in the calculation is provided and cited. "
             "The answer field itself must contain citation markers; listing citations only in the citations array is not enough. "
+            "The answer field must be one JSON string, never an array; use newline-separated '- ' bullets inside that string when using bullets. "
             f"{style_instruction} "
             "Use confidence exactly as one of: low, medium, high. "
             "Use limitations as an array of strings, or an empty array when there are no limitations. "
@@ -890,6 +923,7 @@ class EdgarIntelligenceService:
         user_prompt = "\n\n".join(
             [
                 f"Ticker: {request.ticker}",
+                f"Current date: {datetime.now(UTC).date().isoformat()}",
                 f"Question: {request.question}",
                 "Retrieved filing excerpts:",
                 "\n\n".join(evidence_blocks),
@@ -899,14 +933,106 @@ class EdgarIntelligenceService:
         )
         return [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
 
+    def _chunk_evidence_block(self, chunk: RetrievedChunk) -> str:
+        return "\n".join(
+            [
+                f"[{chunk.citation_id}]",
+                f"ticker: {chunk.ticker}",
+                f"accessionNumber: {chunk.accession_number}",
+                f"form: {chunk.form}",
+                f"filingDate: {chunk.filing_date}",
+                f"documentName: {chunk.document_name}",
+                f"section: {chunk.section}",
+                f"sectionCode: {chunk.section_code or ''}",
+                f"sectionTitle: {chunk.section_title or ''}",
+                f"sectionType: {chunk.section_type or ''}",
+                "excerpt:",
+                chunk.text,
+            ]
+        )
+
+    def _fact_evidence_block(self, fact: XbrlFact) -> str:
+        return "\n".join(
+            [
+                f"[{fact.citation_id}]",
+                "evidenceType: xbrl_fact",
+                f"ticker: {fact.ticker}",
+                f"cik: {fact.cik}",
+                f"accessionNumber: {fact.accession_number or ''}",
+                f"form: {fact.form or ''}",
+                f"filingDate: {fact.filing_date or ''}",
+                f"concept: {fact.concept}",
+                f"label: {fact.label or ''}",
+                f"taxonomy: {fact.taxonomy or ''}",
+                f"unit: {fact.unit or ''}",
+                f"value: {fact.value_text}",
+                f"period: {fact.period_label or ''}",
+                f"fiscalYear: {fact.fiscal_year or ''}",
+                f"fiscalPeriod: {fact.fiscal_period or ''}",
+            ]
+        )
+
+    def _prompt_token_budget(self, request: EdgarQuestionRequest) -> int:
+        answer_tokens = min(request.maxAnswerTokens, self._settings.llm_max_answer_tokens)
+        return max(2048, self._settings.llm_max_context_tokens - answer_tokens - PROMPT_TOKEN_SAFETY_MARGIN)
+
+    def _estimate_prompt_tokens(self, messages: list[dict[str, str]]) -> int:
+        return 4 + sum(self._estimate_text_tokens(message.get("content", "")) + 8 for message in messages)
+
+    def _estimate_text_tokens(self, text: str) -> int:
+        if not text:
+            return 0
+        word_estimate = ceil(len(text.split()) * 1.35)
+        char_estimate = ceil(len(text) / 2.7)
+        return max(1, word_estimate, char_estimate)
+
+    def _truncate_text_to_token_budget(
+        self,
+        text: str,
+        max_tokens: int,
+        *,
+        suffix: str = PROMPT_TRUNCATION_SUFFIX,
+    ) -> tuple[str, bool]:
+        if max_tokens <= 0:
+            return "", bool(text)
+        if self._estimate_text_tokens(text) <= max_tokens:
+            return text, False
+        max_chars = max(80, int(max_tokens * 2.2) - len(suffix))
+        truncated = text[:max_chars].rstrip()
+        if " " in truncated:
+            truncated = truncated.rsplit(" ", 1)[0].rstrip() or truncated
+        truncated = f"{truncated}{suffix}"
+        while truncated and self._estimate_text_tokens(truncated) > max_tokens:
+            next_chars = max(40, int((len(truncated) - len(suffix)) * 0.82))
+            truncated = text[:next_chars].rstrip()
+            if " " in truncated:
+                truncated = truncated.rsplit(" ", 1)[0].rstrip() or truncated
+            truncated = f"{truncated}{suffix}"
+            if next_chars <= 40:
+                break
+        return truncated, True
+
+    def _answer_text_from_payload(self, value: Any) -> str:
+        if isinstance(value, str):
+            return value.strip()
+        if isinstance(value, list):
+            parts = [str(item).strip() for item in value if str(item).strip()]
+            if not parts:
+                return ""
+            return "\n".join(part if part.startswith("-") else f"- {part}" for part in parts)
+        return str(value or "").strip()
+
     def _answer_style(self, question: str) -> Literal["bullets", "paragraph"]:
         normalized = question.lower()
-        if re.search(r"\b(how many|when|where|who|which filing|what date|what was|what is)\b", normalized) and not any(
-            term in normalized for term in ("risk", "risks", "factors", "drivers", "changed", "changes", "compare", "list", "summar")
-        ):
-            return "paragraph"
+        if re.search(r"\b(how many|when|where|who|which filing|what date|what was|what is)\b", normalized):
+            terms = set(re.findall(r"\b[a-z][a-z0-9-]*\b", normalized.replace("/", " ")))
+            has_bullet_intent = bool(terms.intersection(ANSWER_PARAGRAPH_EXCLUSION_TERMS)) or any(
+                marker in normalized for marker in ANSWER_PARAGRAPH_EXCLUSION_SUBSTRINGS
+            )
+            if not has_bullet_intent:
+                return "paragraph"
         terms = set(re.findall(r"\b[a-z][a-z0-9-]*\b", normalized.replace("/", " ")))
-        if terms.intersection(BULLET_ANSWER_TERMS):
+        if terms.intersection(ANSWER_BULLET_STYLE_TERMS):
             return "bullets"
         if re.search(r"\bwhat are\b", normalized):
             return "bullets"
@@ -920,7 +1046,7 @@ class EdgarIntelligenceService:
         *,
         facts: list[XbrlFact] | None = None,
     ) -> ValidatedAnswer | None:
-        answer = str(payload.get("answer") or "").strip()
+        answer = self._answer_text_from_payload(payload.get("answer"))
         if not answer:
             return None
         confidence = str(payload.get("confidence") or "low").strip().lower()
@@ -1073,37 +1199,7 @@ class EdgarIntelligenceService:
         cleaned = text.strip()
         if len(cleaned) <= 500:
             return cleaned
-        lower_text = cleaned.lower()
-        lower_question = question.lower()
-        anchors: list[str] = []
-        if "risk" in lower_question:
-            anchors.extend(["item 1a", "risk factors", "risk"])
-        if "management discussion" in lower_question or "md&a" in lower_question or "mda" in lower_question:
-            anchors.extend(["item 7", "management's discussion", "management discussion"])
-        if "market risk" in lower_question:
-            anchors.extend(["item 7a", "market risk"])
-        anchors.extend(
-            term
-            for term in re.findall(r"\b[a-z][a-z0-9]{4,}\b", lower_question)
-            if term not in {"which", "where", "there", "their", "about", "latest", "factors"}
-        )
-        anchor_positions = [lower_text.find(anchor) for anchor in anchors if anchor and lower_text.find(anchor) >= 0]
-        if not anchor_positions:
-            return cleaned[:500]
-        center = min(anchor_positions)
-        start = max(0, center - 80)
-        end = min(len(cleaned), center + 420)
-        if start > 0:
-            next_space = cleaned.find(" ", start)
-            if next_space != -1 and next_space < center:
-                start = next_space + 1
-        if end < len(cleaned):
-            previous_space = cleaned.rfind(" ", start, end)
-            if previous_space > center:
-                end = previous_space
-        prefix = "..." if start > 0 else ""
-        suffix = "..." if end < len(cleaned) else ""
-        return f"{prefix}{cleaned[start:end].strip()}{suffix}"
+        return cleaned[:500]
 
     def _model_state(self, now: datetime) -> EdgarIntelligenceModelState:
         base_url = self._settings.llm_base_url.rstrip("/")
@@ -1163,7 +1259,7 @@ class EdgarIntelligenceService:
 
     def _is_freshness_sensitive_question(self, question: str) -> bool:
         normalized = question.lower()
-        return any(term in normalized for term in ("today", "latest", "new filing", "recent 8-k", "most recent", "just filed"))
+        return any(term in normalized for term in FRESHNESS_SENSITIVE_TERMS)
 
     def _normalize_vector(self, vector: np.ndarray) -> np.ndarray | None:
         if vector.ndim != 1 or vector.size == 0 or not np.all(np.isfinite(vector)):
@@ -1218,16 +1314,7 @@ class EdgarIntelligenceService:
 
     def _is_refusal_answer(self, answer: str) -> bool:
         normalized = answer.lower()
-        return any(
-            phrase in normalized
-            for phrase in (
-                "cannot answer",
-                "can't answer",
-                "insufficient evidence",
-                "not enough evidence",
-                "not supported by the retrieved",
-            )
-        )
+        return any(phrase in normalized for phrase in REFUSAL_ANSWER_MARKERS)
 
     def _evidence_text(self, chunks: list[RetrievedChunk], facts: list[XbrlFact] | None = None) -> str:
         parts: list[str] = []
@@ -1266,19 +1353,23 @@ class EdgarIntelligenceService:
 
     def _unsupported_proper_nouns(self, answer: str, evidence_text: str, request: EdgarQuestionRequest) -> list[str]:
         allowed = f"{evidence_text} {request.ticker.lower()}"
+        allowed_terms = set(re.findall(r"\b[a-z][a-z0-9]{2,}\b", allowed))
         unsupported: list[str] = []
         for phrase in PROPER_NOUN_RE.findall(CITATION_MARKER_RE.sub("", answer)):
             normalized = phrase.strip()
             if not normalized:
                 continue
             if normalized.lower() not in allowed:
+                phrase_terms = [term.lower() for term in re.findall(r"\b[A-Za-z][A-Za-z0-9]{2,}\b", normalized)]
+                if phrase_terms and all(term in allowed_terms for term in phrase_terms):
+                    continue
                 unsupported.append(normalized)
         return self._dedupe(unsupported)
 
     def _unsupported_direction_terms(self, answer: str, evidence_text: str) -> list[str]:
         words = set(re.findall(r"\b[a-z]+\b", CITATION_MARKER_RE.sub("", answer).lower()))
         evidence_words = set(re.findall(r"\b[a-z]+\b", evidence_text))
-        return sorted(term for term in words.intersection(DIRECTION_TERMS) if term not in evidence_words)
+        return sorted(term for term in words.intersection(DIRECTION_GUARD_TERMS) if term not in evidence_words)
 
     def _parse_date(self, value: str) -> date | None:
         if not value:

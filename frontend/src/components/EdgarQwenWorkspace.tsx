@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { useEdgarIndex } from "../features/stock-intel/useEdgarIndex";
@@ -45,12 +45,6 @@ export function EdgarQwenWorkspace({
   const [question, setQuestion] = useState("");
   const [allowStale, setAllowStale] = useState(false);
 
-  useEffect(() => {
-    if (!issuerQuery.trim() && defaultTicker) {
-      setIssuerQuery(defaultTicker);
-    }
-  }, [defaultTicker, issuerQuery]);
-
   const normalizedQuery = issuerQuery.trim();
   const likelyTicker = normalizeTickerCandidate(normalizedQuery);
   const workspaceRequest: EdgarWorkspaceRequest | null =
@@ -77,7 +71,7 @@ export function EdgarQwenWorkspace({
         : null;
   const intelligenceRequest = selectedWorkspaceRequest ?? workspaceRequest;
   const intelligenceState = activeWorkspace?.intelligenceState ?? syncResult?.intelligenceState;
-  const effectiveTicker = activeWorkspace?.ticker ?? syncResult?.resolvedTicker ?? likelyTicker ?? defaultTicker.trim().toUpperCase();
+  const effectiveTicker = activeWorkspace?.ticker ?? syncResult?.resolvedTicker ?? likelyTicker ?? "";
   const effectiveCompany = activeWorkspace?.companyName ?? syncResult?.resolvedCompanyName ?? normalizedQuery ?? "No company selected";
   const workspaceError = workspaceQuery.error instanceof Error ? workspaceQuery.error.message : null;
 

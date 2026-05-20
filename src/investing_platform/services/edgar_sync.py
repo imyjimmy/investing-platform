@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 import re
 import time
-from typing import Any
+from typing import Any, Callable
 
 from investing_platform.config import DashboardSettings
 from investing_platform.models import (
@@ -34,6 +34,7 @@ from investing_platform.models import (
 )
 from investing_platform.services.edgar_common import DownloadCounters, SUBMISSIONS_URL_TEMPLATE
 from investing_platform.services.edgar_intelligence import EdgarIntelligenceApiError
+from investing_platform.services.edgar_retrieval_planner import EdgarRetrievalPlanner
 
 
 ASK_MAINTENANCE_MAX_SECONDS = 30.0
@@ -58,12 +59,15 @@ class EdgarSyncService:
         metadata_cache: Any,
         artifact_store: Any,
         intelligence: Any,
+        watchlist_provider: Callable[[], list[str]] | None = None,
     ) -> None:
         self._settings = settings
         self._resolver = resolver
         self._metadata_cache = metadata_cache
         self._artifact_store = artifact_store
         self._intelligence = intelligence
+        self._watchlist_provider = watchlist_provider or settings.public_watchlist
+        self._retrieval_planner = EdgarRetrievalPlanner()
 
     def sync(self, request: EdgarSyncRequest) -> EdgarSyncResponse:
         return self._sync(request)
@@ -480,7 +484,7 @@ class EdgarSyncService:
             return targets[: request.maxIssuers]
 
         if request.includeWatchlist:
-            self._append_unique_targets(targets, self._settings.public_watchlist())
+            self._append_unique_targets(targets, self._watchlist_provider())
 
         usage_state = self._load_usage_state()
         usage_issuers = usage_state.get("issuers")
@@ -947,8 +951,18 @@ class EdgarSyncService:
         all_filings: list[dict[str, Any]],
         selected_accessions: set[str],
     ) -> list[dict[str, Any]]:
+        plan = self._retrieval_planner.plan(
+            question=request.question,
+            filings=all_filings,
+            forms=request.forms,
+            accession_numbers=request.accessionNumbers,
+            start_date=request.startDate,
+            end_date=request.endDate,
+        )
         allowed_accessions = {accession.strip() for accession in request.accessionNumbers if accession.strip()}
+        allowed_accessions.update(plan.accession_numbers)
         allowed_forms = {form.strip().upper() for form in request.forms if form.strip()}
+        allowed_forms.update(plan.forms)
         explicit_scope = bool(allowed_accessions or allowed_forms or request.startDate or request.endDate)
         inferred_history_scope = bool(DEEP_HISTORY_TERMS_RE.search(request.question))
         if not explicit_scope and not inferred_history_scope:

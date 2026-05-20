@@ -15,65 +15,13 @@ import zipfile
 from investing_platform.config import DashboardSettings
 from investing_platform.models import EdgarQuestionRequest
 from investing_platform.services.edgar_common import WorkspacePaths
-
-
-CONCEPT_ALIASES: dict[str, list[str]] = {
-    "revenue": [
-        "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
-        "us-gaap:Revenues",
-        "us-gaap:SalesRevenueNet",
-    ],
-    "operating income": [
-        "us-gaap:OperatingIncomeLoss",
-    ],
-    "gross profit": [
-        "us-gaap:GrossProfit",
-    ],
-    "net income": [
-        "us-gaap:NetIncomeLoss",
-    ],
-    "cash": [
-        "us-gaap:CashAndCashEquivalentsAtCarryingValue",
-        "us-gaap:CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
-    ],
-    "debt": [
-        "us-gaap:LongTermDebtCurrent",
-        "us-gaap:LongTermDebtNoncurrent",
-        "us-gaap:DebtCurrent",
-    ],
-    "shares": [
-        "dei:EntityCommonStockSharesOutstanding",
-        "us-gaap:WeightedAverageNumberOfSharesOutstandingBasic",
-        "us-gaap:WeightedAverageNumberOfDilutedSharesOutstanding",
-        "us-gaap:WeightedAverageNumberOfSharesOutstandingBasicAndDiluted",
-    ],
-    "gross margin": [
-        "us-gaap:GrossProfit",
-        "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
-        "us-gaap:Revenues",
-        "us-gaap:SalesRevenueNet",
-    ],
-    "operating margin": [
-        "us-gaap:OperatingIncomeLoss",
-        "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
-        "us-gaap:Revenues",
-        "us-gaap:SalesRevenueNet",
-    ],
-    "net margin": [
-        "us-gaap:NetIncomeLoss",
-        "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
-        "us-gaap:Revenues",
-        "us-gaap:SalesRevenueNet",
-    ],
-}
-
-_MONETARY_ALIASES = {"revenue", "operating income", "gross profit", "net income", "cash", "debt"}
-_MARGIN_ALIASES = {"gross margin", "operating margin", "net margin"}
-_DURATION_ALIASES = {"revenue", "operating income", "gross profit", "net income", *_MARGIN_ALIASES}
-_INSTANT_ALIASES = {"cash", "debt"}
-_FINANCIAL_FACT_HINT_RE = re.compile(
-    r"\b(revenue|sales|income|profit|cash|debt|shares?|margin|fy|fiscal|quarter|annual|operating|gross|net)\b",
-    re.IGNORECASE,
+from investing_platform.services.edgar_intelligence_terms import (
+    XBRL_CONCEPT_ALIASES,
+    XBRL_DURATION_ALIASES,
+    XBRL_FINANCIAL_FACT_HINT_RE,
+    XBRL_INSTANT_ALIASES,
+    XBRL_MARGIN_ALIASES,
+    XBRL_MONETARY_ALIASES,
 )
 
 
@@ -465,7 +413,7 @@ class EdgarXbrlFactService:
     def _matched_alias_concepts(self, question: str) -> list[tuple[str, str, int]]:
         normalized = f" {re.sub(r'[^a-z0-9:.-]+', ' ', question.lower())} "
         matches: list[tuple[str, str, int]] = []
-        for alias, concepts in CONCEPT_ALIASES.items():
+        for alias, concepts in XBRL_CONCEPT_ALIASES.items():
             if f" {alias} " not in normalized:
                 continue
             for rank, concept in enumerate(concepts):
@@ -498,13 +446,13 @@ class EdgarXbrlFactService:
             score += 25
         if fact.form in {"10-K", "10-Q", "10-K/A", "10-Q/A"}:
             score += 10
-        if aliases.intersection(_DURATION_ALIASES) and fact.period_start and fact.period_end:
+        if aliases.intersection(XBRL_DURATION_ALIASES) and fact.period_start and fact.period_end:
             score += 14
-        if aliases.intersection(_INSTANT_ALIASES) and fact.instant:
+        if aliases.intersection(XBRL_INSTANT_ALIASES) and fact.instant:
             score += 14
         if "shares" in aliases and fact.unit and "share" in fact.unit.lower():
             score += 18
-        if aliases.intersection(_MONETARY_ALIASES | _MARGIN_ALIASES) and fact.unit and fact.unit.upper() == "USD":
+        if aliases.intersection(XBRL_MONETARY_ALIASES | XBRL_MARGIN_ALIASES) and fact.unit and fact.unit.upper() == "USD":
             score += 18
         if fact.fiscal_period in {"FY", "Q4", "Q3", "Q2", "Q1"}:
             score += 5
@@ -522,7 +470,7 @@ class EdgarXbrlFactService:
         return deduped
 
     def _looks_like_financial_fact_question(self, question: str) -> bool:
-        return bool(_FINANCIAL_FACT_HINT_RE.search(question))
+        return bool(XBRL_FINANCIAL_FACT_HINT_RE.search(question))
 
     def _filing_date_matches(self, filing_date: str, request: EdgarQuestionRequest) -> bool:
         parsed = _parse_date(filing_date)

@@ -368,6 +368,39 @@ def test_warm_defaults_to_watchlist_and_recent_usage_targets(tmp_path, monkeypat
     assert usage_state["issuers"]["TSLA"]["askCount"] == 1
 
 
+def test_warm_uses_runtime_watchlist_provider(tmp_path, monkeypatch) -> None:
+    settings = DashboardSettings(
+        research_root=tmp_path / "research-root",
+        edgar_user_agent="Investing Platform tests@example.com",
+        watchlist_symbols=["AAPL"],
+    )
+    service = EdgarDownloader(settings, watchlist_provider=lambda: ["MSFT"])
+    resolve_calls: list[str] = []
+
+    def fake_resolve_issuer_query(issuer_query, options, force_refresh=False) -> ResolvedCompany:
+        ticker = str(issuer_query).upper()
+        resolve_calls.append(ticker)
+        return ResolvedCompany(
+            cik="789019",
+            cik10="0000789019",
+            ticker=ticker,
+            company_name=f"{ticker} Corp.",
+            submissions_payload={"name": f"{ticker} Corp.", "cik": "0000789019", "tickers": [ticker]},
+        )
+
+    monkeypatch.setattr(service._resolver_service, "resolve_issuer_query", fake_resolve_issuer_query)
+    monkeypatch.setattr(service._metadata_cache_service, "ensure_bulk_baseline", lambda options, force_refresh=False: {"status": "ready", "artifacts": {}})
+    monkeypatch.setattr(service._metadata_cache_service, "load_filing_rows", lambda resolved_company: [])
+    monkeypatch.setattr(service, "_build_filing_rows", lambda payloads, resolved_company: [])
+
+    response = service.warm(
+        EdgarWarmRequest(mode="metadata-only", includeRecentIssuers=False, includeAskedIssuers=False, maxIssuers=3)
+    )
+
+    assert resolve_calls == ["MSFT"]
+    assert response.requestedIssuers == 1
+
+
 def test_workspace_falls_back_to_legacy_last_sync_when_simplified_snapshot_is_missing(tmp_path) -> None:
     service, _settings = _build_service(tmp_path)
     legacy_output_root = tmp_path / "legacy-output-root"
@@ -584,6 +617,58 @@ def test_ask_hydrates_explicit_older_accession_before_indexing(tmp_path, monkeyp
     assert response.maintenanceState.status == "completed"
     assert response.maintenanceState.filingBodiesDownloaded == 1
     assert "deep-history hydration" in response.maintenanceState.limitations[0]
+
+
+def test_ask_hydrates_planned_latest_accession_before_indexing(tmp_path, monkeypatch) -> None:
+    service, settings = _build_service(tmp_path)
+    sync_service = service._sync_service
+    paths = service._workspace_paths(settings.research_root, "AAPL")
+    service._ensure_workspace_dirs(paths)
+    prior_filing = _sample_filings()[0]
+    latest_filing = {
+        **_sample_filings()[0],
+        "filingDate": "2026-05-08",
+        "reportDate": "2026-03-31",
+        "accessionNumber": "0000320193-26-000099",
+        "accessionNumberNoDashes": "000032019326000099",
+        "primaryDocument": "a10-q2026q2.htm",
+        "primaryDocumentUrl": "https://www.sec.gov/Archives/edgar/data/320193/000032019326000099/a10-q2026q2.htm",
+        "form": "10-Q",
+    }
+    (paths.exports_dir / "all-filings.json").write_text(json.dumps([latest_filing, prior_filing]), encoding="utf-8")
+    (paths.exports_dir / "matched-filings.json").write_text(json.dumps([prior_filing]), encoding="utf-8")
+    prior_path = paths.stock_root / service._filing_folder_name(prior_filing) / "primary" / str(prior_filing["primaryDocument"])
+    prior_path.parent.mkdir(parents=True, exist_ok=True)
+    prior_path.write_text("<html>prior filing body</html>", encoding="utf-8")
+
+    fresh_workspace = _workspace_response(settings, metadata_status="fresh", body_status="ready")
+    fake_intelligence = _AskMaintenanceFakeIntelligence(settings)
+    sync_service._intelligence = fake_intelligence
+    monkeypatch.setattr(sync_service, "workspace", lambda request: fresh_workspace)
+    downloaded_accessions: list[str] = []
+
+    def fake_download_filing_assets(*, filing, request, options, filings_dir, edgar_root, manifest, counters) -> None:
+        downloaded_accessions.append(str(filing["accessionNumber"]))
+        destination = filings_dir / service._filing_folder_name(filing) / "primary" / str(filing["primaryDocument"])
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text("<html>latest filing body</html>", encoding="utf-8")
+        counters.downloaded_files += 1
+
+    monkeypatch.setattr(service, "_download_filing_assets", fake_download_filing_assets)
+
+    response = sync_service.intelligence_ask(
+        EdgarQuestionRequest(ticker="AAPL", question="From AAPL's latest filing, what revenue did they report?")
+    )
+
+    matched = json.loads((paths.exports_dir / "matched-filings.json").read_text(encoding="utf-8"))
+    assert downloaded_accessions == ["0000320193-26-000099"]
+    assert {filing["accessionNumber"] for filing in matched} == {
+        "0000320193-26-000001",
+        "0000320193-26-000099",
+    }
+    assert fake_intelligence.index_limits["job_kind"] == "ask_maintenance"
+    assert response.maintenanceState.status == "completed"
+    assert response.maintenanceState.filingBodiesDownloaded == 1
 
 
 def _workspace_response(

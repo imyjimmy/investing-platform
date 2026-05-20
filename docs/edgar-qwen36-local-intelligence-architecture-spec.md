@@ -482,10 +482,11 @@ Meaning:
 
 Candidate search steps:
 
-1. embed the user query
-2. compute semantic similarity over that ticker's chunks
-3. optionally blend lexical boosts from form type, section title, and filing date
-4. return top `24` candidates
+1. build a metadata-only retrieval plan from explicit request filters and filing-scope language
+2. apply the plan as form/accession/date filters before semantic search
+3. embed the user query
+4. compute semantic similarity over the scoped ticker chunks
+5. return top `24` candidates
 
 Phase 1 implementation choice:
 
@@ -495,6 +496,21 @@ Phase 1 implementation choice:
 Reason:
 
 - a single ticker's filing corpus is usually small enough to avoid premature ANN complexity
+
+### Retrieval Planning
+
+Retrieval planning is deliberately metadata-only.
+
+It may interpret:
+
+- explicit API filters such as forms, accession numbers, and date ranges
+- SEC form names in the question, such as `10-Q`, `10-K`, `8-K`, `6-K`, `20-F`, and `40-F`
+- filing-scope phrases such as latest, newest, or most recent
+- report-family phrases such as annual report, quarterly report, or current report
+
+It must not interpret company-specific topics or answer content. For example, `NVIDIA`, `revenue`, `targets`, `guidance`, `bullish`, and similar question terms belong to semantic retrieval and generation, not the planner.
+
+Planner output is a small immutable object containing form filters, accession filters, and reason codes. The Q&A service applies those filters before loading chunks and XBRL facts, then passes the original user question unchanged to embeddings, reranking, prompting, and validation.
 
 ### Reranking
 
