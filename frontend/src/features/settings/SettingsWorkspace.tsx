@@ -6,7 +6,7 @@ import { ToolWorkspaceFrame } from "../../components/shell/ToolWorkspaceFrame";
 import { ErrorState } from "../../components/ui/ErrorState";
 import { DEFAULT_DASHBOARD_ACCOUNT_KEY } from "../../config/dashboardAccounts";
 import { formatTimestamp } from "../../lib/formatters";
-import type { ConnectionStatus } from "../../lib/types";
+import type { ConnectionStatus, MarketDataSourceStatus } from "../../lib/types";
 import { useConnectorSources } from "../sources/useConnectorSources";
 import { useStockIntelOverview } from "../stock-intel/useStockIntelOverview";
 
@@ -34,9 +34,15 @@ export function SettingsWorkspace({ connectionStatus, executionEnabled }: Settin
     finnhubConfigureMutation,
     finnhubStatusError,
     finnhubStatusQuery,
+    marketDataSourceConfigureError,
+    marketDataSourceConfigureMutation,
+    marketDataSourceKeyInputs,
+    marketDataSourcesStatusError,
+    marketDataSourcesStatusQuery,
     okxStatusError,
     okxStatusQuery,
     setFinnhubApiKeyInput,
+    setMarketDataSourceKeyInputs,
   } = useConnectorSources({
     accountSettingsOpen: false,
     globalSettingsActive: true,
@@ -86,6 +92,9 @@ export function SettingsWorkspace({ connectionStatus, executionEnabled }: Settin
   const connectionEndpoint = connectionStatus ? `${connectionStatus.host}:${connectionStatus.port}` : "127.0.0.1:4002";
   const heartbeatLabel = connectionStatus?.lastHeartbeatAt ? formatTimestamp(connectionStatus.lastHeartbeatAt) : "No heartbeat";
   const connectionEndpointLabel = connectionStatus?.connected ? `Connected on ${connectionEndpoint}` : connectionEndpoint;
+  const marketDataSources = marketDataSourcesStatusQuery.data?.sources ?? [];
+  const configuredMarketSources = marketDataSources.filter((source) => source.configured).length;
+  const readyMarketSources = marketDataSources.filter((source) => source.available).length;
   const globalSourceCards: AccountConnectorCard[] = [
     {
       id: "okx",
@@ -111,6 +120,18 @@ export function SettingsWorkspace({ connectionStatus, executionEnabled }: Settin
       tone: finnhubConfigureMutation.isPending ? "caution" : finnhubHealthTone,
       icon: <MarketIcon />,
     },
+    {
+      id: "market-intelligence",
+      title: "Earnings Sources",
+      status: marketDataSourcesStatusQuery.isLoading
+        ? "Checking"
+        : marketDataSourcesStatusError
+          ? "Unavailable"
+          : `${readyMarketSources}/${marketDataSources.length} ready`,
+      detail: marketDataSourcesStatusError ?? `${configuredMarketSources} external consensus/news provider${configuredMarketSources === 1 ? "" : "s"} configured.`,
+      tone: marketDataSourcesStatusError ? "danger" : readyMarketSources > 0 ? "safe" : configuredMarketSources > 0 ? "caution" : "planned",
+      icon: <MarketIcon />,
+    },
     ...stockIntelSourceCards.map((source) => ({
       ...source,
       icon: source.id === "edgar" ? <DocumentIcon /> : <PdfLibraryIcon />,
@@ -123,6 +144,21 @@ export function SettingsWorkspace({ connectionStatus, executionEnabled }: Settin
 
   async function clearFinnhubConnector() {
     await finnhubConfigureMutation.mutateAsync({ apiKey: null });
+  }
+
+  async function saveMarketDataSource(providerId: string) {
+    await marketDataSourceConfigureMutation.mutateAsync({
+      providerId,
+      request: { apiKey: marketDataSourceKeyInputs[providerId]?.trim() ?? "" },
+    });
+  }
+
+  async function clearMarketDataSource(providerId: string) {
+    await marketDataSourceConfigureMutation.mutateAsync({ providerId, request: { clearApiKey: true } });
+  }
+
+  async function toggleMarketDataSource(providerId: string, enabled: boolean) {
+    await marketDataSourceConfigureMutation.mutateAsync({ providerId, request: { enabled } });
   }
 
   return (
@@ -247,6 +283,36 @@ export function SettingsWorkspace({ connectionStatus, executionEnabled }: Settin
           </div>
         </Panel>
 
+        <Panel eyebrow="Earnings intelligence providers" title="Market Data Sources">
+          <div className="grid gap-5">
+            {marketDataSourceConfigureError || marketDataSourcesStatusError ? (
+              <ErrorState message={marketDataSourceConfigureError ?? marketDataSourcesStatusError ?? "Market data sources are unavailable."} />
+            ) : null}
+            <div className="grid gap-3 lg:grid-cols-2">
+              {marketDataSources.map((source) => (
+                <MarketDataSourceCard
+                  key={source.providerId}
+                  inputValue={marketDataSourceKeyInputs[source.providerId] ?? ""}
+                  isSaving={marketDataSourceConfigureMutation.isPending}
+                  onClear={() => {
+                    void clearMarketDataSource(source.providerId);
+                  }}
+                  onInputChange={(value) =>
+                    setMarketDataSourceKeyInputs((current) => ({ ...current, [source.providerId]: value }))
+                  }
+                  onSave={() => {
+                    void saveMarketDataSource(source.providerId);
+                  }}
+                  onToggle={(enabled) => {
+                    void toggleMarketDataSource(source.providerId, enabled);
+                  }}
+                  source={source}
+                />
+              ))}
+            </div>
+          </div>
+        </Panel>
+
         <Panel eyebrow="Shared defaults" title="App Defaults">
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-3">
@@ -263,6 +329,110 @@ export function SettingsWorkspace({ connectionStatus, executionEnabled }: Settin
         </Panel>
       </div>
     </ToolWorkspaceFrame>
+  );
+}
+
+function MarketDataSourceCard({
+  source,
+  inputValue,
+  isSaving,
+  onInputChange,
+  onSave,
+  onClear,
+  onToggle,
+}: {
+  source: MarketDataSourceStatus;
+  inputValue: string;
+  isSaving: boolean;
+  onInputChange: (value: string) => void;
+  onSave: () => void;
+  onClear: () => void;
+  onToggle: (enabled: boolean) => void;
+}) {
+  const tone = marketDataSourceTone(source);
+  const canSave = source.configurable && inputValue.trim().length > 0;
+  return (
+    <div className="rounded-2xl border border-line/80 bg-panelSoft p-4">
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${connectionToneIconClass(tone)}`}>
+            <MarketIcon />
+          </span>
+          <div className="min-w-0">
+            <div className="truncate text-sm font-medium text-text">{source.displayName}</div>
+            <div className="mt-1 text-xs uppercase tracking-[0.16em] text-muted">{source.category}</div>
+          </div>
+        </div>
+        <span className={`shrink-0 rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${statusPillClass(tone)}`}>
+          {marketDataSourceStatusLabel(source)}
+        </span>
+      </div>
+
+      <div className="mt-3 text-sm text-muted">{source.detail}</div>
+
+      <div className="mt-3 flex flex-wrap gap-2">
+        {source.capabilities.map((capability) => (
+          <span key={capability} className="rounded-full border border-line/70 bg-panel px-2 py-1 text-[11px] text-muted">
+            {capability}
+          </span>
+        ))}
+      </div>
+
+      <div className="mt-4 grid gap-3">
+        <div className="grid gap-2 sm:grid-cols-2">
+          <MetricCard label="Key" value={source.maskedApiKey ?? (source.requiresApiKey ? "None" : "Not required")} />
+          <MetricCard label="API base" value={source.apiBaseUrl ?? "Vendor configured"} />
+        </div>
+
+        {source.configurable ? (
+          <>
+            <label className="grid gap-2">
+              <span className="text-[11px] uppercase tracking-[0.16em] text-muted">API key</span>
+              <input
+                className="w-full rounded-xl border border-line/80 bg-panel px-4 py-3 text-sm text-text outline-none transition focus:border-accent/60"
+                onChange={(event) => onInputChange(event.target.value)}
+                placeholder={source.configured ? `Paste replacement ${source.displayName} key` : `Enter ${source.displayName} key`}
+                spellCheck={false}
+                type="password"
+                value={inputValue}
+              />
+            </label>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <label className="inline-flex items-center gap-2 text-sm text-muted">
+                <input
+                  checked={source.enabled}
+                  className="h-4 w-4 rounded border-line bg-panel text-accent"
+                  disabled={!source.configured || isSaving}
+                  onChange={(event) => onToggle(event.target.checked)}
+                  type="checkbox"
+                />
+                Enabled
+              </label>
+              <div className="flex flex-wrap gap-2">
+                {source.configured ? (
+                  <button
+                    className="rounded-full border border-line/80 bg-panel px-3 py-1 text-[11px] font-medium uppercase tracking-[0.16em] text-muted transition hover:border-danger/30 hover:text-danger disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={isSaving}
+                    onClick={onClear}
+                    type="button"
+                  >
+                    Clear
+                  </button>
+                ) : null}
+                <button
+                  className="rounded-full border border-accent/30 bg-accent/10 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.16em] text-accent transition hover:border-accent/50 hover:bg-accent/16 disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={!canSave || isSaving}
+                  onClick={onSave}
+                  type="button"
+                >
+                  {isSaving ? "Saving..." : source.configured ? "Update Key" : "Save Key"}
+                </button>
+              </div>
+            </div>
+          </>
+        ) : null}
+      </div>
+    </div>
   );
 }
 
@@ -314,6 +484,45 @@ function connectionToneIconClass(tone: ConnectionHealthTone) {
     return "bg-danger/10 text-danger";
   }
   return "bg-white/5 text-text";
+}
+
+function marketDataSourceTone(source: MarketDataSourceStatus): ConnectionHealthTone {
+  if (source.status === "ready") {
+    return "safe";
+  }
+  if (source.status === "not_configured") {
+    return "caution";
+  }
+  if (source.status === "disabled" || source.status === "planned") {
+    return "planned";
+  }
+  return "danger";
+}
+
+function marketDataSourceStatusLabel(source: MarketDataSourceStatus) {
+  if (source.status === "ready") {
+    return "Ready";
+  }
+  if (source.status === "disabled") {
+    return "Disabled";
+  }
+  if (source.status === "planned") {
+    return "Planned";
+  }
+  return "Needs key";
+}
+
+function statusPillClass(tone: ConnectionHealthTone) {
+  if (tone === "safe") {
+    return "border-safe/30 bg-safe/10 text-safe";
+  }
+  if (tone === "caution") {
+    return "border-caution/30 bg-caution/10 text-caution";
+  }
+  if (tone === "danger") {
+    return "border-danger/30 bg-danger/10 text-danger";
+  }
+  return "border-line/80 bg-panel text-muted";
 }
 
 function MarketIcon() {

@@ -5,7 +5,12 @@ import type { ConnectorCatalogId } from "../../config/connectorCatalog";
 import type { DashboardAccountKey } from "../../config/dashboardAccounts";
 import { sourceApi } from "../../lib/api";
 import { queryKeys } from "../../lib/queryKeys";
-import type { FilesystemConnectorPortfolioResponse, FilesystemConnectorStatus, FilesystemDocumentFolderResponse } from "../../lib/types";
+import type {
+  FilesystemConnectorPortfolioResponse,
+  FilesystemConnectorStatus,
+  FilesystemDocumentFolderResponse,
+  MarketDataSourceConfigRequest,
+} from "../../lib/types";
 
 const CSV_FOLDER_CONNECTOR_ID: ConnectorCatalogId = "csvFolder";
 const PDF_FOLDER_CONNECTOR_ID: ConnectorCatalogId = "pdfFolder";
@@ -40,6 +45,7 @@ export function useConnectorSources({ accountSettingsOpen, globalSettingsActive,
   const [connectorPickerOpen, setConnectorPickerOpen] = useState(false);
   const [connectorSetupError, setConnectorSetupError] = useState<string | null>(null);
   const [finnhubApiKeyInput, setFinnhubApiKeyInput] = useState("");
+  const [marketDataSourceKeyInputs, setMarketDataSourceKeyInputs] = useState<Record<string, string>>({});
   const [connectorDraftsById, setConnectorDraftsById] = useState<Record<string, ConnectorDraftState>>({});
 
   const coinbaseStatusQuery = useQuery({
@@ -65,6 +71,13 @@ export function useConnectorSources({ accountSettingsOpen, globalSettingsActive,
   const finnhubStatusQuery = useQuery({
     queryKey: queryKeys.sources.finnhubStatus,
     queryFn: () => sourceApi.finnhubStatus(true),
+    enabled: globalSettingsActive,
+    refetchInterval: globalSettingsActive ? 30_000 : false,
+  });
+
+  const marketDataSourcesStatusQuery = useQuery({
+    queryKey: queryKeys.sources.marketDataSourcesStatus,
+    queryFn: sourceApi.marketDataSourcesStatus,
     enabled: globalSettingsActive,
     refetchInterval: globalSettingsActive ? 30_000 : false,
   });
@@ -105,6 +118,15 @@ export function useConnectorSources({ accountSettingsOpen, globalSettingsActive,
         queryClient.invalidateQueries({ queryKey: queryKeys.market.tickerOverview() }),
         queryClient.invalidateQueries({ queryKey: queryKeys.market.tickerFinancials() }),
       ]);
+    },
+  });
+
+  const marketDataSourceConfigureMutation = useMutation({
+    mutationFn: ({ providerId, request }: { providerId: string; request: MarketDataSourceConfigRequest }) =>
+      sourceApi.marketDataSourceConfigure(providerId, request),
+    onSuccess: async (_data, variables) => {
+      setMarketDataSourceKeyInputs((current) => ({ ...current, [variables.providerId]: "" }));
+      await queryClient.invalidateQueries({ queryKey: queryKeys.sources.marketDataSourcesStatus });
     },
   });
 
@@ -210,11 +232,19 @@ export function useConnectorSources({ accountSettingsOpen, globalSettingsActive,
     finnhubConfigureMutation,
     finnhubStatusError: finnhubStatusQuery.error instanceof Error ? finnhubStatusQuery.error.message : null,
     finnhubStatusQuery,
+    marketDataSourceConfigureError:
+      marketDataSourceConfigureMutation.error instanceof Error ? marketDataSourceConfigureMutation.error.message : null,
+    marketDataSourceConfigureMutation,
+    marketDataSourceKeyInputs,
+    marketDataSourcesStatusError:
+      marketDataSourcesStatusQuery.error instanceof Error ? marketDataSourcesStatusQuery.error.message : null,
+    marketDataSourcesStatusQuery,
     okxStatusError: okxStatusQuery.error instanceof Error ? okxStatusQuery.error.message : null,
     okxStatusQuery,
     setConnectorDraftsById,
     setConnectorPickerOpen,
     setConnectorSetupError,
     setFinnhubApiKeyInput,
+    setMarketDataSourceKeyInputs,
   };
 }
