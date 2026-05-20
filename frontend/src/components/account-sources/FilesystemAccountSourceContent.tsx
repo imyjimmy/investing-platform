@@ -328,30 +328,7 @@ function FilesystemHoldings({
   return (
     <div className="grid gap-4">
       <AccountSourceSummaryCards monthlyPnl={monthlyPnl} monthlyPnlPct={monthlyPnlPct} netWorth={netWorth} todayPnl={todayPnl} todayPnlPct={todayPnlPct} totalPnl={totalPnl} totalPnlPct={totalPnlPct} />
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <MetricCard label="Net contributions" value={fmtCurrency(portfolio.netContributions)} />
-        <MetricCard label="Accounts" value={fmtNumber(portfolio.investmentAccountsCount)} />
-        <MetricCard label="Holdings" value={fmtNumber(portfolio.holdingsCount)} />
-        <MetricCard label="Snapshot" value={portfolio.latestCsvPath?.split("/").pop() ?? "Latest CSV"} />
-      </div>
-      <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-3 text-sm text-muted">
-        <div className="font-medium text-text">Connector</div>
-        <div className="mt-1">{portfolio.displayName ?? fallbackTitle}</div>
-        <div className="mt-3 font-medium text-text">Positions folder</div>
-        <div className="mt-1 break-all">{portfolio.directoryPath}</div>
-        {portfolio.latestCsvPath ? (
-          <>
-            <div className="mt-3 font-medium text-text">Latest CSV</div>
-            <div className="mt-1 break-all">{portfolio.latestCsvPath}</div>
-          </>
-        ) : null}
-        {portfolio.historyCsvPath ? (
-          <>
-            <div className="mt-3 font-medium text-text">History CSV</div>
-            <div className="mt-1 break-all">{portfolio.historyCsvPath}</div>
-          </>
-        ) : null}
-      </div>
+      <FilesystemPortfolioSourceDetails fallbackTitle={fallbackTitle} portfolio={portfolio} />
       {portfolio.sourceNotice ? (
         <div
           className={`rounded-2xl border px-4 py-3 text-sm ${
@@ -384,6 +361,98 @@ function FilesystemHoldings({
             ))}
           </tbody>
         </table>
+      </div>
+    </div>
+  );
+}
+
+function FilesystemPortfolioSourceDetails({
+  fallbackTitle,
+  portfolio,
+}: {
+  fallbackTitle: string;
+  portfolio: FilesystemConnectorPortfolioResponse;
+}) {
+  const latestSnapshotName = portfolio.latestCsvPath?.split("/").pop() ?? "Latest CSV";
+  const snapshotDateRange = sharpeDateRange(portfolio);
+
+  return (
+    <div className="rounded-2xl border border-line/80 bg-panelSoft px-4 py-4 text-sm text-muted">
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+        <div className="min-w-0">
+          <div className="text-[11px] uppercase tracking-[0.22em] text-muted">Source snapshot</div>
+          <div className="mt-2 font-medium text-text">{portfolio.displayName ?? fallbackTitle}</div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <SourceDetailPill label={pluralize(portfolio.investmentAccountsCount, "account")} />
+            <SourceDetailPill label={pluralize(portfolio.holdingsCount, "holding")} />
+            <SourceDetailPill label={latestSnapshotName} title={latestSnapshotName} truncate />
+          </div>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2 xl:min-w-[420px]">
+          <CompactSourceMetric label="Net contributions" value={fmtCurrency(portfolio.netContributions)} />
+          <CompactSourceMetric
+            detail={snapshotDateRange ? `${fmtNumber(portfolio.sharpeObservations)} daily returns, ${snapshotDateRange}` : sharpeMetricHint(portfolio)}
+            label="Sharpe"
+            tone={sharpeMetricTone(portfolio.annualizedSharpeRatio)}
+            value={fmtNumber(portfolio.annualizedSharpeRatio)}
+          />
+        </div>
+      </div>
+      <div className="mt-4 grid gap-3 border-t border-line/70 pt-4 lg:grid-cols-2">
+        <SourcePathDetail label="Positions folder" value={portfolio.directoryPath} />
+        {portfolio.latestCsvPath ? <SourcePathDetail label="Latest CSV" value={portfolio.latestCsvPath} /> : null}
+        {portfolio.historyCsvPath ? <SourcePathDetail label="History CSV" value={portfolio.historyCsvPath} /> : null}
+      </div>
+    </div>
+  );
+}
+
+function SourceDetailPill({ label, title, truncate = false }: { label: string; title?: string; truncate?: boolean }) {
+  return (
+    <span
+      className={`inline-flex max-w-full items-center rounded-full border border-line/80 bg-black/10 px-3 py-1 text-xs font-medium text-text ${
+        truncate ? "sm:max-w-[280px]" : ""
+      }`}
+      title={title}
+    >
+      <span className={truncate ? "truncate" : ""}>{label}</span>
+    </span>
+  );
+}
+
+function CompactSourceMetric({
+  detail,
+  label,
+  tone = "neutral",
+  value,
+}: {
+  detail?: string;
+  label: string;
+  tone?: "neutral" | "safe" | "caution" | "danger";
+  value: string;
+}) {
+  const toneClasses = {
+    neutral: "text-text",
+    safe: "text-safe",
+    caution: "text-caution",
+    danger: "text-danger",
+  };
+
+  return (
+    <div>
+      <div className="text-[11px] uppercase tracking-[0.18em] text-muted">{label}</div>
+      <div className={`mt-1 text-xl font-semibold ${toneClasses[tone]}`}>{value}</div>
+      {detail ? <div className="mt-1 text-xs leading-5 text-muted">{detail}</div> : null}
+    </div>
+  );
+}
+
+function SourcePathDetail({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <div className="text-[10px] uppercase tracking-[0.18em] text-muted">{label}</div>
+      <div className="mt-1 truncate text-xs text-muted" title={value}>
+        {value}
       </div>
     </div>
   );
@@ -489,6 +558,49 @@ function fmtNumber(value: number | null | undefined, suffix = "") {
     return "—";
   }
   return `${number.format(value)}${suffix}`;
+}
+
+function pluralize(count: number, noun: string) {
+  return `${fmtNumber(count)} ${count === 1 ? noun : `${noun}s`}`;
+}
+
+function sharpeMetricHint(portfolio: FilesystemConnectorPortfolioResponse) {
+  if (portfolio.sharpeObservations < 2) {
+    return "Needs at least 2 daily return observations.";
+  }
+  const range =
+    portfolio.sharpePeriodStart && portfolio.sharpePeriodEnd
+      ? ` from ${portfolio.sharpePeriodStart} to ${portfolio.sharpePeriodEnd}`
+      : "";
+  return `${fmtNumber(portfolio.sharpeObservations)} flow-adjusted daily returns${range}.`;
+}
+
+function sharpeDateRange(portfolio: FilesystemConnectorPortfolioResponse) {
+  if (!portfolio.sharpePeriodStart || !portfolio.sharpePeriodEnd || portfolio.sharpeObservations < 2) {
+    return null;
+  }
+  return `${fmtSourceDate(portfolio.sharpePeriodStart)} to ${fmtSourceDate(portfolio.sharpePeriodEnd)}`;
+}
+
+function fmtSourceDate(value: string) {
+  const parsed = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(parsed.valueOf())) {
+    return value;
+  }
+  return parsed.toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
+function sharpeMetricTone(value: number | null | undefined): "neutral" | "safe" | "caution" | "danger" {
+  if (value == null || Number.isNaN(value)) {
+    return "neutral";
+  }
+  if (value < 0) {
+    return "danger";
+  }
+  if (value < 1) {
+    return "caution";
+  }
+  return "safe";
 }
 
 function pnlTone(value: number | null | undefined) {

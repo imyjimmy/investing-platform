@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 import io
 import json
+from math import sqrt
 from pathlib import Path
 import re
 import threading
@@ -86,6 +87,15 @@ class SnapshotPeriodPnl:
     monthly_pnl: float | None
     today_pnl_pct_basis: float | None
     monthly_pnl_pct_basis: float | None
+    notices: list[str]
+
+
+@dataclass(slots=True)
+class SnapshotSharpeSummary:
+    annualized_sharpe_ratio: float | None
+    observations: int
+    period_start: date | None
+    period_end: date | None
     notices: list[str]
 
 
@@ -353,6 +363,13 @@ class FilesystemConnectorService:
             explicit_history_csv_path=history_csv_path,
             total_net_contributions=derived_contributions.net_contributions if derived_contributions is not None else None,
         )
+        sharpe = _derive_snapshot_sharpe(
+            directory=directory,
+            latest_csv=latest_csv,
+            latest_total_value=total_value,
+            detect_footer=record.detect_footer,
+            explicit_history_csv_path=history_csv_path,
+        )
 
         notices: list[str] = []
         if source_notice:
@@ -365,6 +382,7 @@ class FilesystemConnectorService:
                 f"{derived_contributions.matched_rows} transfer rows in {derived_contributions.source_path.name}."
             )
         notices.extend(period_pnl.notices)
+        notices.extend(sharpe.notices)
         if not holdings:
             notices.append("The latest CSV was found, but no holdings could be parsed from it.")
 
@@ -387,6 +405,10 @@ class FilesystemConnectorService:
             todayPnlPctBasis=period_pnl.today_pnl_pct_basis,
             monthlyPnlPctBasis=period_pnl.monthly_pnl_pct_basis,
             netContributions=round(derived_contributions.net_contributions, 2) if derived_contributions is not None else None,
+            annualizedSharpeRatio=sharpe.annualized_sharpe_ratio,
+            sharpeObservations=sharpe.observations,
+            sharpePeriodStart=sharpe.period_start,
+            sharpePeriodEnd=sharpe.period_end,
             investmentAccountsCount=len(accounts),
             holdingsCount=len(holdings),
             accounts=accounts,
@@ -651,6 +673,99 @@ def _derive_snapshot_period_pnl(
         monthly_pnl_pct_basis=monthly_pnl_pct_basis,
         notices=notices,
     )
+
+
+def _derive_snapshot_sharpe(
+    directory: Path,
+    latest_csv: Path,
+    latest_total_value: float,
+    detect_footer: bool,
+    explicit_history_csv_path: Path | None,
+) -> SnapshotSharpeSummary:
+    latest_snapshot_date = _extract_snapshot_date(latest_csv)
+    if latest_snapshot_date is None:
+        return SnapshotSharpeSummary(
+            annualized_sharpe_ratio=None,
+            observations=0,
+            period_start=None,
+            period_end=None,
+            notices=["Sharpe ratio is unavailable because the latest snapshot date could not be parsed."],
+        )
+
+    snapshots = _load_snapshot_valuations(directory=directory, detect_footer=detect_footer, latest_csv=latest_csv)
+    snapshots.append(
+        SnapshotValuation(
+            snapshot_date=latest_snapshot_date,
+            total_value=round(latest_total_value, 2),
+            source_path=latest_csv,
+        )
+    )
+    snapshots = sorted(snapshots, key=lambda snapshot: (snapshot.snapshot_date, snapshot.source_path.stat().st_mtime))
+
+    daily_returns: list[float] = []
+    period_start: date | None = None
+    period_end: date | None = None
+    skipped_intervals = 0
+    for previous, current in zip(snapshots, snapshots[1:]):
+        if current.snapshot_date <= previous.snapshot_date or previous.total_value <= 0:
+            skipped_intervals += 1
+            continue
+        flows = _derive_net_contributions(
+            directory,
+            [],
+            explicit_history_csv_path,
+            start_date=previous.snapshot_date + timedelta(days=1),
+            end_date=current.snapshot_date,
+        )
+        net_flow = flows.net_contributions if flows is not None else 0.0
+        daily_returns.append((current.total_value - previous.total_value - net_flow) / previous.total_value)
+        period_start = period_start or previous.snapshot_date
+        period_end = current.snapshot_date
+
+    observations = len(daily_returns)
+    notices: list[str] = []
+    if skipped_intervals:
+        notices.append(f"Sharpe skipped {skipped_intervals} snapshot intervals with duplicate dates or non-positive starting values.")
+    if observations < 2:
+        notices.append(f"Sharpe ratio needs at least 2 daily return observations; found {observations}.")
+        return SnapshotSharpeSummary(
+            annualized_sharpe_ratio=None,
+            observations=observations,
+            period_start=period_start,
+            period_end=period_end,
+            notices=notices,
+        )
+
+    mean_return = sum(daily_returns) / observations
+    volatility = _sample_standard_deviation(daily_returns)
+    if volatility <= 0:
+        notices.append("Sharpe ratio is unavailable because the daily return volatility is zero.")
+        return SnapshotSharpeSummary(
+            annualized_sharpe_ratio=None,
+            observations=observations,
+            period_start=period_start,
+            period_end=period_end,
+            notices=notices,
+        )
+
+    notices.append(
+        f"Sharpe uses {observations} flow-adjusted daily snapshot return observations and a 0% risk-free baseline."
+    )
+    return SnapshotSharpeSummary(
+        annualized_sharpe_ratio=round((mean_return / volatility) * sqrt(252), 2),
+        observations=observations,
+        period_start=period_start,
+        period_end=period_end,
+        notices=notices,
+    )
+
+
+def _sample_standard_deviation(values: list[float]) -> float:
+    if len(values) < 2:
+        return 0.0
+    mean_value = sum(values) / len(values)
+    variance = sum((value - mean_value) ** 2 for value in values) / (len(values) - 1)
+    return sqrt(variance)
 
 
 def _find_history_csv_candidates(directory: Path, account_ids: list[str]) -> list[Path]:
