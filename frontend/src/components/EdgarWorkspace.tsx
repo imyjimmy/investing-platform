@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { sourceApi } from "../lib/api";
+import { accountApi, sourceApi } from "../lib/api";
 import { queryKeys } from "../lib/queryKeys";
 import type {
   EdgarBodyCacheState,
@@ -53,15 +53,13 @@ export function EdgarWorkspace({
   const [advancedFormTypes, setAdvancedFormTypes] = useState("");
   const [forceRefresh, setForceRefresh] = useState(false);
   const [includeExhibits, setIncludeExhibits] = useState(false);
-  const [warming, setWarming] = useState(false);
+  const [warmingMode, setWarmingMode] = useState<"defaults" | "watchlist" | null>(null);
   const [warmMessage, setWarmMessage] = useState<string | null>(null);
   const [warmError, setWarmError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!issuerQuery.trim() && defaultTicker) {
-      setIssuerQuery(defaultTicker);
-    }
-  }, [defaultTicker, issuerQuery]);
+  const [watchlistInput, setWatchlistInput] = useState("");
+  const [watchlistUpdating, setWatchlistUpdating] = useState(false);
+  const [watchlistMessage, setWatchlistMessage] = useState<string | null>(null);
+  const [watchlistError, setWatchlistError] = useState<string | null>(null);
 
   const normalizedQuery = issuerQuery.trim();
   const likelyTicker = normalizeTickerCandidate(normalizedQuery);
@@ -80,15 +78,50 @@ export function EdgarWorkspace({
     retry: false,
   });
 
+  const watchlistQuery = useQuery({
+    queryKey: queryKeys.account.watchlist,
+    queryFn: accountApi.watchlist,
+    staleTime: 30_000,
+    retry: false,
+  });
+
   const activeWorkspace = workspaceQuery.data ?? undefined;
   const metadataState = activeWorkspace?.metadataState ?? syncResult?.metadataState;
   const bodyCacheState = activeWorkspace?.bodyCacheState ?? syncResult?.bodyCacheState;
   const intelligenceState = activeWorkspace?.intelligenceState ?? syncResult?.intelligenceState;
-  const effectiveTicker = activeWorkspace?.ticker ?? syncResult?.resolvedTicker ?? likelyTicker ?? defaultTicker.trim().toUpperCase();
+  const effectiveTicker = activeWorkspace?.ticker ?? syncResult?.resolvedTicker ?? likelyTicker ?? "";
   const effectiveCompany = activeWorkspace?.companyName ?? syncResult?.resolvedCompanyName ?? normalizedQuery ?? "No company selected";
   const canRun = Boolean(status?.available) && Boolean(normalizedQuery) && !syncing;
+  const warming = warmingMode !== null;
+  const watchlistSymbols = watchlistQuery.data?.symbols ?? [];
+  const watchlistRefreshSymbols = watchlistSymbols.slice(0, 50);
+  const normalizedWatchlistInput = normalizeTickerCandidate(watchlistInput.trim());
+  const watchlistInputSymbol = normalizedWatchlistInput ?? "";
   const canWarm = Boolean(status?.available) && !warming;
+  const canWarmWatchlist = Boolean(status?.available) && watchlistRefreshSymbols.length > 0 && !warming;
+  const canAddWatchlistSymbol = Boolean(watchlistInputSymbol) && !watchlistSymbols.includes(watchlistInputSymbol) && !watchlistUpdating;
   const workspaceError = workspaceQuery.error instanceof Error ? workspaceQuery.error.message : null;
+  const loadedWatchlistError = watchlistQuery.error instanceof Error ? watchlistQuery.error.message : null;
+  const companyRefreshTarget = effectiveTicker || likelyTicker || normalizedQuery.toUpperCase() || "company";
+  const companyRefreshButtonLabel = syncing
+    ? `Refreshing ${companyRefreshTarget} filings...`
+    : activeWorkspace
+      ? `Refresh ${companyRefreshTarget} filings`
+      : "Sync company filings";
+  const syncSuccessMessage = syncResult ? formatCompanySyncMessage(syncResult) : null;
+  const syncMessageTone =
+    syncResult?.metadataState.status === "degraded" || syncResult?.bodyCacheState.status === "degraded" ? "neutral" : "success";
+  const watchlistRefreshCount = watchlistRefreshSymbols.length;
+  const watchlistPanelScopeLabel =
+    watchlistSymbols.length > watchlistRefreshCount
+      ? `first ${watchlistRefreshCount} symbols`
+      : `${watchlistRefreshCount} symbol${watchlistRefreshCount === 1 ? "" : "s"}`;
+  const watchlistPanelRefreshButtonLabel =
+    warmingMode === "watchlist"
+      ? "Refreshing watchlist..."
+      : watchlistRefreshCount > 0
+        ? `Refresh ${watchlistPanelScopeLabel}`
+        : "Refresh watchlist";
 
   function handleRun() {
     if (!canRun) {
@@ -122,7 +155,7 @@ export function EdgarWorkspace({
     if (!canWarm) {
       return;
     }
-    setWarming(true);
+    setWarmingMode("defaults");
     setWarmMessage(null);
     setWarmError(null);
     try {
@@ -132,8 +165,70 @@ export function EdgarWorkspace({
     } catch (error) {
       setWarmError(error instanceof Error ? error.message : "EDGAR warm failed.");
     } finally {
-      setWarming(false);
+      setWarmingMode(null);
     }
+  }
+
+  async function handleWarmWatchlist() {
+    if (!canWarmWatchlist) {
+      return;
+    }
+    setWarmingMode("watchlist");
+    setWarmMessage(null);
+    setWarmError(null);
+    try {
+      const response = await sourceApi.edgarWarm({
+        issuerQueries: watchlistRefreshSymbols,
+        mode: "body-cache",
+        maxIssuers: watchlistRefreshSymbols.length,
+        maxFilingBodiesPerIssuer: 2,
+        forceRefresh,
+        includeWatchlist: false,
+        includeRecentIssuers: false,
+        includeAskedIssuers: false,
+      });
+      const cappedSuffix = watchlistSymbols.length > watchlistRefreshSymbols.length ? ` First ${watchlistRefreshSymbols.length} symbols were included.` : "";
+      setWarmMessage(
+        `Refreshed ${response.warmedIssuers} of ${response.requestedIssuers} watchlist issuer${
+          response.requestedIssuers === 1 ? "" : "s"
+        }.${cappedSuffix}`,
+      );
+      await queryClient.invalidateQueries({ queryKey: ["edgar-workspace"] });
+    } catch (error) {
+      setWarmError(error instanceof Error ? error.message : "Watchlist filing refresh failed.");
+    } finally {
+      setWarmingMode(null);
+    }
+  }
+
+  async function persistWatchlist(nextSymbols: string[], message: string) {
+    setWatchlistUpdating(true);
+    setWatchlistMessage(null);
+    setWatchlistError(null);
+    try {
+      const response = await accountApi.updateWatchlist({ symbols: nextSymbols });
+      queryClient.setQueryData(queryKeys.account.watchlist, response);
+      await queryClient.invalidateQueries({ queryKey: ["risk-summary"] });
+      setWatchlistMessage(message);
+    } catch (error) {
+      setWatchlistError(error instanceof Error ? error.message : "Watchlist update failed.");
+    } finally {
+      setWatchlistUpdating(false);
+    }
+  }
+
+  async function handleAddWatchlistSymbol() {
+    if (!watchlistInputSymbol || !canAddWatchlistSymbol) {
+      return;
+    }
+    const nextSymbols = [...watchlistSymbols, watchlistInputSymbol];
+    setWatchlistInput("");
+    await persistWatchlist(nextSymbols, `Added ${watchlistInputSymbol} to the watchlist.`);
+  }
+
+  async function handleRemoveWatchlistSymbol(symbol: string) {
+    const nextSymbols = watchlistSymbols.filter((item) => item !== symbol);
+    await persistWatchlist(nextSymbols, `Removed ${symbol} from the watchlist.`);
   }
 
   const header = (
@@ -147,7 +242,7 @@ export function EdgarWorkspace({
           </div>
         </div>
         <p className="mt-2 max-w-3xl text-sm text-muted">
-          Resolve a company, sync its core SEC filing library, and keep the local workspace current without downloader controls.
+          Resolve one company, sync that company's SEC filing library, and keep watchlist filing caches current.
         </p>
       </div>
       <div className="flex flex-col items-start gap-3 lg:items-end">
@@ -159,7 +254,7 @@ export function EdgarWorkspace({
             onClick={handleWarm}
             type="button"
           >
-            {warming ? "Warming..." : "Warm defaults"}
+            {warmingMode === "defaults" ? "Warming metadata..." : "Warm filing metadata"}
           </button>
           <button
             className="rounded-full border border-accent/35 bg-accent/10 px-4 py-2 text-sm font-medium text-accent transition hover:border-accent/50 hover:text-white disabled:cursor-default disabled:opacity-45"
@@ -168,7 +263,7 @@ export function EdgarWorkspace({
             onClick={handleRun}
             type="button"
           >
-            {syncing ? "Syncing filings..." : activeWorkspace ? "Refresh filings" : "Sync SEC filings"}
+            {companyRefreshButtonLabel}
           </button>
         </div>
         {!status?.available ? (
@@ -187,9 +282,9 @@ export function EdgarWorkspace({
           <section className="grid content-start gap-5">
             <div>
               <div className="text-[11px] uppercase tracking-[0.22em] text-muted">Company</div>
-              <h2 className="mt-1 text-xl font-semibold text-text">Sync SEC filings</h2>
+              <h2 className="mt-1 text-xl font-semibold text-text">Company filing library</h2>
               <p className="mt-3 max-w-2xl text-sm leading-6 text-muted">
-                Enter a ticker, company name, or CIK. The backend resolves the issuer, applies default filing coverage, and refreshes the local filing library.
+                Enter a ticker, company name, or CIK. The backend resolves one issuer, applies default filing coverage, and refreshes that company's local library.
               </p>
             </div>
 
@@ -214,8 +309,82 @@ export function EdgarWorkspace({
             <div className="rounded-[18px] border border-line bg-panelSoft/65 px-4 py-4 text-sm leading-6 text-muted">
               <div className="font-medium text-text">Default coverage</div>
               <div className="mt-2">
-                Annual, quarterly, current-report, and amended filings are included automatically. Filing bodies are cached locally under the stock workspace; app-global EDGAR metadata stays under the configured research root.
+                Company sync includes annual, quarterly, current-report, and amended filings automatically. Filing bodies are cached locally under the stock workspace; app-global EDGAR metadata stays under the configured research root.
               </div>
+            </div>
+
+            <div className="rounded-[18px] border border-line bg-panelSoft/55 px-4 py-4" data-testid="edgar-watchlist-panel">
+              <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                <div>
+                  <div className="text-[11px] uppercase tracking-[0.18em] text-muted">Watchlist filing refresh</div>
+                  <div className="mt-1 text-base font-semibold text-text">{watchlistSymbols.length} saved symbols</div>
+                </div>
+                <button
+                  className="inline-flex w-full justify-center rounded-full border border-accent/35 bg-accent/10 px-4 py-2 text-sm font-medium text-accent transition hover:border-accent/50 hover:text-white disabled:cursor-default disabled:opacity-45 md:w-auto"
+                  data-testid="edgar-watchlist-refresh-inline-button"
+                  disabled={!canWarmWatchlist}
+                  onClick={handleWarmWatchlist}
+                  type="button"
+                >
+                  {watchlistPanelRefreshButtonLabel}
+                </button>
+              </div>
+
+              <div className="mt-4 flex flex-wrap gap-2">
+                {watchlistSymbols.length > 0 ? (
+                  watchlistSymbols.map((symbol) => (
+                    <span
+                      className="inline-flex items-center gap-2 rounded-full border border-line bg-panel px-3 py-1 text-sm font-medium text-text"
+                      data-testid={`edgar-watchlist-chip-${symbol}`}
+                      key={symbol}
+                    >
+                      {symbol}
+                      <button
+                        aria-label={`Remove ${symbol} from watchlist`}
+                        className="text-muted transition hover:text-danger disabled:cursor-default disabled:opacity-45"
+                        data-testid={`edgar-watchlist-remove-${symbol}`}
+                        disabled={watchlistUpdating}
+                        onClick={() => void handleRemoveWatchlistSymbol(symbol)}
+                        type="button"
+                      >
+                        x
+                      </button>
+                    </span>
+                  ))
+                ) : (
+                  <span className="text-sm text-muted">{watchlistQuery.isLoading ? "Loading watchlist..." : "No watchlist symbols saved."}</span>
+                )}
+              </div>
+
+              <div className="mt-4 flex flex-col gap-3 sm:flex-row">
+                <label className="min-w-0 flex-1">
+                  <span className="sr-only">Watchlist ticker</span>
+                  <input
+                    className={inputClassName}
+                    data-testid="edgar-watchlist-input"
+                    onChange={(event) => setWatchlistInput(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        void handleAddWatchlistSymbol();
+                      }
+                    }}
+                    placeholder="Ticker"
+                    type="text"
+                    value={watchlistInput}
+                  />
+                </label>
+                <button
+                  className="rounded-full border border-line bg-panelSoft px-4 py-2 text-sm font-medium text-text transition hover:border-accent/35 hover:text-white disabled:cursor-default disabled:opacity-45"
+                  data-testid="edgar-watchlist-add-button"
+                  disabled={!canAddWatchlistSymbol}
+                  onClick={() => void handleAddWatchlistSymbol()}
+                  type="button"
+                >
+                  Add
+                </button>
+              </div>
+              {watchlistMessage ? <div className="mt-3 text-sm text-muted">{watchlistMessage}</div> : null}
             </div>
 
             <details className="rounded-[18px] border border-line bg-panelSoft/45 px-4 py-4" data-testid="edgar-advanced-controls">
@@ -274,7 +443,7 @@ export function EdgarWorkspace({
                       onChange={(event) => setForceRefresh(event.target.checked)}
                       type="checkbox"
                     />
-                    <span>Force refresh</span>
+                    <span>Force live SEC refresh</span>
                   </label>
                   <label className="flex items-center gap-3">
                     <input
@@ -339,9 +508,12 @@ export function EdgarWorkspace({
 
         {statusError ? <InlineMessage tone="danger" message={statusError} /> : null}
         {workspaceError ? <InlineMessage tone="danger" message={workspaceError} /> : null}
+        {loadedWatchlistError ? <InlineMessage tone="danger" message={loadedWatchlistError} /> : null}
+        {watchlistError ? <InlineMessage tone="danger" message={watchlistError} /> : null}
         {warmError ? <InlineMessage tone="danger" message={warmError} /> : null}
         {warmMessage ? <InlineMessage tone="neutral" message={warmMessage} /> : null}
         {syncError ? <InlineMessage tone="danger" message={syncError} /> : null}
+        {syncSuccessMessage ? <InlineMessage tone={syncMessageTone} message={syncSuccessMessage} testId="edgar-sync-success-message" /> : null}
       </section>
 
       <section className={workspaceDividedBodyClassName}>
@@ -382,7 +554,7 @@ export function EdgarWorkspace({
           <div className="px-2 py-8 text-center text-sm text-muted">Looking for a saved EDGAR workspace…</div>
         ) : (
           <div className="rounded-[18px] border border-dashed border-line px-5 py-8 text-center text-sm text-muted" data-testid="edgar-workspace-empty">
-            No simplified EDGAR workspace is recorded for this company yet. Run `Sync SEC filings` to create the local filing library.
+            No simplified EDGAR workspace is recorded for this company yet. Run `Sync company filings` to create the local filing library.
           </div>
         )}
       </section>
@@ -424,12 +596,17 @@ function InfoCard({ eyebrow, title, detail }: { eyebrow: string; title: string; 
   );
 }
 
-function InlineMessage({ message, tone }: { message: string; tone: "danger" | "neutral" }) {
+function InlineMessage({ message, testId, tone }: { message: string; testId?: string; tone: "danger" | "neutral" | "success" }) {
+  const toneClassName =
+    tone === "danger"
+      ? "border-danger/25 bg-danger/10 text-danger"
+      : tone === "success"
+        ? "border-emerald-400/25 bg-emerald-400/10 text-emerald-100"
+        : "border-line bg-panelSoft text-muted";
   return (
     <div
-      className={`mt-5 rounded-[20px] border px-4 py-3 text-sm ${
-        tone === "danger" ? "border-danger/25 bg-danger/10 text-danger" : "border-line bg-panelSoft text-muted"
-      }`}
+      className={`mt-5 rounded-[20px] border px-4 py-3 text-sm ${toneClassName}`}
+      data-testid={testId}
     >
       {message}
     </div>
@@ -501,6 +678,21 @@ function describeState(state: EdgarMetadataState | EdgarBodyCacheState | EdgarIn
     return state.message ?? `${state.cachedFilings} filing bodies are cached locally.`;
   }
   return state.detail ?? "Local filing intelligence is not enabled yet.";
+}
+
+function formatCompanySyncMessage(result: EdgarSyncResponse) {
+  const newAccessions = formatCount(result.metadataState.newAccessions, "new accession");
+  const downloadedBodies = formatCount(result.bodyCacheState.downloadedFilings, "filing body", "filing bodies");
+  const matchedFilings = formatCount(result.bodyCacheState.matchedFilings, "selected filing");
+  const cachedFilings = formatCount(result.bodyCacheState.cachedFilings, "cached filing");
+  const failedSuffix =
+    result.bodyCacheState.failedFilings > 0 ? ` ${formatCount(result.bodyCacheState.failedFilings, "filing body", "filing bodies")} failed.` : "";
+  const liveCheck = result.metadataState.lastLiveCheckedAt ? ` Live check ${formatTimestamp(result.metadataState.lastLiveCheckedAt)}.` : "";
+  return `${result.resolvedTicker} filings refreshed: ${newAccessions}, ${downloadedBodies} downloaded, ${cachedFilings} across ${matchedFilings}.${failedSuffix}${liveCheck}`;
+}
+
+function formatCount(count: number, singular: string, plural = `${singular}s`) {
+  return `${count} ${count === 1 ? singular : plural}`;
 }
 
 function formatTimestamp(value: string) {

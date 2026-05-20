@@ -50,6 +50,8 @@ test.describe("stock intel EDGAR workspace", () => {
     await expect(page.getByTestId("edgar-qwen-workspace")).toBeHidden();
     await expect(page.getByTestId("edgar-source-status")).toContainText("Ready");
     await expect(page.getByTestId("edgar-company-input")).toHaveValue("NVDA");
+    await expect(page.getByTestId("edgar-sync-button")).toContainText("Sync company filings");
+    await expect(page.getByTestId("edgar-watchlist-refresh-inline-button")).toContainText("Refresh 2 symbols");
     await expect(page.getByTestId("edgar-workspace-empty")).toBeVisible();
 
     await page.getByTestId("edgar-warm-button").click();
@@ -57,13 +59,37 @@ test.describe("stock intel EDGAR workspace", () => {
     expect(harness.warmRequests[0]).toMatchObject({ mode: "metadata-only", maxIssuers: 10 });
     await expect(page.getByText("Warmed 2 issuers.", { exact: true })).toBeVisible();
 
+    await page.getByTestId("edgar-watchlist-input").fill("IREN");
+    await page.getByTestId("edgar-watchlist-add-button").click();
+    await expect.poll(() => harness.watchlistUpdates.length, { timeout: 15_000 }).toBe(1);
+    expect(harness.watchlistUpdates[0]).toEqual(["NVDA", "AAPL", "IREN"]);
+    await expect(page.getByTestId("edgar-watchlist-chip-IREN")).toBeVisible();
+
+    await page.getByTestId("edgar-watchlist-remove-NVDA").click();
+    await expect.poll(() => harness.watchlistUpdates.length, { timeout: 15_000 }).toBe(2);
+    expect(harness.watchlistUpdates[1]).toEqual(["AAPL", "IREN"]);
+
+    await page.getByTestId("edgar-watchlist-refresh-inline-button").click();
+    await expect.poll(() => harness.warmRequests.length, { timeout: 15_000 }).toBe(2);
+    expect(harness.warmRequests[1]).toMatchObject({
+      issuerQueries: ["AAPL", "IREN"],
+      mode: "body-cache",
+      maxFilingBodiesPerIssuer: 2,
+      includeWatchlist: false,
+      includeRecentIssuers: false,
+      includeAskedIssuers: false,
+    });
+
     await page.getByTestId("edgar-company-input").fill("AAPL");
     await page.getByTestId("edgar-sync-button").click();
 
     await expect.poll(() => harness.syncRequests.length, { timeout: 15_000 }).toBe(1);
     expect(harness.syncRequests[0]).toMatchObject({ issuerQuery: "AAPL" });
 
-    await expect(page.getByTestId("edgar-sync-button")).toContainText("Refresh filings");
+    await expect(page.getByTestId("edgar-sync-button")).toContainText("Refresh AAPL filings");
+    await expect(page.getByTestId("edgar-sync-success-message")).toContainText(
+      "AAPL filings refreshed: 2 new accessions, 2 filing bodies downloaded",
+    );
     await expect(page.getByTestId("edgar-state-metadata")).toContainText("fresh");
     await expect(page.getByTestId("edgar-state-body-cache")).toContainText("updated");
     await expect(page.getByTestId("edgar-state-intelligence")).toContainText("unavailable");
@@ -78,6 +104,29 @@ test.describe("stock intel EDGAR workspace", () => {
     });
 
     expect(harness.workspaceRequests.some((request) => request?.ticker === "AAPL")).toBeTruthy();
+  });
+
+  test("allows SEC and Qwen company inputs to remain empty after clearing the default ticker", async ({ page }) => {
+    await installEdgarRoutes(page, {
+      initialWorkspace: null,
+    });
+
+    await openEdgarWorkspace(page);
+
+    const secCompanyInput = page.getByTestId("edgar-company-input");
+    await expect(secCompanyInput).toHaveValue("NVDA");
+    await secCompanyInput.fill("");
+    await expect(secCompanyInput).toHaveValue("");
+    await expect(page.getByTestId("edgar-sync-button")).toBeDisabled();
+    await expect(page.getByText("Pending resolution", { exact: true })).toBeVisible();
+
+    await openQwenIntelligenceTab(page);
+
+    const qwenCompanyInput = page.getByTestId("edgar-qwen-company-input");
+    await expect(qwenCompanyInput).toHaveValue("NVDA");
+    await qwenCompanyInput.fill("");
+    await expect(qwenCompanyInput).toHaveValue("");
+    await expect(page.getByText("Pending", { exact: true })).toBeVisible();
   });
 
   test("keeps advanced EDGAR sync overrides behind disclosure", async ({ page }) => {
@@ -217,7 +266,7 @@ test.describe("stock intel EDGAR workspace", () => {
 
     await openEdgarWorkspace(page);
 
-    await expect(page.getByTestId("edgar-sync-button")).toContainText("Refresh filings");
+    await expect(page.getByTestId("edgar-sync-button")).toContainText("Refresh NVDA filings");
     await expect(page.getByTestId("edgar-state-metadata")).toContainText("No new accessions were discovered on the last refresh.");
     await expect(page.getByTestId("edgar-state-body-cache")).toContainText("Filing bodies are already current in the local workspace.");
     await expectWorkspaceDetails(page, {
@@ -240,6 +289,9 @@ test.describe("stock intel EDGAR workspace", () => {
 
     await expect(page.getByTestId("edgar-state-metadata")).toContainText("1 new accessions discovered.");
     await expect(page.getByTestId("edgar-state-body-cache")).toContainText("One newly discovered filing body was cached locally.");
+    await expect(page.getByTestId("edgar-sync-success-message")).toContainText(
+      "NVDA filings refreshed: 1 new accession, 1 filing body downloaded",
+    );
     await expectWorkspaceDetails(page, {
       ticker: "NVDA",
       cik: "0001045810",
@@ -437,7 +489,7 @@ test.describe("stock intel EDGAR workspace", () => {
 
     await openEdgarWorkspace(page);
 
-    await expect(page.getByTestId("edgar-sync-button")).toContainText("Refresh filings");
+    await expect(page.getByTestId("edgar-sync-button")).toContainText("Refresh NVDA filings");
     await expect(page.getByTestId("edgar-state-metadata")).toContainText("stale");
     await expect(page.getByTestId("edgar-state-metadata")).toContainText("Live refresh is overdue; cached metadata may be missing newer filings.");
     await expect(page.getByTestId("edgar-state-body-cache")).toContainText("degraded");
@@ -461,6 +513,9 @@ test.describe("stock intel EDGAR workspace", () => {
     await expect(page.getByTestId("edgar-state-metadata")).toContainText("fresh");
     await expect(page.getByTestId("edgar-state-body-cache")).toContainText("updated");
     await expect(page.getByTestId("edgar-state-body-cache")).toContainText("Recent filing bodies were refreshed locally.");
+    await expect(page.getByTestId("edgar-sync-success-message")).toContainText(
+      "NVDA filings refreshed: 2 new accessions, 2 filing bodies downloaded",
+    );
     await expectWorkspaceDetails(page, {
       ticker: "NVDA",
       cik: "0001045810",
@@ -479,7 +534,9 @@ async function installEdgarRoutes(page, options = {}) {
   const intelligenceStatusRequests = [];
   const indexRequests = [];
   const askRequests = [];
+  const watchlistUpdates = [];
   let currentWorkspace = options.initialWorkspace ?? null;
+  let currentWatchlist = options.initialWatchlist ?? ["NVDA", "AAPL"];
   let currentIntelligenceStatus =
     options.initialIntelligenceStatus ?? buildIntelligenceStatus({ workspace: currentWorkspace, readyForAsk: false, indexStatus: "missing" });
 
@@ -489,6 +546,15 @@ async function installEdgarRoutes(page, options = {}) {
 
   await page.route("**/api/sources/investor-pdfs/status", async (route) => {
     await fulfillJson(route, defaultInvestorPdfStatus());
+  });
+
+  await page.route("**/api/account/watchlist", async (route) => {
+    if (route.request().method() === "POST") {
+      const request = route.request().postDataJSON();
+      currentWatchlist = request?.symbols ?? [];
+      watchlistUpdates.push(currentWatchlist);
+    }
+    await fulfillJson(route, buildWatchlistResponse(currentWatchlist));
   });
 
   await page.route("**/api/sources/edgar/workspace", async (route) => {
@@ -561,6 +627,7 @@ async function installEdgarRoutes(page, options = {}) {
     intelligenceStatusRequests,
     indexRequests,
     askRequests,
+    watchlistUpdates,
     currentWorkspace: () => currentWorkspace,
   };
 }
@@ -655,32 +722,30 @@ function buildSyncResponse({ issuerQuery, workspace }) {
 }
 
 function buildWarmResponse({ request } = {}) {
+  const issuerQueries = request?.issuerQueries?.length ? request.issuerQueries : ["NVDA", "AAPL"];
   return {
     mode: request?.mode ?? "metadata-only",
-    requestedIssuers: 2,
-    warmedIssuers: 2,
+    requestedIssuers: issuerQueries.length,
+    warmedIssuers: issuerQueries.length,
     failedIssuers: 0,
-    results: [
-      {
-        issuerQuery: "NVDA",
-        ticker: "NVDA",
-        status: "warmed",
-        metadataStatus: "fresh",
-        bodyCacheStatus: null,
-        intelligenceStatus: null,
-        message: "Metadata warmed with 34 known filings.",
-      },
-      {
-        issuerQuery: "AAPL",
-        ticker: "AAPL",
-        status: "warmed",
-        metadataStatus: "fresh",
-        bodyCacheStatus: null,
-        intelligenceStatus: null,
-        message: "Metadata warmed with 36 known filings.",
-      },
-    ],
+    results: issuerQueries.map((issuerQuery) => ({
+      issuerQuery,
+      ticker: issuerQuery.toUpperCase(),
+      status: "warmed",
+      metadataStatus: "fresh",
+      bodyCacheStatus: request?.mode === "body-cache" ? "updated" : null,
+      intelligenceStatus: null,
+      message: "Metadata warmed.",
+    })),
     generatedAt: "2026-04-27T20:05:00Z",
+  };
+}
+
+function buildWatchlistResponse(symbols) {
+  return {
+    symbols,
+    statePath: "/tmp/research-root/.app/watchlist.json",
+    updatedAt: "2026-04-27T20:05:00Z",
   };
 }
 

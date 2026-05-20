@@ -21,6 +21,7 @@ export function useEdgarSync() {
 
   async function runEdgarSync(request: EdgarSyncRequest) {
     setSyncError(null);
+    setSyncResult(undefined);
     try {
       const result = await mutation.mutateAsync(request);
       setSyncResult(result);
