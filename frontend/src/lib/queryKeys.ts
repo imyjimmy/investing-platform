@@ -2,6 +2,7 @@ export const queryKeys = {
   account: {
     connectionStatus: ["connection-status"] as const,
     riskSummary: (accountId?: string) => ["risk-summary", accountId] as const,
+    watchlist: ["watchlist"] as const,
     positions: (accountId?: string) => ["positions", accountId] as const,
     optionPositions: (accountId?: string) => ["option-positions", accountId] as const,
     openOrders: (accountId?: string) => ["open-orders", accountId] as const,
@@ -18,6 +19,7 @@ export const queryKeys = {
     coinbasePortfolio: ["coinbase-portfolio"] as const,
     okxStatus: ["okx-status"] as const,
     finnhubStatus: ["finnhub-status"] as const,
+    marketDataSourcesStatus: ["market-data-sources-status"] as const,
     filesystemConnectorStatuses: (accountKey: string) => ["filesystem-connector-statuses", accountKey] as const,
     filesystemConnectorPortfolio: (accountKey: string, sourceId?: string) =>
       sourceId

@@ -13,6 +13,9 @@ from investing_platform.models import (
     FilesystemDocumentFolderResponse,
     FinnhubConnectorConfigRequest,
     FinnhubSourceStatus,
+    MarketDataSourceConfigRequest,
+    MarketDataSourceStatus,
+    MarketDataSourcesResponse,
     OkxSourceStatus,
 )
 
@@ -21,6 +24,7 @@ from ._helpers import (
     coinbase_service,
     filesystem_connector_service,
     finnhub_service,
+    market_data_source_service,
     not_found,
     okx_service,
     service_unavailable,
@@ -53,6 +57,21 @@ def finnhub_status(probe: bool = Query(default=False)) -> FinnhubSourceStatus:
 def finnhub_configure(request: FinnhubConnectorConfigRequest) -> FinnhubSourceStatus:
     try:
         return finnhub_service().configure(request)
+    except ValueError as exc:
+        bad_request(exc)
+    except Exception as exc:
+        service_unavailable(exc)
+
+
+@router.get("/market-data-sources/status", response_model=MarketDataSourcesResponse)
+def market_data_sources_status() -> MarketDataSourcesResponse:
+    return market_data_source_service().source_status()
+
+
+@router.post("/market-data-sources/{provider_id}/configure", response_model=MarketDataSourceStatus)
+def market_data_source_configure(provider_id: str, request: MarketDataSourceConfigRequest) -> MarketDataSourceStatus:
+    try:
+        return market_data_source_service().configure(provider_id, request)
     except ValueError as exc:
         bad_request(exc)
     except Exception as exc:

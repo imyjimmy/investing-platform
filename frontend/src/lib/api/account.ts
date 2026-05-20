@@ -5,6 +5,8 @@ import type {
   OptionStrategyPermissionsResponse,
   PositionsResponse,
   RiskSummaryResponse,
+  WatchlistResponse,
+  WatchlistUpdateRequest,
 } from "../types";
 import { fetchJson, postJson, withAccountId } from "./transport";
 
@@ -14,6 +16,8 @@ export const accountApi = {
   reconnect: () => postJson<ConnectionStatus>("/api/reconnect"),
   positions: (accountId?: string) => fetchJson<PositionsResponse>(withAccountId("/api/account/positions", accountId)),
   riskSummary: (accountId?: string) => fetchJson<RiskSummaryResponse>(withAccountId("/api/account/risk-summary", accountId)),
+  watchlist: () => fetchJson<WatchlistResponse>("/api/account/watchlist"),
+  updateWatchlist: (request: WatchlistUpdateRequest) => postJson<WatchlistResponse>("/api/account/watchlist", request),
   optionPositions: (accountId?: string) =>
     fetchJson<OptionPositionsResponse>(withAccountId("/api/account/options-positions", accountId)),
   optionStrategyPermissions: (accountId: string, symbol: string, expiry?: string) => {

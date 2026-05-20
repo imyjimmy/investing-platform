@@ -13,10 +13,13 @@ from investing_platform.services.app_state import (
     get_filesystem_connector_service,
     get_finnhub_service,
     get_investor_pdf_service,
+    get_market_data_source_service,
     get_market_data_service,
     get_okx_service,
     get_settings,
+    get_stock_intelligence_service,
     get_universe_screener_service,
+    get_watchlist_service,
 )
 from investing_platform.services.base import BrokerUnavailableError
 
@@ -27,6 +30,10 @@ def broker_service():
 
 def settings():
     return get_settings()
+
+
+def watchlist_service():
+    return get_watchlist_service()
 
 
 def edgar_service():
@@ -55,6 +62,14 @@ def okx_service():
 
 def market_data_service():
     return get_market_data_service()
+
+
+def market_data_source_service():
+    return get_market_data_source_service()
+
+
+def stock_intelligence_service():
+    return get_stock_intelligence_service()
 
 
 def universe_service():

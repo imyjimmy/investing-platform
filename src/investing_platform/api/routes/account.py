@@ -11,11 +11,13 @@ from investing_platform.models import (
     OptionStrategyPermissionsResponse,
     PositionsResponse,
     RiskSummaryResponse,
+    WatchlistResponse,
+    WatchlistUpdateRequest,
 )
 from investing_platform.services.analytics import build_risk_summary
 from investing_platform.services.base import BrokerUnavailableError
 
-from ._helpers import broker_service, portfolio_snapshot, service_unavailable, settings
+from ._helpers import bad_request, broker_service, portfolio_snapshot, service_unavailable, settings, watchlist_service
 
 
 router = APIRouter(prefix="/account", tags=["account"])
@@ -90,4 +92,20 @@ def open_orders(accountId: str | None = Query(default=None)) -> OpenOrdersRespon
 @router.get("/risk-summary", response_model=RiskSummaryResponse)
 def risk_summary(accountId: str | None = Query(default=None)) -> RiskSummaryResponse:
     snapshot = portfolio_snapshot(accountId)
-    return build_risk_summary(snapshot, settings().safety_buffer, settings().public_watchlist())
+    return build_risk_summary(snapshot, settings().safety_buffer, watchlist_service().symbols())
+
+
+@router.get("/watchlist", response_model=WatchlistResponse)
+def account_watchlist() -> WatchlistResponse:
+    try:
+        return watchlist_service().get_watchlist()
+    except ValueError as exc:
+        bad_request(exc)
+
+
+@router.post("/watchlist", response_model=WatchlistResponse)
+def account_watchlist_update(request: WatchlistUpdateRequest) -> WatchlistResponse:
+    try:
+        return watchlist_service().update_watchlist(request)
+    except ValueError as exc:
+        bad_request(exc)

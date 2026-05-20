@@ -173,6 +173,16 @@ export interface RiskSummaryResponse {
   isStale: boolean;
 }
 
+export interface WatchlistUpdateRequest {
+  symbols: string[];
+}
+
+export interface WatchlistResponse {
+  symbols: string[];
+  statePath: string;
+  updatedAt?: string | null;
+}
+
 export interface UnderlyingQuote {
   symbol: string;
   price: number;
@@ -731,6 +741,84 @@ export interface FinnhubConnectorConfigRequest {
   apiKey: string | null;
 }
 
+export type MarketDataSourceStatusValue = "ready" | "disabled" | "not_configured" | "planned";
+
+export interface MarketDataSourceStatus {
+  providerId: string;
+  displayName: string;
+  category: string;
+  status: MarketDataSourceStatusValue;
+  available: boolean;
+  configured: boolean;
+  enabled: boolean;
+  configurable: boolean;
+  requiresApiKey: boolean;
+  apiBaseUrl: string | null;
+  maskedApiKey: string | null;
+  capabilities: string[];
+  detail: string;
+  updatedAt: string | null;
+}
+
+export interface MarketDataSourcesResponse {
+  sources: MarketDataSourceStatus[];
+  statePath: string;
+  generatedAt: string;
+}
+
+export interface MarketDataSourceConfigRequest {
+  apiKey?: string | null;
+  enabled?: boolean | null;
+  clearApiKey?: boolean;
+}
+
+export type StockIntelligenceSourceId = "market_snapshot" | "financials" | "edgar" | "market_data_sources";
+export type StockIntelligenceEvidenceType = "ticker_overview" | "financials" | "edgar_readiness" | "provider_status" | "limitation";
+export type StockIntelligenceConfidence = "low" | "medium" | "high";
+export type StockIntelligencePlanStrategy = "broad_default" | "explicit_sources";
+
+export interface StockIntelligenceRequest {
+  ticker: string;
+  question: string;
+  outputDir?: string | null;
+  sources?: StockIntelligenceSourceId[];
+  allowStale?: boolean;
+  maxEvidenceItems?: number;
+}
+
+export interface StockIntelligencePlan {
+  strategy: StockIntelligencePlanStrategy;
+  selectedSources: StockIntelligenceSourceId[];
+  availableSources: StockIntelligenceSourceId[];
+  skippedSources: string[];
+  notes: string[];
+}
+
+export interface StockIntelligenceEvidence {
+  evidenceId: string;
+  source: StockIntelligenceSourceId;
+  evidenceType: StockIntelligenceEvidenceType;
+  title: string;
+  summary: string;
+  sourceLabel: string;
+  asOf: string | null;
+  sourceUrl: string | null;
+  sourcePath: string | null;
+  payload: Record<string, unknown>;
+}
+
+export interface StockIntelligenceResponse {
+  ticker: string;
+  question: string;
+  answer: string;
+  confidence: StockIntelligenceConfidence;
+  generatedAt: string;
+  plan: StockIntelligencePlan;
+  evidence: StockIntelligenceEvidence[];
+  limitations: string[];
+  nextActions: string[];
+}
+
 export interface OkxSourceStatus {
   available: boolean;
   status: "ready" | "degraded";
@@ -839,6 +927,10 @@ export interface FilesystemConnectorPortfolioResponse {
   todayPnlPctBasis: number | null;
   monthlyPnlPctBasis: number | null;
   netContributions: number | null;
+  annualizedSharpeRatio: number | null;
+  sharpeObservations: number;
+  sharpePeriodStart: string | null;
+  sharpePeriodEnd: string | null;
   investmentAccountsCount: number;
   holdingsCount: number;
   accounts: FilesystemInvestmentAccount[];

@@ -11,7 +11,7 @@ import random
 import re
 import threading
 import time
-from typing import Any
+from typing import Any, Callable
 
 import requests
 
@@ -65,7 +65,7 @@ from investing_platform.services.edgar_sync import EdgarSyncService
 class EdgarDownloader:
     """Reusable SEC EDGAR downloader for the dashboard and CLI."""
 
-    def __init__(self, settings: DashboardSettings) -> None:
+    def __init__(self, settings: DashboardSettings, *, watchlist_provider: Callable[[], list[str]] | None = None) -> None:
         self._settings = settings
         self._company_lookup_cache: list[dict[str, Any]] | None = None
         self._company_lookup_lock = threading.Lock()
@@ -80,6 +80,7 @@ class EdgarDownloader:
             metadata_cache=self._metadata_cache_service,
             artifact_store=self,
             intelligence=self._intelligence_service,
+            watchlist_provider=watchlist_provider,
         )
 
     def source_status(self) -> EdgarSourceStatus:

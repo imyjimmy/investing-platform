@@ -26,6 +26,9 @@ import type {
   InvestorPdfDownloadRequest,
   InvestorPdfDownloadResponse,
   InvestorPdfSourceStatus,
+  MarketDataSourceConfigRequest,
+  MarketDataSourceStatus,
+  MarketDataSourcesResponse,
   OkxSourceStatus,
 } from "../types";
 import { fetchJson, postJson, withAccountKey } from "./transport";
@@ -44,6 +47,9 @@ export const sourceApi = {
   finnhubStatus: (probe = false) => fetchJson<FinnhubSourceStatus>(withProbe("/api/sources/finnhub/status", probe)),
   finnhubConfigure: (request: FinnhubConnectorConfigRequest) =>
     postJson<FinnhubSourceStatus>("/api/sources/finnhub/configure", request),
+  marketDataSourcesStatus: () => fetchJson<MarketDataSourcesResponse>("/api/sources/market-data-sources/status"),
+  marketDataSourceConfigure: (providerId: string, request: MarketDataSourceConfigRequest) =>
+    postJson<MarketDataSourceStatus>(`/api/sources/market-data-sources/${encodeURIComponent(providerId)}/configure`, request),
   okxStatus: (probe = false) => fetchJson<OkxSourceStatus>(withProbe("/api/sources/okx/status", probe)),
   filesystemConnectorStatuses: (accountKey: string) =>
     fetchJson<FilesystemConnectorStatus[]>(withAccountKey("/api/sources/filesystem/connectors", accountKey)),

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -79,6 +79,16 @@ EdgarWarmIssuerStatus = Literal["warmed", "partial", "failed", "skipped"]
 EdgarQuestionConfidence = Literal["low", "medium", "high"]
 EdgarAnswerStyle = Literal["bullets", "paragraph"]
 EdgarComparisonMode = Literal["latest-annual-vs-prior-annual", "latest-quarter-vs-prior-quarter", "recent-current-reports-by-topic"]
+StockIntelligenceSourceId = Literal["market_snapshot", "financials", "edgar", "market_data_sources"]
+StockIntelligenceEvidenceType = Literal[
+    "ticker_overview",
+    "financials",
+    "edgar_readiness",
+    "provider_status",
+    "limitation",
+]
+StockIntelligenceConfidence = Literal["low", "medium", "high"]
+StockIntelligencePlanStrategy = Literal["broad_default", "explicit_sources"]
 
 
 class ConnectionStatus(DashboardModel):
@@ -467,6 +477,26 @@ class RiskSummaryResponse(DashboardModel):
     watchlist: list[str]
     generatedAt: datetime
     isStale: bool = False
+
+
+class WatchlistUpdateRequest(DashboardModel):
+    symbols: list[str] = Field(default_factory=list)
+
+    @field_validator("symbols")
+    @classmethod
+    def _normalize_symbols(cls, value: list[str]) -> list[str]:
+        deduped: list[str] = []
+        for symbol in value:
+            normalized = symbol.strip().upper()
+            if normalized and normalized not in deduped:
+                deduped.append(normalized)
+        return deduped
+
+
+class WatchlistResponse(DashboardModel):
+    symbols: list[str]
+    statePath: str
+    updatedAt: datetime | None = None
 
 
 class ScenarioTickerImpact(DashboardModel):
@@ -963,6 +993,38 @@ class FinnhubConnectorConfigRequest(DashboardModel):
     apiKey: str | None = None
 
 
+MarketDataSourceStatusValue = Literal["ready", "disabled", "not_configured", "planned"]
+
+
+class MarketDataSourceStatus(DashboardModel):
+    providerId: str
+    displayName: str
+    category: str
+    status: MarketDataSourceStatusValue
+    available: bool
+    configured: bool
+    enabled: bool
+    configurable: bool
+    requiresApiKey: bool
+    apiBaseUrl: str | None = None
+    maskedApiKey: str | None = None
+    capabilities: list[str] = Field(default_factory=list)
+    detail: str
+    updatedAt: datetime | None = None
+
+
+class MarketDataSourcesResponse(DashboardModel):
+    sources: list[MarketDataSourceStatus] = Field(default_factory=list)
+    statePath: str
+    generatedAt: datetime
+
+
+class MarketDataSourceConfigRequest(DashboardModel):
+    apiKey: str | None = None
+    enabled: bool | None = None
+    clearApiKey: bool = False
+
+
 class CoinbaseHolding(DashboardModel):
     accountId: str
     accountName: str
@@ -1061,6 +1123,10 @@ class FilesystemConnectorPortfolioResponse(DashboardModel):
     todayPnlPctBasis: float | None = None
     monthlyPnlPctBasis: float | None = None
     netContributions: float | None = None
+    annualizedSharpeRatio: float | None = None
+    sharpeObservations: int = 0
+    sharpePeriodStart: date | None = None
+    sharpePeriodEnd: date | None = None
     investmentAccountsCount: int
     holdingsCount: int
     accounts: list[FilesystemInvestmentAccount] = Field(default_factory=list)
@@ -1748,3 +1814,70 @@ class InvestorPdfDownloadResponse(DashboardModel):
     cacheHit: bool = False
     cacheExpiresAt: datetime | None = None
     cacheMessage: str | None = None
+
+
+class StockIntelligenceRequest(DashboardModel):
+    ticker: str
+    question: str
+    outputDir: str | None = None
+    sources: list[StockIntelligenceSourceId] = Field(default_factory=list)
+    allowStale: bool = False
+    maxEvidenceItems: int = Field(default=16, ge=1, le=64)
+
+    @field_validator("ticker")
+    @classmethod
+    def _normalize_stock_intelligence_ticker(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if not normalized:
+            raise ValueError("Provide a ticker.")
+        return normalized
+
+    @field_validator("question")
+    @classmethod
+    def _normalize_stock_intelligence_question(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Provide a question.")
+        return normalized
+
+    @field_validator("sources")
+    @classmethod
+    def _dedupe_stock_intelligence_sources(cls, value: list[StockIntelligenceSourceId]) -> list[StockIntelligenceSourceId]:
+        deduped: list[StockIntelligenceSourceId] = []
+        for source in value:
+            if source not in deduped:
+                deduped.append(source)
+        return deduped
+
+
+class StockIntelligencePlan(DashboardModel):
+    strategy: StockIntelligencePlanStrategy
+    selectedSources: list[StockIntelligenceSourceId] = Field(default_factory=list)
+    availableSources: list[StockIntelligenceSourceId] = Field(default_factory=list)
+    skippedSources: list[str] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+
+class StockIntelligenceEvidence(DashboardModel):
+    evidenceId: str
+    source: StockIntelligenceSourceId
+    evidenceType: StockIntelligenceEvidenceType
+    title: str
+    summary: str
+    sourceLabel: str
+    asOf: datetime | date | None = None
+    sourceUrl: str | None = None
+    sourcePath: str | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class StockIntelligenceResponse(DashboardModel):
+    ticker: str
+    question: str
+    answer: str
+    confidence: StockIntelligenceConfidence
+    generatedAt: datetime
+    plan: StockIntelligencePlan
+    evidence: list[StockIntelligenceEvidence] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
+    nextActions: list[str] = Field(default_factory=list)

@@ -141,6 +141,7 @@ class DashboardSettings:
     finnhub_api_base_url: str = "https://finnhub.io/api/v1"
     finnhub_timeout_seconds: float = 15.0
     finnhub_connector_state_file: Path = Path("~/.investing-platform/connectors/finnhub.json").expanduser()
+    market_data_sources_state_file: Path = Path("~/.investing-platform/connectors/market-data-sources.json").expanduser()
     filesystem_connectors_state_file: Path = Path("~/.investing-platform/filesystem-connectors/connectors.json").expanduser()
     backend_host: str = "127.0.0.1"
     backend_port: int = 8000
@@ -324,6 +325,10 @@ class DashboardSettings:
                 "INVESTING_PLATFORM_FINNHUB_CONNECTOR_STATE_PATH",
                 default="~/.investing-platform/connectors/finnhub.json",
             ),
+            market_data_sources_state_file=_env_path(
+                "INVESTING_PLATFORM_MARKET_DATA_SOURCES_STATE_PATH",
+                default="~/.investing-platform/connectors/market-data-sources.json",
+            ),
             filesystem_connectors_state_file=_env_path(
                 "INVESTING_PLATFORM_FILESYSTEM_CONNECTORS_STATE_PATH",
                 default="~/.investing-platform/filesystem-connectors/connectors.json",
@@ -356,6 +361,10 @@ class DashboardSettings:
     @property
     def finnhub_connector_state_path(self) -> Path:
         return self.finnhub_connector_state_file
+
+    @property
+    def market_data_sources_state_path(self) -> Path:
+        return self.market_data_sources_state_file
 
     @property
     def stocks_root(self) -> Path:
