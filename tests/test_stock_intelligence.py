@@ -2,11 +2,20 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 
+from fastapi.testclient import TestClient
+
+import investing_platform.api.routes.intelligence as intelligence_routes
+from investing_platform.main import app
 from investing_platform.models import (
+    FinancialMetricRow,
+    FinancialPeriodColumn,
+    FinancialStatementTable,
     FundamentalReportStatus,
     MarketDataSourcesResponse,
     MarketDataSourceStatus,
+    StockIntelligenceEvidence,
     StockIntelligenceRequest,
+    StockIntelligenceResponse,
     TickerFinancialsResponse,
     TickerOverviewResponse,
     UnderlyingQuote,
@@ -37,11 +46,53 @@ class FakeMarketDataService:
 
     def get_ticker_financials(self, symbol: str) -> TickerFinancialsResponse:
         self.financial_calls.append(symbol)
+        if symbol.upper() == "NVDA":
+            return _financials_response(
+                symbol=symbol,
+                revenue_actual=60_500,
+                revenue_prior=35_100,
+                revenue_estimate=58_000,
+                eps_actual=1.09,
+                eps_prior=0.61,
+                eps_estimate=1.02,
+                period="Q1 FY27",
+            )
         return TickerFinancialsResponse(
             symbol=symbol,
             reports=[
                 FundamentalReportStatus(reportType="statements", available=True),
-                FundamentalReportStatus(reportType="estimates", available=False, message="No estimates in fake source."),
+                FundamentalReportStatus(reportType="estimates", available=True),
+            ],
+            statements=[
+                FinancialStatementTable(
+                    statementType="income_statement",
+                    periodType="quarterly",
+                    title="Quarterly Income Statement",
+                    currency="USD",
+                    unit="millions",
+                    columns=[
+                        FinancialPeriodColumn(label="Q3 FY26", fiscalPeriod="Q3 FY26", periodEnding=date(2026, 3, 31)),
+                        FinancialPeriodColumn(label="Q2 FY26", fiscalPeriod="Q2 FY26", periodEnding=date(2025, 12, 31)),
+                    ],
+                    rows=[
+                        FinancialMetricRow(label="Revenue", values=[144.8, 184.7]),
+                        FinancialMetricRow(label="EPS", values=[-0.16, -0.30]),
+                    ],
+                )
+            ],
+            estimates=[
+                FinancialStatementTable(
+                    statementType="estimates",
+                    periodType="quarterly",
+                    title="Analyst Estimates",
+                    currency="USD",
+                    unit="millions",
+                    columns=[FinancialPeriodColumn(label="Q3 FY26", fiscalPeriod="Q3 FY26", periodEnding=date(2026, 3, 31))],
+                    rows=[
+                        FinancialMetricRow(label="Consensus Revenue", values=[219.87]),
+                        FinancialMetricRow(label="Consensus EPS", values=[-0.22]),
+                    ],
+                )
             ],
             generatedAt=NOW,
             sourceNotices=["fake financials"],
@@ -55,6 +106,47 @@ class FakeEdgarService:
     def intelligence_api_status(self, ticker: str, output_dir: str | None = None):
         self.calls.append((ticker, output_dir))
         return FakeEdgarStatus()
+
+    def stock_intelligence_evidence(self, request: StockIntelligenceRequest, *, start: int):
+        self.calls.append((request.ticker, request.outputDir))
+        if request.ticker == "IREN":
+            return [
+                StockIntelligenceEvidence(
+                    evidenceId=f"E{start}",
+                    source="edgar",
+                    evidenceType="strategic_event",
+                    title="IREN NVIDIA strategic financing and cloud agreement",
+                    summary="NVIDIA-linked transaction and investment rights disclosed in filing evidence.",
+                    sourceLabel="Local EDGAR filing excerpts",
+                    asOf=NOW,
+                    payload={
+                        "facts": [
+                            {
+                                "kind": "strategic_event",
+                                "label": "NVIDIA deal",
+                                "summary": "IREN disclosed NVIDIA-related AI cloud commitments and investment rights.",
+                                "terms": [{"label": "stock option", "value": "about $70.00"}],
+                                "assessment": "bullish validation for demand, but not a complete investment thesis by itself.",
+                                "caveats": ["execution risk", "financing needs", "capacity delivery risk"],
+                            }
+                        ]
+                    },
+                )
+            ]
+        if request.ticker == "NVDA":
+            return [
+                StockIntelligenceEvidence(
+                    evidenceId=f"E{start}",
+                    source="edgar",
+                    evidenceType="guidance",
+                    title="NVDA demand commentary",
+                    summary="Management described continued AI infrastructure demand.",
+                    sourceLabel="Local EDGAR filing excerpts",
+                    asOf=NOW,
+                    payload={"facts": [{"kind": "guidance", "label": "AI demand", "summary": "Management pointed to continued AI infrastructure demand."}]},
+                )
+            ]
+        return []
 
 
 class FakeEdgarStatus:
@@ -111,7 +203,7 @@ class FakeMarketDataSourceService:
 def test_stock_intelligence_builds_broad_default_evidence_without_keyword_routing() -> None:
     market_data = FakeMarketDataService()
     edgar = FakeEdgarService()
-    market_sources = FakeMarketDataSourceService()
+    market_sources = FakeMarketDataSourceService(available=True)
     service = StockIntelligenceService(market_data=market_data, edgar=edgar, market_data_sources=market_sources)
 
     response = service.ask(
@@ -129,9 +221,13 @@ def test_stock_intelligence_builds_broad_default_evidence_without_keyword_routin
     assert market_data.financial_calls == ["IREN"]
     assert edgar.calls == [("IREN", None)]
     assert market_sources.calls == 1
-    assert "Current financial data sources did not return analyst estimate tables." in response.limitations
-    assert "No external consensus/news provider is ready yet." in response.limitations
     assert "keyword" in " ".join(response.plan.notes).lower()
+    assert "Revenue missed" in response.answer
+    assert "$144.8M" in response.answer
+    assert "$219.9M" in response.answer
+    assert "$184.7M" in response.answer
+    assert "EPS beat" in response.answer
+    assert "[E2]" in response.answer
 
 
 def test_stock_intelligence_honors_explicit_source_list() -> None:
@@ -155,3 +251,123 @@ def test_stock_intelligence_honors_explicit_source_list() -> None:
     assert market_data.financial_calls == []
     assert edgar.calls == []
     assert market_sources.calls == 0
+
+
+def test_stock_intelligence_answers_open_ended_iren_nvidia_deal_question() -> None:
+    service = StockIntelligenceService(
+        market_data=FakeMarketDataService(),
+        edgar=FakeEdgarService(),
+        market_data_sources=FakeMarketDataSourceService(available=True),
+    )
+
+    response = service.ask(
+        StockIntelligenceRequest(
+            ticker="IREN",
+            question="Summarize IREN's deal with NVIDIA. Is it bullish for IREN?",
+        )
+    )
+
+    assert response.confidence == "high"
+    assert "NVIDIA deal" in response.answer
+    assert "$70.00" in response.answer
+    assert "bullish validation" in response.answer
+    assert "execution risk" in response.answer
+    assert "[E3]" in response.answer
+
+
+def test_stock_intelligence_answers_open_ended_nvda_quarter_question() -> None:
+    service = StockIntelligenceService(
+        market_data=FakeMarketDataService(),
+        edgar=FakeEdgarService(),
+        market_data_sources=FakeMarketDataSourceService(available=True),
+    )
+
+    response = service.ask(
+        StockIntelligenceRequest(
+            ticker="NVDA",
+            question="What are the main things to watch after NVDA's latest quarter?",
+        )
+    )
+
+    assert "Revenue beat" in response.answer
+    assert "$60,500.0M" in response.answer
+    assert "$58,000.0M" in response.answer
+    assert "prior period was $35,100.0M" in response.answer
+    assert "AI demand" in response.answer
+    assert "[E2]" in response.answer
+    assert "[E3]" in response.answer
+
+
+def test_general_stock_intelligence_endpoint_returns_synthesized_answer(monkeypatch) -> None:
+    service = StockIntelligenceService(
+        market_data=FakeMarketDataService(),
+        edgar=FakeEdgarService(),
+        market_data_sources=FakeMarketDataSourceService(available=True),
+    )
+    monkeypatch.setattr(intelligence_routes, "stock_intelligence_service", lambda: service)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/intelligence/stock/ask",
+            json={"ticker": "IREN", "question": "Did IREN miss their latest quarterly earnings numbers?"},
+        )
+
+    assert response.status_code == 200
+    payload = StockIntelligenceResponse.model_validate(response.json())
+    assert payload.ticker == "IREN"
+    assert "Revenue missed" in payload.answer
+    assert "EPS beat" in payload.answer
+    assert payload.evidence
+
+
+def _financials_response(
+    *,
+    symbol: str,
+    revenue_actual: float,
+    revenue_prior: float,
+    revenue_estimate: float,
+    eps_actual: float,
+    eps_prior: float,
+    eps_estimate: float,
+    period: str,
+) -> TickerFinancialsResponse:
+    return TickerFinancialsResponse(
+        symbol=symbol,
+        reports=[
+            FundamentalReportStatus(reportType="statements", available=True),
+            FundamentalReportStatus(reportType="estimates", available=True),
+        ],
+        statements=[
+            FinancialStatementTable(
+                statementType="income_statement",
+                periodType="quarterly",
+                title="Quarterly Income Statement",
+                currency="USD",
+                unit="millions",
+                columns=[
+                    FinancialPeriodColumn(label=period, fiscalPeriod=period),
+                    FinancialPeriodColumn(label="Prior quarter", fiscalPeriod="Prior quarter"),
+                ],
+                rows=[
+                    FinancialMetricRow(label="Revenue", values=[revenue_actual, revenue_prior]),
+                    FinancialMetricRow(label="EPS", values=[eps_actual, eps_prior]),
+                ],
+            )
+        ],
+        estimates=[
+            FinancialStatementTable(
+                statementType="estimates",
+                periodType="quarterly",
+                title="Analyst Estimates",
+                currency="USD",
+                unit="millions",
+                columns=[FinancialPeriodColumn(label=period, fiscalPeriod=period)],
+                rows=[
+                    FinancialMetricRow(label="Consensus Revenue", values=[revenue_estimate]),
+                    FinancialMetricRow(label="Consensus EPS", values=[eps_estimate]),
+                ],
+            )
+        ],
+        generatedAt=NOW,
+        sourceNotices=["fake financials"],
+    )
