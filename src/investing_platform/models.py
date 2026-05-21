@@ -84,6 +84,9 @@ StockIntelligenceEvidenceType = Literal[
     "ticker_overview",
     "financials",
     "edgar_readiness",
+    "strategic_event",
+    "guidance",
+    "market_reaction",
     "provider_status",
     "limitation",
 ]

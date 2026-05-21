@@ -773,7 +773,15 @@ export interface MarketDataSourceConfigRequest {
 }
 
 export type StockIntelligenceSourceId = "market_snapshot" | "financials" | "edgar" | "market_data_sources";
-export type StockIntelligenceEvidenceType = "ticker_overview" | "financials" | "edgar_readiness" | "provider_status" | "limitation";
+export type StockIntelligenceEvidenceType =
+  | "ticker_overview"
+  | "financials"
+  | "edgar_readiness"
+  | "strategic_event"
+  | "guidance"
+  | "market_reaction"
+  | "provider_status"
+  | "limitation";
 export type StockIntelligenceConfidence = "low" | "medium" | "high";
 export type StockIntelligencePlanStrategy = "broad_default" | "explicit_sources";
 

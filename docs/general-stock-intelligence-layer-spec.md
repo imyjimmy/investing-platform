@@ -86,9 +86,9 @@ Qwen synthesis must consume this evidence contract, not raw service-specific pay
 
 Phase 1:
 
-- add a Qwen synthesis pass over `StockIntelligenceEvidence`
-- validate generated claims against evidence ids
-- return a unified citation array
+- synthesize a first-pass answer from typed `StockIntelligenceEvidence.payload.facts`
+- cite every rendered fact with its evidence id
+- keep Qwen as the next synthesis upgrade, consuming the same evidence contract instead of source-specific payloads
 
 Phase 2:
 
@@ -101,3 +101,14 @@ Phase 3:
 - add a structured planner that emits source requirements, date ranges, ticker scope, and confidence
 - test planner behavior against fixed natural-language question suites
 - keep planner output metadata-oriented; do not route on company-specific answer content
+
+## Phase 1 Slice
+
+The initial answerer is deterministic and intentionally small:
+
+- collectors gather broad default evidence
+- financial tables are normalized into typed earnings-result facts when actual and estimate rows are present
+- source adapters may return typed event, guidance, and market-reaction facts
+- the synthesizer renders those facts into a cited answer using evidence ids such as `E2`
+
+This avoids question-specific keyword routing. The only label matching in this slice is schema-level financial metric normalization, such as mapping revenue and EPS table rows into typed facts.
