@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
-import { sourceApi } from "../../lib/api";
+import { sourceApi } from "../../lib/api/sources";
 import type { EdgarQuestionRequest, EdgarQuestionResponse } from "../../lib/types";
 import { stockIntelMutationKeys } from "./stockIntelKeys";
 

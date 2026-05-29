@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 
 import { AccountDashboardView } from "../../components/AccountDashboardView";
 import { AccountConnectorSection } from "../../components/AccountConnectorSection";
@@ -54,6 +54,7 @@ type AccountSourceSummary = AccountConnectorCard & {
 };
 
 const CSV_FOLDER_CONNECTOR_ID: ConnectorCatalogId = "csvFolder";
+const AVAILABLE_CONNECTOR_OPTIONS = CONNECTOR_CATALOG.filter((connector) => connector.availability === "ready");
 
 export function DashboardWorkspace() {
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
@@ -133,11 +134,19 @@ export function DashboardWorkspace() {
     : coinbaseStatusQuery.data?.available
       ? `Assigned to ${coinbaseAssignedAccount?.name ?? "configured"} dashboard`
       : `Connector settings for ${coinbaseAssignedAccount?.name ?? "configured"} dashboard`;
-  const localBackendUnavailable =
-    isLocalBackendUnavailable(connectionQueryError) ||
-    isLocalBackendUnavailable(filesystemConnectorStatusesError) ||
-    Object.values(filesystemConnectorPortfolioErrorBySourceId).some((message) => isLocalBackendUnavailable(message)) ||
-    Object.values(filesystemDocumentFolderErrorBySourceId).some((message) => isLocalBackendUnavailable(message));
+  const localBackendUnavailable = useMemo(
+    () =>
+      isLocalBackendUnavailable(connectionQueryError) ||
+      isLocalBackendUnavailable(filesystemConnectorStatusesError) ||
+      Object.values(filesystemConnectorPortfolioErrorBySourceId).some((message) => isLocalBackendUnavailable(message)) ||
+      Object.values(filesystemDocumentFolderErrorBySourceId).some((message) => isLocalBackendUnavailable(message)),
+    [
+      connectionQueryError,
+      filesystemConnectorPortfolioErrorBySourceId,
+      filesystemConnectorStatusesError,
+      filesystemDocumentFolderErrorBySourceId,
+    ],
+  );
   const selectedDashboardAccount = getDashboardAccountByKey(selectedDashboardAccountKey);
   const selectedDashboardOwnsRoute = dashboardAccountOwnsRoute(selectedDashboardAccount.key, routedAccount);
   const dashboardOptionPositions = selectedDashboardOwnsRoute ? optionPositions : [];
@@ -291,62 +300,135 @@ export function DashboardWorkspace() {
     };
   }
 
-  const accountSourceSummaries: AccountSourceSummary[] = [buildIbkrAccountSourceSummary(selectedDashboardAccount.key)];
-  if (dashboardAccountHasAttachedSource(selectedDashboardAccount, "coinbase")) {
-    accountSourceSummaries.push(buildCoinbaseAccountSourceSummary(selectedDashboardAccount.key));
-  }
-  const filesystemAccountSourceSummaries = filesystemConnectorStatuses.map((status) => buildFilesystemAccountSourceSummary(status));
-  accountSourceSummaries.push(...filesystemAccountSourceSummaries);
-  const accountSettingsConnectors = accountSourceSummaries;
-  const definedConnectors = accountSourceSummaries.filter((connector) => connector.countsTowardHealth);
-  const definedConnectorCount = definedConnectors.length;
-  const liveConnectorCount = definedConnectors.filter((connector) => connector.tone === "safe").length;
-  const connectedConnectorCount = definedConnectors.filter((connector) => isConnectedSourceTone(connector.tone)).length;
-  const availableConnectorOptions = CONNECTOR_CATALOG.filter((connector) => connector.availability === "ready");
-  const availableConnectorCount = availableConnectorOptions.length;
-  const accountStatusTone: ConnectionHealthTone =
-    connectedConnectorCount === 0 ? "danger" : liveConnectorCount === definedConnectorCount ? "safe" : "caution";
-  const accountStatusLabel =
-    accountStatusTone === "safe" ? "All connectors live" : accountStatusTone === "caution" ? "Partial connector coverage" : "No live connectors";
-  const dashboardReportedTotalPnl = sumAccountSourceMetric(accountSourceSummaries, "totalPnl");
-  const dashboardTodayPnl = sumAccountSourceMetric(accountSourceSummaries, "todayPnl");
-  const dashboardMonthlyPnl = sumAccountSourceMetric(accountSourceSummaries, "monthlyPnl");
-  const dashboardNetWorth = sumAccountSourceMetric(accountSourceSummaries, "netWorth");
-  const dashboardSourceDerivedTotalPnl = deriveDashboardTotalPnlFromSourceContributions(accountSourceSummaries);
-  const dashboardSourceContributionBasis = deriveDashboardContributionBasisFromSources(accountSourceSummaries);
-  const dashboardDerivedTotalPnl = deriveDashboardTotalPnl(dashboardNetWorth, selectedDashboardAccount.netContributionsUsd);
-  const dashboardTotalPnl = dashboardSourceDerivedTotalPnl ?? dashboardDerivedTotalPnl ?? dashboardReportedTotalPnl;
-  const dashboardTotalPnlPct =
-    (dashboardSourceDerivedTotalPnl != null ? derivePnlPct(dashboardSourceDerivedTotalPnl, dashboardSourceContributionBasis) : null) ??
-    (dashboardDerivedTotalPnl != null ? derivePnlPct(dashboardDerivedTotalPnl, selectedDashboardAccount.netContributionsUsd) : null) ??
-    deriveAggregatePnlPct(accountSourceSummaries, "totalPnl", "totalPnlPctBasis");
-  const dashboardTodayPnlPct = deriveAggregatePnlPct(accountSourceSummaries, "todayPnl", "todayPnlPctBasis");
-  const dashboardMonthlyPnlPct = deriveAggregatePnlPct(accountSourceSummaries, "monthlyPnl", "monthlyPnlPctBasis");
-  const dashboardTotalPnlHint = describeDashboardTotalPnl(
-    accountSourceSummaries,
-    dashboardSourceDerivedTotalPnl,
-    dashboardDerivedTotalPnl,
-    dashboardReportedTotalPnl,
+  const {
+    accountSettingsConnectors,
+    accountStatusLabel,
+    accountStatusTone,
+    availableConnectorCount,
+    availableConnectorOptions,
+    coinbaseAccountSourceSummary,
+    dashboardHeaderRouteLabel,
+    dashboardMonthlyPnl,
+    dashboardMonthlyPnlHint,
+    dashboardMonthlyPnlPct,
     dashboardNetWorth,
-  );
-  const dashboardTodayPnlHint = describeAccountSourceMetricCoverage(accountSourceSummaries, "todayPnl");
-  const dashboardMonthlyPnlHint = describeAccountSourceMetricCoverage(accountSourceSummaries, "monthlyPnl");
-  const dashboardNetWorthHint = describeAccountSourceMetricCoverage(accountSourceSummaries, "netWorth");
-  const ibkrAccountSourceSummary = accountSourceSummaries.find((summary) => summary.id === `ibkr-${selectedDashboardAccount.key}`) ?? null;
-  const coinbaseAccountSourceSummary =
-    accountSourceSummaries.find((summary) => summary.id === `coinbase-${selectedDashboardAccount.key}`) ?? null;
-  const filesystemAccountSourceItems = filesystemAccountSourceSummaries.map((filesystemAccountSourceSummary) => {
-    const filesystemStatus = filesystemConnectorStatusBySourceId[filesystemAccountSourceSummary.id];
+    dashboardNetWorthHint,
+    dashboardTodayPnl,
+    dashboardTodayPnlHint,
+    dashboardTodayPnlPct,
+    dashboardTotalPnl,
+    dashboardTotalPnlHint,
+    dashboardTotalPnlPct,
+    filesystemAccountSourceItems,
+    filesystemAccountSourceSummaries,
+    ibkrAccountSourceSummary,
+  } = useMemo(() => {
+    const accountSourceSummaries: AccountSourceSummary[] = [buildIbkrAccountSourceSummary(selectedDashboardAccount.key)];
+    if (dashboardAccountHasAttachedSource(selectedDashboardAccount, "coinbase")) {
+      accountSourceSummaries.push(buildCoinbaseAccountSourceSummary(selectedDashboardAccount.key));
+    }
+    const filesystemAccountSourceSummaries = filesystemConnectorStatuses.map((status) => buildFilesystemAccountSourceSummary(status));
+    accountSourceSummaries.push(...filesystemAccountSourceSummaries);
+    const accountSettingsConnectors = accountSourceSummaries;
+    const definedConnectors = accountSourceSummaries.filter((connector) => connector.countsTowardHealth);
+    const definedConnectorCount = definedConnectors.length;
+    const liveConnectorCount = definedConnectors.filter((connector) => connector.tone === "safe").length;
+    const connectedConnectorCount = definedConnectors.filter((connector) => isConnectedSourceTone(connector.tone)).length;
+    const accountStatusTone: ConnectionHealthTone =
+      connectedConnectorCount === 0 ? "danger" : liveConnectorCount === definedConnectorCount ? "safe" : "caution";
+    const accountStatusLabel =
+      accountStatusTone === "safe" ? "All connectors live" : accountStatusTone === "caution" ? "Partial connector coverage" : "No live connectors";
+    const dashboardReportedTotalPnl = sumAccountSourceMetric(accountSourceSummaries, "totalPnl");
+    const dashboardTodayPnl = sumAccountSourceMetric(accountSourceSummaries, "todayPnl");
+    const dashboardMonthlyPnl = sumAccountSourceMetric(accountSourceSummaries, "monthlyPnl");
+    const dashboardNetWorth = sumAccountSourceMetric(accountSourceSummaries, "netWorth");
+    const dashboardSourceDerivedTotalPnl = deriveDashboardTotalPnlFromSourceContributions(accountSourceSummaries);
+    const dashboardSourceContributionBasis = deriveDashboardContributionBasisFromSources(accountSourceSummaries);
+    const dashboardDerivedTotalPnl = deriveDashboardTotalPnl(dashboardNetWorth, selectedDashboardAccount.netContributionsUsd);
+    const dashboardTotalPnl = dashboardSourceDerivedTotalPnl ?? dashboardDerivedTotalPnl ?? dashboardReportedTotalPnl;
+    const dashboardTotalPnlPct =
+      (dashboardSourceDerivedTotalPnl != null ? derivePnlPct(dashboardSourceDerivedTotalPnl, dashboardSourceContributionBasis) : null) ??
+      (dashboardDerivedTotalPnl != null ? derivePnlPct(dashboardDerivedTotalPnl, selectedDashboardAccount.netContributionsUsd) : null) ??
+      deriveAggregatePnlPct(accountSourceSummaries, "totalPnl", "totalPnlPctBasis");
+    const dashboardTodayPnlPct = deriveAggregatePnlPct(accountSourceSummaries, "todayPnl", "todayPnlPctBasis");
+    const dashboardMonthlyPnlPct = deriveAggregatePnlPct(accountSourceSummaries, "monthlyPnl", "monthlyPnlPctBasis");
+    const dashboardTotalPnlHint = describeDashboardTotalPnl(
+      accountSourceSummaries,
+      dashboardSourceDerivedTotalPnl,
+      dashboardDerivedTotalPnl,
+      dashboardReportedTotalPnl,
+      dashboardNetWorth,
+    );
+    const dashboardTodayPnlHint = describeAccountSourceMetricCoverage(accountSourceSummaries, "todayPnl");
+    const dashboardMonthlyPnlHint = describeAccountSourceMetricCoverage(accountSourceSummaries, "monthlyPnl");
+    const dashboardNetWorthHint = describeAccountSourceMetricCoverage(accountSourceSummaries, "netWorth");
+    const ibkrAccountSourceSummary = accountSourceSummaries.find((summary) => summary.id === `ibkr-${selectedDashboardAccount.key}`) ?? null;
+    const coinbaseAccountSourceSummary =
+      accountSourceSummaries.find((summary) => summary.id === `coinbase-${selectedDashboardAccount.key}`) ?? null;
+    const filesystemAccountSourceItems = filesystemAccountSourceSummaries.map((filesystemAccountSourceSummary) => {
+      const filesystemStatus = filesystemConnectorStatusBySourceId[filesystemAccountSourceSummary.id];
+      return {
+        id: filesystemAccountSourceSummary.id,
+        title: filesystemAccountSourceSummary.title,
+        status: filesystemAccountSourceSummary.status,
+        tone: toInlinePillTone(filesystemAccountSourceSummary.tone),
+        connectorId: (filesystemStatus?.connectorId as ConnectorCatalogId | undefined) ?? CSV_FOLDER_CONNECTOR_ID,
+      };
+    });
+    const dashboardHeaderRouteLabel =
+      selectedDashboardOwnsRoute && routedAccount ? `${routedAccount} - ${routedAccountPill.label}` : "No active broker route for this account";
+
     return {
-      id: filesystemAccountSourceSummary.id,
-      title: filesystemAccountSourceSummary.title,
-      status: filesystemAccountSourceSummary.status,
-      tone: toInlinePillTone(filesystemAccountSourceSummary.tone),
-      connectorId: (filesystemStatus?.connectorId as ConnectorCatalogId | undefined) ?? CSV_FOLDER_CONNECTOR_ID,
+      accountSettingsConnectors,
+      accountStatusLabel,
+      accountStatusTone,
+      availableConnectorCount: AVAILABLE_CONNECTOR_OPTIONS.length,
+      availableConnectorOptions: AVAILABLE_CONNECTOR_OPTIONS,
+      coinbaseAccountSourceSummary,
+      dashboardHeaderRouteLabel,
+      dashboardMonthlyPnl,
+      dashboardMonthlyPnlHint,
+      dashboardMonthlyPnlPct,
+      dashboardNetWorth,
+      dashboardNetWorthHint,
+      dashboardTodayPnl,
+      dashboardTodayPnlHint,
+      dashboardTodayPnlPct,
+      dashboardTotalPnl,
+      dashboardTotalPnlHint,
+      dashboardTotalPnlPct,
+      filesystemAccountSourceItems,
+      filesystemAccountSourceSummaries,
+      ibkrAccountSourceSummary,
     };
-  });
-  const dashboardHeaderRouteLabel =
-    selectedDashboardOwnsRoute && routedAccount ? `${routedAccount} - ${routedAccountPill.label}` : "No active broker route for this account";
+  }, [
+    coinbaseConnectorDetail,
+    coinbaseConnectorStatus,
+    coinbaseConnectorTone,
+    coinbasePortfolioQuery.data,
+    connectionEndpoint,
+    connectionQuery.data,
+    connectionQuery.isLoading,
+    connectionQueryError,
+    executionEnabled,
+    filesystemConnectorPortfolioBySourceId,
+    filesystemConnectorPortfolioErrorBySourceId,
+    filesystemConnectorStatusBySourceId,
+    filesystemConnectorStatuses,
+    filesystemConnectorStatusesError,
+    filesystemDocumentFolderBySourceId,
+    filesystemDocumentFolderErrorBySourceId,
+    localBackendUnavailable,
+    optionPositions,
+    positions,
+    risk?.account.netLiquidation,
+    risk?.isStale,
+    routedAccount,
+    routedAccountPill.label,
+    selectedDashboardAccount,
+    selectedDashboardOwnsRoute,
+    sourceError,
+  ]);
 
   function emptyConnectorDraft(): ConnectorDraftState {
     return { displayName: "", directoryPath: "", positionsDirectoryPath: "", historyCsvPath: "", detectFooter: true };

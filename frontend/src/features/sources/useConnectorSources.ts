@@ -1,9 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import type { ConnectorCatalogId } from "../../config/connectorCatalog";
 import type { DashboardAccountKey } from "../../config/dashboardAccounts";
-import { sourceApi } from "../../lib/api";
+import { sourceApi } from "../../lib/api/sources";
 import { queryKeys } from "../../lib/queryKeys";
 import type {
   FilesystemConnectorPortfolioResponse,
@@ -14,6 +14,7 @@ import type {
 
 const CSV_FOLDER_CONNECTOR_ID: ConnectorCatalogId = "csvFolder";
 const PDF_FOLDER_CONNECTOR_ID: ConnectorCatalogId = "pdfFolder";
+const EMPTY_FILESYSTEM_CONNECTOR_STATUSES: FilesystemConnectorStatus[] = [];
 
 export type ConnectorDraftState = {
   displayName: string;
@@ -87,9 +88,15 @@ export function useConnectorSources({ accountSettingsOpen, globalSettingsActive,
     queryFn: () => sourceApi.filesystemConnectorStatuses(selectedDashboardAccountKey),
     refetchInterval: 30_000,
   });
-  const filesystemConnectorStatuses = filesystemConnectorStatusesQuery.data ?? [];
-  const filesystemCsvConnectorStatuses = filesystemConnectorStatuses.filter((status) => status.connectorId === CSV_FOLDER_CONNECTOR_ID);
-  const filesystemPdfConnectorStatuses = filesystemConnectorStatuses.filter((status) => status.connectorId === PDF_FOLDER_CONNECTOR_ID);
+  const filesystemConnectorStatuses = filesystemConnectorStatusesQuery.data ?? EMPTY_FILESYSTEM_CONNECTOR_STATUSES;
+  const filesystemCsvConnectorStatuses = useMemo(
+    () => filesystemConnectorStatuses.filter((status) => status.connectorId === CSV_FOLDER_CONNECTOR_ID),
+    [filesystemConnectorStatuses],
+  );
+  const filesystemPdfConnectorStatuses = useMemo(
+    () => filesystemConnectorStatuses.filter((status) => status.connectorId === PDF_FOLDER_CONNECTOR_ID),
+    [filesystemConnectorStatuses],
+  );
 
   const filesystemConnectorPortfolioQueries = useQueries({
     queries: filesystemCsvConnectorStatuses.map((connectorStatus) => ({
@@ -161,47 +168,72 @@ export function useConnectorSources({ accountSettingsOpen, globalSettingsActive,
     setConnectorDraftsById({});
   }, [connectorPickerOpen]);
 
-  const filesystemConnectorStatusBySourceId = Object.fromEntries(
-    filesystemConnectorStatuses.map((status) => [status.sourceId, status]),
-  ) as Record<string, FilesystemConnectorStatus>;
-  const filesystemConnectorPortfolioBySourceId = Object.fromEntries(
-    filesystemConnectorPortfolioQueries.flatMap((query, index) => {
-      const sourceId = filesystemCsvConnectorStatuses[index]?.sourceId;
-      return sourceId && query.data ? [[sourceId, query.data]] : [];
-    }),
-  ) as Record<string, FilesystemConnectorPortfolioResponse>;
-  const filesystemConnectorPortfolioLoadingBySourceId = Object.fromEntries(
-    filesystemConnectorPortfolioQueries.flatMap((query, index) => {
-      const sourceId = filesystemCsvConnectorStatuses[index]?.sourceId;
-      return sourceId ? [[sourceId, query.isLoading]] : [];
-    }),
-  ) as Record<string, boolean>;
-  const filesystemConnectorPortfolioErrorBySourceId = Object.fromEntries(
-    filesystemConnectorPortfolioQueries.flatMap((query, index) => {
-      const sourceId = filesystemCsvConnectorStatuses[index]?.sourceId;
-      const error = query.error instanceof Error ? query.error.message : null;
-      return sourceId ? [[sourceId, error]] : [];
-    }),
-  ) as Record<string, string | null>;
-  const filesystemDocumentFolderBySourceId = Object.fromEntries(
-    filesystemConnectorDocumentQueries.flatMap((query, index) => {
-      const sourceId = filesystemPdfConnectorStatuses[index]?.sourceId;
-      return sourceId && query.data ? [[sourceId, query.data]] : [];
-    }),
-  ) as Record<string, FilesystemDocumentFolderResponse>;
-  const filesystemDocumentFolderLoadingBySourceId = Object.fromEntries(
-    filesystemConnectorDocumentQueries.flatMap((query, index) => {
-      const sourceId = filesystemPdfConnectorStatuses[index]?.sourceId;
-      return sourceId ? [[sourceId, query.isLoading]] : [];
-    }),
-  ) as Record<string, boolean>;
-  const filesystemDocumentFolderErrorBySourceId = Object.fromEntries(
-    filesystemConnectorDocumentQueries.flatMap((query, index) => {
-      const sourceId = filesystemPdfConnectorStatuses[index]?.sourceId;
-      const error = query.error instanceof Error ? query.error.message : null;
-      return sourceId ? [[sourceId, error]] : [];
-    }),
-  ) as Record<string, string | null>;
+  const filesystemConnectorStatusBySourceId = useMemo(
+    () => Object.fromEntries(filesystemConnectorStatuses.map((status) => [status.sourceId, status])) as Record<string, FilesystemConnectorStatus>,
+    [filesystemConnectorStatuses],
+  );
+  const filesystemConnectorPortfolioBySourceId = useMemo(
+    () =>
+      Object.fromEntries(
+        filesystemConnectorPortfolioQueries.flatMap((query, index) => {
+          const sourceId = filesystemCsvConnectorStatuses[index]?.sourceId;
+          return sourceId && query.data ? [[sourceId, query.data]] : [];
+        }),
+      ) as Record<string, FilesystemConnectorPortfolioResponse>,
+    [filesystemConnectorPortfolioQueries, filesystemCsvConnectorStatuses],
+  );
+  const filesystemConnectorPortfolioLoadingBySourceId = useMemo(
+    () =>
+      Object.fromEntries(
+        filesystemConnectorPortfolioQueries.flatMap((query, index) => {
+          const sourceId = filesystemCsvConnectorStatuses[index]?.sourceId;
+          return sourceId ? [[sourceId, query.isLoading]] : [];
+        }),
+      ) as Record<string, boolean>,
+    [filesystemConnectorPortfolioQueries, filesystemCsvConnectorStatuses],
+  );
+  const filesystemConnectorPortfolioErrorBySourceId = useMemo(
+    () =>
+      Object.fromEntries(
+        filesystemConnectorPortfolioQueries.flatMap((query, index) => {
+          const sourceId = filesystemCsvConnectorStatuses[index]?.sourceId;
+          const error = query.error instanceof Error ? query.error.message : null;
+          return sourceId ? [[sourceId, error]] : [];
+        }),
+      ) as Record<string, string | null>,
+    [filesystemConnectorPortfolioQueries, filesystemCsvConnectorStatuses],
+  );
+  const filesystemDocumentFolderBySourceId = useMemo(
+    () =>
+      Object.fromEntries(
+        filesystemConnectorDocumentQueries.flatMap((query, index) => {
+          const sourceId = filesystemPdfConnectorStatuses[index]?.sourceId;
+          return sourceId && query.data ? [[sourceId, query.data]] : [];
+        }),
+      ) as Record<string, FilesystemDocumentFolderResponse>,
+    [filesystemConnectorDocumentQueries, filesystemPdfConnectorStatuses],
+  );
+  const filesystemDocumentFolderLoadingBySourceId = useMemo(
+    () =>
+      Object.fromEntries(
+        filesystemConnectorDocumentQueries.flatMap((query, index) => {
+          const sourceId = filesystemPdfConnectorStatuses[index]?.sourceId;
+          return sourceId ? [[sourceId, query.isLoading]] : [];
+        }),
+      ) as Record<string, boolean>,
+    [filesystemConnectorDocumentQueries, filesystemPdfConnectorStatuses],
+  );
+  const filesystemDocumentFolderErrorBySourceId = useMemo(
+    () =>
+      Object.fromEntries(
+        filesystemConnectorDocumentQueries.flatMap((query, index) => {
+          const sourceId = filesystemPdfConnectorStatuses[index]?.sourceId;
+          const error = query.error instanceof Error ? query.error.message : null;
+          return sourceId ? [[sourceId, error]] : [];
+        }),
+      ) as Record<string, string | null>,
+    [filesystemConnectorDocumentQueries, filesystemPdfConnectorStatuses],
+  );
 
   return {
     coinbasePortfolioError: coinbasePortfolioQuery.error instanceof Error ? coinbasePortfolioQuery.error.message : null,

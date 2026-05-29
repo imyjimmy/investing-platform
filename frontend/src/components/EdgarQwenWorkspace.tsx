@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useEdgarIndex } from "../features/stock-intel/useEdgarIndex";
 import { useEdgarIntelligenceStatus } from "../features/stock-intel/useEdgarIntelligenceStatus";
 import { useEdgarQuestion } from "../features/stock-intel/useEdgarQuestion";
-import { sourceApi } from "../lib/api";
+import { sourceApi } from "../lib/api/sources";
 import { queryKeys } from "../lib/queryKeys";
 import type {
   EdgarCitation,

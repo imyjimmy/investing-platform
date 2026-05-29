@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 
-import { accountApi } from "../../lib/api";
+import { accountApi } from "../../lib/api/account";
 import { queryKeys } from "../../lib/queryKeys";
 
 function uniqueAccounts(accounts: Array<string | null | undefined>) {
@@ -11,11 +11,7 @@ function uniqueAccounts(accounts: Array<string | null | undefined>) {
 export function useAccountData() {
   const [selectedAccountId, setSelectedAccountId] = useState<string | undefined>(undefined);
 
-  const connectionQuery = useQuery({
-    queryKey: queryKeys.account.connectionStatus,
-    queryFn: accountApi.connectionStatus,
-    refetchInterval: 10_000,
-  });
+  const connectionQuery = useConnectionStatusQuery();
 
   const riskSummaryQuery = useQuery({
     queryKey: queryKeys.account.riskSummary(selectedAccountId),
@@ -84,4 +80,12 @@ export function useAccountData() {
     selectedAccountId,
     setSelectedAccountId,
   };
+}
+
+export function useConnectionStatusQuery() {
+  return useQuery({
+    queryKey: queryKeys.account.connectionStatus,
+    queryFn: accountApi.connectionStatus,
+    refetchInterval: 10_000,
+  });
 }

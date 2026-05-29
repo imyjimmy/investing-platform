@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { accountApi, sourceApi } from "../lib/api";
+import { accountApi } from "../lib/api/account";
+import { sourceApi } from "../lib/api/sources";
 import { queryKeys } from "../lib/queryKeys";
 import type {
   EdgarBodyCacheState,

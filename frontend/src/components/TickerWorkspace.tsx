@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
-import { marketApi } from "../lib/api";
+import { marketApi } from "../lib/api/market";
 import {
   formatTimestamp,
   fmtCompactCurrency,
