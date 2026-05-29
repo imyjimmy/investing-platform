@@ -1,6 +1,6 @@
 import { useIsMutating, useQuery } from "@tanstack/react-query";
 
-import { sourceApi } from "../../lib/api";
+import { sourceApi } from "../../lib/api/sources";
 import { queryKeys } from "../../lib/queryKeys";
 import { stockIntelMutationKeys } from "./stockIntelKeys";
 

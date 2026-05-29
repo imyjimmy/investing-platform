@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 
-import { accountApi } from "../../lib/api";
+import { accountApi } from "../../lib/api/account";
 import { queryKeys } from "../../lib/queryKeys";
 
 function uniqueAccounts(accounts: Array<string | null | undefined>) {

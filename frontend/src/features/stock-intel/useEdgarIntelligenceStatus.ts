@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 
-import { sourceApi } from "../../lib/api";
+import { sourceApi } from "../../lib/api/sources";
 import { queryKeys } from "../../lib/queryKeys";
 import type { EdgarWorkspaceRequest } from "../../lib/types";
 

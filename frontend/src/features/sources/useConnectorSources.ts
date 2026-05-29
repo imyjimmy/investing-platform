@@ -3,7 +3,7 @@ import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/rea
 
 import type { ConnectorCatalogId } from "../../config/connectorCatalog";
 import type { DashboardAccountKey } from "../../config/dashboardAccounts";
-import { sourceApi } from "../../lib/api";
+import { sourceApi } from "../../lib/api/sources";
 import { queryKeys } from "../../lib/queryKeys";
 import type {
   FilesystemConnectorPortfolioResponse,

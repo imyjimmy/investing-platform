@@ -1,7 +1,7 @@
 import { startTransition, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
-import { marketApi } from "../../lib/api";
+import { marketApi } from "../../lib/api/market";
 import { queryKeys } from "../../lib/queryKeys";
 import type { ChainRow, OptionChainResponse } from "../../lib/types";
 import type { ChainBandDirection, ChainRowDisplayState } from "./OptionsChainTable";

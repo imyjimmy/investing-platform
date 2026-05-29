@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 
-import { marketApi } from "../../lib/api";
+import { marketApi } from "../../lib/api/market";
 import { queryKeys } from "../../lib/queryKeys";
 
 export function useCryptoMajors() {
