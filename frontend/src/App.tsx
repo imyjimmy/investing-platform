@@ -1,11 +1,11 @@
-import { lazy, Suspense, useState } from "react";
+import { lazy, Suspense, useState, type Dispatch, type SetStateAction } from "react";
 
 import { AppShell } from "./components/shell/AppShell";
 import { AppSidebarFooter, AppSidebarNavigation, type WorkspaceSurface } from "./components/shell/AppSidebarNavigation";
 import { WorkspaceRouter, type WorkspaceRoute } from "./components/shell/WorkspaceRouter";
 import { WorkspaceStage } from "./components/shell/WorkspaceStage";
 import { type InlinePillTone } from "./components/ui/InlinePill";
-import { useAccountData } from "./features/account/useAccountData";
+import { useAccountData, useConnectionStatusQuery } from "./features/account/useAccountData";
 import type { OptionsWorkspaceSurface } from "./features/options/OptionsWorkspace";
 import type { ConnectionStatus } from "./lib/types";
 
@@ -35,17 +35,6 @@ const TickerWorkspace = lazy(() => import("./components/TickerWorkspace").then((
 function App() {
   const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceSurface>("dashboard");
   const [selectedStockSymbol, setSelectedStockSymbol] = useState("NVDA");
-  const {
-    connectMutation,
-    connectionQuery,
-    executionEnabled,
-    optionPositions,
-    positions,
-    reconnectMutation,
-    selectedAccount,
-    setSelectedAccountId,
-  } = useAccountData();
-  const marketGatewayPill = gatewaySessionPresentation(connectionQuery.data);
 
   function openSymbolWorkspace(nextSymbol: string, nextWorkspace: "ticker" | "options") {
     const normalizedSymbol = nextSymbol.trim().toUpperCase();
@@ -58,15 +47,9 @@ function App() {
 
   function renderTickerWorkspace() {
     return (
-      <TickerWorkspace
-        connectionStatus={connectionQuery.data}
-        controlsDisabled={connectMutation.isPending || reconnectMutation.isPending}
-        executionEnabled={executionEnabled}
-        onSelectedAccountChange={setSelectedAccountId}
+      <TickerWorkspaceRoute
         onSymbolChange={setSelectedStockSymbol}
-        positions={positions}
         selectedSymbol={selectedStockSymbol}
-        selectedAccount={selectedAccount}
       />
     );
   }
@@ -77,23 +60,18 @@ function App() {
 
   function renderOptionsWorkspace() {
     return (
-      <OptionsWorkspace
-        connectionStatus={connectionQuery.data}
-        controlsDisabled={connectMutation.isPending || reconnectMutation.isPending}
-        executionEnabled={executionEnabled}
+      <OptionsWorkspaceRoute
+        activeWorkspace={activeWorkspace}
         initialSymbol={selectedStockSymbol}
         onOpenChain={() => setActiveWorkspace("options")}
         onSymbolChange={setSelectedStockSymbol}
-        optionPositions={optionPositions}
-        selectedAccount={selectedAccount}
-        workspace={activeWorkspace as OptionsWorkspaceSurface}
       />
     );
   }
 
   const workspaceRoutes: Array<WorkspaceRoute<WorkspaceSurface>> = [
     { key: "dashboard", render: () => <DashboardWorkspace /> },
-    { key: "market", render: () => <StockMarketWorkspace gatewayPill={marketGatewayPill} onOpenSymbol={openSymbolWorkspace} /> },
+    { key: "market", render: () => <StockMarketWorkspaceRoute onOpenSymbol={openSymbolWorkspace} /> },
     { key: "ticker", render: renderTickerWorkspace },
     { key: "options", render: renderOptionsWorkspace },
     { key: "optionsValuation", render: renderOptionsWorkspace },
@@ -104,7 +82,7 @@ function App() {
     { key: "crypto", render: () => <CryptoMarketWorkspace /> },
     { key: "cryptoLeverage", render: () => <CryptoLeverageWorkspace /> },
     { key: "stockIntel", render: renderStockIntelWorkspace },
-    { key: "globalSettings", render: () => <SettingsWorkspace connectionStatus={connectionQuery.data} executionEnabled={executionEnabled} /> },
+    { key: "globalSettings", render: () => <SettingsWorkspaceRoute /> },
   ];
 
   return (
@@ -123,6 +101,82 @@ function App() {
       </WorkspaceStage>
     </AppShell>
   );
+}
+
+type TickerWorkspaceRouteProps = {
+  onSymbolChange: Dispatch<SetStateAction<string>>;
+  selectedSymbol: string;
+};
+
+function TickerWorkspaceRoute({ onSymbolChange, selectedSymbol }: TickerWorkspaceRouteProps) {
+  const {
+    connectMutation,
+    connectionQuery,
+    executionEnabled,
+    positions,
+    reconnectMutation,
+    selectedAccount,
+    setSelectedAccountId,
+  } = useAccountData();
+
+  return (
+    <TickerWorkspace
+      connectionStatus={connectionQuery.data}
+      controlsDisabled={connectMutation.isPending || reconnectMutation.isPending}
+      executionEnabled={executionEnabled}
+      onSelectedAccountChange={setSelectedAccountId}
+      onSymbolChange={onSymbolChange}
+      positions={positions}
+      selectedAccount={selectedAccount}
+      selectedSymbol={selectedSymbol}
+    />
+  );
+}
+
+type OptionsWorkspaceRouteProps = {
+  activeWorkspace: WorkspaceSurface;
+  initialSymbol: string;
+  onOpenChain: () => void;
+  onSymbolChange: Dispatch<SetStateAction<string>>;
+};
+
+function OptionsWorkspaceRoute({ activeWorkspace, initialSymbol, onOpenChain, onSymbolChange }: OptionsWorkspaceRouteProps) {
+  const {
+    connectMutation,
+    connectionQuery,
+    executionEnabled,
+    optionPositions,
+    reconnectMutation,
+    selectedAccount,
+  } = useAccountData();
+
+  return (
+    <OptionsWorkspace
+      connectionStatus={connectionQuery.data}
+      controlsDisabled={connectMutation.isPending || reconnectMutation.isPending}
+      executionEnabled={executionEnabled}
+      initialSymbol={initialSymbol}
+      onOpenChain={onOpenChain}
+      onSymbolChange={onSymbolChange}
+      optionPositions={optionPositions}
+      selectedAccount={selectedAccount}
+      workspace={activeWorkspace as OptionsWorkspaceSurface}
+    />
+  );
+}
+
+type StockMarketWorkspaceRouteProps = {
+  onOpenSymbol: (symbol: string, workspace: "ticker" | "options") => void;
+};
+
+function StockMarketWorkspaceRoute({ onOpenSymbol }: StockMarketWorkspaceRouteProps) {
+  const connectionQuery = useConnectionStatusQuery();
+  return <StockMarketWorkspace gatewayPill={gatewaySessionPresentation(connectionQuery.data)} onOpenSymbol={onOpenSymbol} />;
+}
+
+function SettingsWorkspaceRoute() {
+  const connectionQuery = useConnectionStatusQuery();
+  return <SettingsWorkspace connectionStatus={connectionQuery.data} executionEnabled={connectionQuery.data?.executionMode === "enabled"} />;
 }
 
 function WorkspaceLoadingFallback() {
