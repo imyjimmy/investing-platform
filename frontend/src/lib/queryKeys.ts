@@ -15,6 +15,8 @@ export const queryKeys = {
     universe: ["market-universe"] as const,
   },
   sources: {
+    ibkrConnectorStatus: (accountKey: string) => ["ibkr-connector-status", accountKey] as const,
+    ibkrPortfolio: (accountKey: string) => ["ibkr-portfolio", accountKey] as const,
     coinbaseStatus: ["coinbase-status"] as const,
     coinbasePortfolio: ["coinbase-portfolio"] as const,
     okxStatus: ["okx-status"] as const,

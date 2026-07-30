@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from math import isfinite
 from typing import Any
 
 from investing_platform.models import Position

@@ -100,6 +100,9 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
     }
     throw new Error(message);
   }
+  if (response.status === 204) {
+    return undefined as T;
+  }
   return (await response.json()) as T;
 }
 
@@ -115,4 +118,8 @@ export async function postJson<T>(path: string, body?: unknown): Promise<T> {
     },
     body: body == null ? undefined : JSON.stringify(body),
   });
+}
+
+export async function deleteJson(path: string): Promise<void> {
+  await requestJson<void>(path, { method: "DELETE" });
 }

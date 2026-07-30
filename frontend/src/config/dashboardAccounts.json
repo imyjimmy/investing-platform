@@ -3,7 +3,7 @@
     "key": "primary",
     "name": "Primary",
     "headerEyebrow": "Configured brokerage account",
-    "routeAccountIds": ["DU-MOCK"],
+    "routeAccountIds": [],
     "attachedSourceIds": ["coinbase"],
     "netContributionsUsd": 500000
   },

@@ -14,6 +14,7 @@ import threading
 
 from investing_platform.config import DashboardSettings
 from investing_platform.models import (
+    AccountSourceMetrics,
     FilesystemConnectorConfigRequest,
     FilesystemDocumentFile,
     FilesystemDocumentFolderResponse,
@@ -32,6 +33,7 @@ HEADER_ALIASES: dict[str, tuple[str, ...]] = {
     "quantity": ("quantity", "qty", "shares", "current quantity"),
     "price": ("last price", "price", "current price", "mark price", "closing price"),
     "value": ("current value", "market value", "value", "current market value", "ending value"),
+    "today_gain_loss": ("today's gain/loss dollar", "todays gain/loss dollar", "today gain/loss dollar"),
     "cost_basis": ("cost basis total", "cost basis", "total cost basis", "book cost", "cost"),
     "gain_loss": ("gain/loss dollar", "gain loss", "gain/loss", "total gain/loss dollar", "unrealized gain/loss"),
     "currency": ("currency", "currency code", "iso currency"),
@@ -61,6 +63,7 @@ class StoredFilesystemConnector:
     positions_directory_path: str | None
     history_csv_path: str | None
     detect_footer: bool
+    enabled: bool
     created_at: datetime
     updated_at: datetime
 
@@ -78,6 +81,16 @@ class SnapshotValuation:
     snapshot_date: date
     total_value: float
     source_path: Path
+    reported_daily_pnl: float | None = None
+
+
+@dataclass(slots=True)
+class InferredSnapshotCashFlows:
+    net_cash_flow: float
+    matched_intervals: int
+    period_start: date
+    period_end: date
+    flows_by_date: dict[date, float]
 
 
 @dataclass(slots=True)
@@ -127,6 +140,22 @@ class FilesystemConnectorService:
 
         if record is None:
             raise ValueError("This filesystem connector source has not been configured yet.")
+
+        if not record.enabled:
+            return FilesystemConnectorStatus(
+                sourceId=record.source_id,
+                connectorId=record.connector_id,
+                available=True,
+                connected=False,
+                status="not_connected",
+                detail="This connector is saved but disabled.",
+                displayName=record.display_name,
+                directoryPath=record.directory_path,
+                positionsDirectoryPath=record.positions_directory_path,
+                historyCsvPath=record.history_csv_path,
+                detectFooter=record.detect_footer,
+                enabled=False,
+            )
 
         directory = _connector_directory(record)
         history_csv_path = _connector_history_csv_path(record)
@@ -266,6 +295,7 @@ class FilesystemConnectorService:
             positions_directory_path=str(positions_directory) if positions_directory is not None else None,
             history_csv_path=str(history_csv_path) if history_csv_path is not None else None,
             detect_footer=request.detectFooter if connector_id == CSV_FOLDER_CONNECTOR_ID else False,
+            enabled=request.enabled,
             created_at=existing.created_at if existing else now,
             updated_at=now,
         )
@@ -274,6 +304,44 @@ class FilesystemConnectorService:
             self._last_error_by_connector[_connector_cache_key(normalized_account_key, normalized_source_id)] = None
         return self.connector_status(normalized_account_key, normalized_source_id)
 
+    def set_enabled(self, account_key: str, source_id: str, enabled: bool) -> FilesystemConnectorStatus:
+        normalized_account_key = _normalize_account_key(account_key)
+        normalized_source_id = _normalize_source_id(source_id)
+        record = self._read_record(normalized_account_key, normalized_source_id)
+        if record is None:
+            raise ValueError("This filesystem connector has not been configured yet.")
+        record.enabled = enabled
+        record.updated_at = datetime.now(UTC)
+        self._write_record(record)
+        return self.connector_status(normalized_account_key, normalized_source_id)
+
+    def remove_connector(self, account_key: str, source_id: str) -> None:
+        normalized_account_key = _normalize_account_key(account_key)
+        normalized_source_id = _normalize_source_id(source_id)
+        path = self._settings.filesystem_connectors_state_path
+        state = self._read_state()
+        accounts = state.get("accounts")
+        if not isinstance(accounts, dict) or not isinstance(accounts.get(normalized_account_key), dict):
+            raise ValueError("This filesystem connector has not been configured yet.")
+        account_state = accounts[normalized_account_key]
+        if normalized_source_id not in account_state:
+            raise ValueError("This filesystem connector has not been configured yet.")
+        del account_state[normalized_source_id]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
+        with self._lock:
+            cache_key = _connector_cache_key(normalized_account_key, normalized_source_id)
+            self._last_error_by_connector.pop(cache_key, None)
+            self._last_successful_sync_by_connector.pop(cache_key, None)
+
+    def test_connector(self, account_key: str, source_id: str) -> FilesystemConnectorStatus:
+        status = self.connector_status(account_key, source_id)
+        if not status.enabled:
+            raise ValueError("Enable this connector before testing it.")
+        if not status.connected or status.status != "ready":
+            raise ValueError(status.lastError or status.detail)
+        return status
+
     def get_portfolio(self, account_key: str, source_id: str) -> FilesystemConnectorPortfolioResponse:
         normalized_account_key = _normalize_account_key(account_key)
         normalized_source_id = _normalize_source_id(source_id)
@@ -281,6 +349,8 @@ class FilesystemConnectorService:
         record = self._read_record(normalized_account_key, normalized_source_id)
         if record is None:
             raise ValueError("This filesystem connector has not been configured yet.")
+        if not record.enabled:
+            raise ValueError("This filesystem connector is disabled.")
         if record.connector_id != CSV_FOLDER_CONNECTOR_ID:
             raise ValueError("This filesystem connector does not expose holdings.")
 
@@ -355,13 +425,29 @@ class FilesystemConnectorService:
         accounts = list(accounts_by_id.values())
         total_value = round(sum(account.currentBalance or 0.0 for account in accounts), 2)
         derived_contributions = _derive_net_contributions(directory, [account.accountId for account in accounts], history_csv_path)
+        inferred_snapshot_flows = (
+            _infer_post_history_snapshot_cash_flows(
+                directory=directory,
+                latest_csv=latest_csv,
+                detect_footer=record.detect_footer,
+                history_end_date=derived_contributions.max_run_date,
+            )
+            if derived_contributions is not None and derived_contributions.max_run_date is not None
+            else None
+        )
+        effective_net_contributions = (
+            derived_contributions.net_contributions + (inferred_snapshot_flows.net_cash_flow if inferred_snapshot_flows is not None else 0.0)
+            if derived_contributions is not None
+            else None
+        )
         period_pnl = _derive_snapshot_period_pnl(
             directory=directory,
             latest_csv=latest_csv,
             latest_total_value=total_value,
             detect_footer=record.detect_footer,
             explicit_history_csv_path=history_csv_path,
-            total_net_contributions=derived_contributions.net_contributions if derived_contributions is not None else None,
+            total_net_contributions=effective_net_contributions,
+            inferred_snapshot_flows=inferred_snapshot_flows,
         )
         sharpe = _derive_snapshot_sharpe(
             directory=directory,
@@ -369,6 +455,7 @@ class FilesystemConnectorService:
             latest_total_value=total_value,
             detect_footer=record.detect_footer,
             explicit_history_csv_path=history_csv_path,
+            inferred_snapshot_flows=inferred_snapshot_flows,
         )
 
         notices: list[str] = []
@@ -381,6 +468,12 @@ class FilesystemConnectorService:
                 f"Derived net contributions of ${derived_contributions.net_contributions:,.2f} from "
                 f"{derived_contributions.matched_rows} transfer rows in {derived_contributions.source_path.name}."
             )
+        if inferred_snapshot_flows is not None:
+            notices.append(
+                f"Extended contribution history through {inferred_snapshot_flows.period_end.strftime('%b %-d, %Y')} with "
+                f"${inferred_snapshot_flows.net_cash_flow:,.2f} inferred across {inferred_snapshot_flows.matched_intervals} "
+                "significant post-history snapshot movements."
+            )
         notices.extend(period_pnl.notices)
         notices.extend(sharpe.notices)
         if not holdings:
@@ -391,6 +484,17 @@ class FilesystemConnectorService:
             self._last_error_by_connector[cache_key] = None
             self._last_successful_sync_by_connector[cache_key] = now
 
+        net_contributions = round(effective_net_contributions, 2) if effective_net_contributions is not None else None
+        summary = AccountSourceMetrics(
+            totalPnl=period_pnl.total_pnl,
+            todayPnl=period_pnl.today_pnl,
+            monthlyPnl=period_pnl.monthly_pnl,
+            totalPnlPctBasis=net_contributions,
+            todayPnlPctBasis=period_pnl.today_pnl_pct_basis,
+            monthlyPnlPctBasis=period_pnl.monthly_pnl_pct_basis,
+            netWorth=total_value,
+            netContributions=net_contributions,
+        )
         return FilesystemConnectorPortfolioResponse(
             sourceId=record.source_id,
             connectorId=record.connector_id,
@@ -404,7 +508,8 @@ class FilesystemConnectorService:
             monthlyPnl=period_pnl.monthly_pnl,
             todayPnlPctBasis=period_pnl.today_pnl_pct_basis,
             monthlyPnlPctBasis=period_pnl.monthly_pnl_pct_basis,
-            netContributions=round(derived_contributions.net_contributions, 2) if derived_contributions is not None else None,
+            netContributions=net_contributions,
+            summary=summary,
             annualizedSharpeRatio=sharpe.annualized_sharpe_ratio,
             sharpeObservations=sharpe.observations,
             sharpePeriodStart=sharpe.period_start,
@@ -425,6 +530,8 @@ class FilesystemConnectorService:
         record = self._read_record(normalized_account_key, normalized_source_id)
         if record is None:
             raise ValueError("This filesystem connector has not been configured yet.")
+        if not record.enabled:
+            raise ValueError("This filesystem connector is disabled.")
         if record.connector_id != PDF_FOLDER_CONNECTOR_ID:
             raise ValueError("This filesystem connector does not expose document files.")
 
@@ -500,6 +607,7 @@ class FilesystemConnectorService:
                     positions_directory_path=positions_directory_path,
                     history_csv_path=history_csv_path,
                     detect_footer=_parse_bool(raw.get("detect_footer"), default=connector_id == CSV_FOLDER_CONNECTOR_ID),
+                    enabled=_parse_bool(raw.get("enabled"), default=True),
                     created_at=_parse_datetime(raw.get("created_at")) or datetime.now(UTC),
                     updated_at=_parse_datetime(raw.get("updated_at")) or datetime.now(UTC),
                 )
@@ -525,6 +633,7 @@ class FilesystemConnectorService:
             "positions_directory_path": record.positions_directory_path,
             "history_csv_path": record.history_csv_path,
             "detect_footer": record.detect_footer,
+            "enabled": record.enabled,
             "created_at": record.created_at.isoformat(),
             "updated_at": record.updated_at.isoformat(),
         }
@@ -599,6 +708,51 @@ def _derive_net_contributions(
     return best_summary
 
 
+def _infer_post_history_snapshot_cash_flows(
+    *,
+    directory: Path,
+    latest_csv: Path,
+    detect_footer: bool,
+    history_end_date: date,
+) -> InferredSnapshotCashFlows | None:
+    snapshots = _load_snapshot_valuations(directory=directory, detect_footer=detect_footer, latest_csv=latest_csv)
+    latest_snapshot = _snapshot_valuation(latest_csv, detect_footer=detect_footer)
+    if latest_snapshot is not None:
+        snapshots.append(latest_snapshot)
+    snapshots.sort(key=lambda snapshot: (snapshot.snapshot_date, snapshot.source_path.stat().st_mtime))
+
+    inferred_flows: list[tuple[date, float]] = []
+    for previous, current in zip(snapshots, snapshots[1:]):
+        if previous.snapshot_date < history_end_date or current.snapshot_date <= history_end_date:
+            continue
+        if current.snapshot_date.weekday() >= 5 or (current.snapshot_date - previous.snapshot_date).days > 3:
+            continue
+        if abs(current.total_value - previous.total_value) < 0.01:
+            continue
+        if current.reported_daily_pnl is None or abs(current.reported_daily_pnl) < 0.01:
+            continue
+
+        raw_cash_flow = current.total_value - previous.total_value - current.reported_daily_pnl
+        significance_threshold = max(5_000.0, abs(previous.total_value) * 0.015)
+        if abs(raw_cash_flow) < significance_threshold:
+            continue
+        rounded_cash_flow = round(raw_cash_flow / 1_000.0) * 1_000.0
+        rounding_tolerance = max(500.0, abs(rounded_cash_flow) * 0.05)
+        if rounded_cash_flow == 0 or abs(raw_cash_flow - rounded_cash_flow) > rounding_tolerance:
+            continue
+        inferred_flows.append((current.snapshot_date, rounded_cash_flow))
+
+    if not inferred_flows:
+        return None
+    return InferredSnapshotCashFlows(
+        net_cash_flow=round(sum(amount for _, amount in inferred_flows), 2),
+        matched_intervals=len(inferred_flows),
+        period_start=inferred_flows[0][0],
+        period_end=inferred_flows[-1][0],
+        flows_by_date=dict(inferred_flows),
+    )
+
+
 def _derive_snapshot_period_pnl(
     directory: Path,
     latest_csv: Path,
@@ -606,6 +760,7 @@ def _derive_snapshot_period_pnl(
     detect_footer: bool,
     explicit_history_csv_path: Path | None,
     total_net_contributions: float | None,
+    inferred_snapshot_flows: InferredSnapshotCashFlows | None = None,
 ) -> SnapshotPeriodPnl:
     notices: list[str] = []
     latest_snapshot_date = _extract_snapshot_date(latest_csv)
@@ -634,7 +789,12 @@ def _derive_snapshot_period_pnl(
             start_date=previous_snapshot.snapshot_date + timedelta(days=1),
             end_date=latest_snapshot_date,
         )
-        today_pnl = round(latest_total_value - previous_snapshot.total_value - (today_flows.net_contributions if today_flows is not None else 0.0), 2)
+        today_net_flow = (today_flows.net_contributions if today_flows is not None else 0.0) + _inferred_snapshot_flow_between(
+            inferred_snapshot_flows,
+            previous_snapshot.snapshot_date + timedelta(days=1),
+            latest_snapshot_date,
+        )
+        today_pnl = round(latest_total_value - previous_snapshot.total_value - today_net_flow, 2)
         today_pnl_pct_basis = round(previous_snapshot.total_value, 2)
         notices.append(
             f"Today's PnL uses the latest snapshot date {latest_snapshot_date.strftime('%b %-d, %Y')} versus "
@@ -656,7 +816,12 @@ def _derive_snapshot_period_pnl(
             start_date=month_start_snapshot.snapshot_date + timedelta(days=1),
             end_date=latest_snapshot_date,
         )
-        monthly_pnl = round(latest_total_value - month_start_snapshot.total_value - (monthly_flows.net_contributions if monthly_flows is not None else 0.0), 2)
+        monthly_net_flow = (monthly_flows.net_contributions if monthly_flows is not None else 0.0) + _inferred_snapshot_flow_between(
+            inferred_snapshot_flows,
+            month_start_snapshot.snapshot_date + timedelta(days=1),
+            latest_snapshot_date,
+        )
+        monthly_pnl = round(latest_total_value - month_start_snapshot.total_value - monthly_net_flow, 2)
         monthly_pnl_pct_basis = round(month_start_snapshot.total_value, 2)
         notices.append(
             f"Month PnL uses the latest snapshot date {latest_snapshot_date.strftime('%b %-d, %Y')} versus "
@@ -681,6 +846,7 @@ def _derive_snapshot_sharpe(
     latest_total_value: float,
     detect_footer: bool,
     explicit_history_csv_path: Path | None,
+    inferred_snapshot_flows: InferredSnapshotCashFlows | None = None,
 ) -> SnapshotSharpeSummary:
     latest_snapshot_date = _extract_snapshot_date(latest_csv)
     if latest_snapshot_date is None:
@@ -717,7 +883,11 @@ def _derive_snapshot_sharpe(
             start_date=previous.snapshot_date + timedelta(days=1),
             end_date=current.snapshot_date,
         )
-        net_flow = flows.net_contributions if flows is not None else 0.0
+        net_flow = (flows.net_contributions if flows is not None else 0.0) + _inferred_snapshot_flow_between(
+            inferred_snapshot_flows,
+            previous.snapshot_date + timedelta(days=1),
+            current.snapshot_date,
+        )
         daily_returns.append((current.total_value - previous.total_value - net_flow) / previous.total_value)
         period_start = period_start or previous.snapshot_date
         period_end = current.snapshot_date
@@ -758,6 +928,16 @@ def _derive_snapshot_sharpe(
         period_end=period_end,
         notices=notices,
     )
+
+
+def _inferred_snapshot_flow_between(
+    summary: InferredSnapshotCashFlows | None,
+    start_date: date,
+    end_date: date,
+) -> float:
+    if summary is None:
+        return 0.0
+    return sum(amount for flow_date, amount in summary.flows_by_date.items() if start_date <= flow_date <= end_date)
 
 
 def _sample_standard_deviation(values: list[float]) -> float:
@@ -884,7 +1064,9 @@ def _snapshot_valuation(path: Path, *, detect_footer: bool) -> SnapshotValuation
 
     rows, _ = _read_snapshot_rows(path, detect_footer=detect_footer)
     total_value = 0.0
+    reported_daily_pnl = 0.0
     has_values = False
+    has_reported_daily_pnl = False
     for row in rows:
         normalized = _normalize_row(row)
         symbol = normalized.get("symbol")
@@ -902,6 +1084,10 @@ def _snapshot_valuation(path: Path, *, detect_footer: bool) -> SnapshotValuation
             continue
         total_value += value
         has_values = True
+        daily_pnl = _parse_number(normalized.get("today_gain_loss"))
+        if daily_pnl is not None:
+            reported_daily_pnl += daily_pnl
+            has_reported_daily_pnl = True
 
     if not has_values:
         return None
@@ -910,6 +1096,7 @@ def _snapshot_valuation(path: Path, *, detect_footer: bool) -> SnapshotValuation
         snapshot_date=snapshot_date,
         total_value=round(total_value, 2),
         source_path=path,
+        reported_daily_pnl=round(reported_daily_pnl, 2) if has_reported_daily_pnl else None,
     )
 
 

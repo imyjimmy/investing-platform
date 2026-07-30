@@ -6,6 +6,7 @@ import { CoinbaseAccountSource } from "../../components/account-sources/Coinbase
 import { FilesystemAccountSourceContent } from "../../components/account-sources/FilesystemAccountSourceContent";
 import { FilesystemAccountSourceList } from "../../components/account-sources/FilesystemAccountSourceList";
 import { AccountSourceSummaryCards } from "../../components/account-sources/AccountSourceSummaryCards";
+import { IbkrConnectorEditor } from "../../components/account-sources/IbkrConnectorEditor";
 import { MetricCard } from "../../components/MetricCard";
 import { Panel } from "../../components/Panel";
 import { ErrorState } from "../../components/ui/ErrorState";
@@ -13,14 +14,19 @@ import { InlinePill, type InlinePillTone } from "../../components/ui/InlinePill"
 import {
   DEFAULT_DASHBOARD_ACCOUNT_KEY,
   dashboardAccountHasAttachedSource,
-  dashboardAccountOwnsRoute,
   getDashboardAccountByKey,
   getDashboardAccountWithAttachedSource,
   type DashboardAccountKey,
 } from "../../config/dashboardAccounts";
 import { CONNECTOR_CATALOG, getConnectorCatalogEntry, type ConnectorCatalogEntry, type ConnectorCatalogId } from "../../config/connectorCatalog";
 import { fmtCurrency, fmtCurrencySmall, fmtGreek, fmtNumber, fmtWholeNumber } from "../../lib/formatters";
-import type { ConnectionStatus, FilesystemConnectorStatus, OptionPosition, Position } from "../../lib/types";
+import type {
+  AccountSourceMetrics,
+  ConnectionStatus,
+  FilesystemConnectorStatus,
+  IbkrConnectorConfigRequest,
+  IbkrConnectorStatus,
+} from "../../lib/types";
 import { useAccountData } from "../account/useAccountData";
 import { useConnectorSources, type ConnectorDraftState } from "../sources/useConnectorSources";
 
@@ -62,18 +68,9 @@ export function DashboardWorkspace() {
   const [coinbaseConnectorCollapsed, setCoinbaseConnectorCollapsed] = useState(false);
   const [filesystemConnectorCollapsedBySourceId, setFilesystemConnectorCollapsedBySourceId] = useState<Record<string, boolean>>({});
   const [editingFilesystemSourceId, setEditingFilesystemSourceId] = useState<string | null>(null);
+  const [editingIbkrConnector, setEditingIbkrConnector] = useState(false);
   const [selectedDashboardAccountKey, setSelectedDashboardAccountKey] = useState<DashboardAccountKey>(DEFAULT_DASHBOARD_ACCOUNT_KEY);
 
-  const {
-    connectMutation,
-    connectionQuery,
-    executionEnabled,
-    openOrders,
-    optionPositions,
-    positions,
-    reconnectMutation,
-    risk,
-  } = useAccountData();
   const {
     coinbasePortfolioError,
     coinbasePortfolioQuery,
@@ -93,6 +90,14 @@ export function DashboardWorkspace() {
     filesystemDocumentFolderBySourceId,
     filesystemDocumentFolderErrorBySourceId,
     filesystemDocumentFolderLoadingBySourceId,
+    ibkrConnectorConfigureMutation,
+    ibkrConnectorFlexSyncMutation,
+    ibkrConnectorRemoveMutation,
+    ibkrConnectorStatusError,
+    ibkrConnectorStatusQuery,
+    ibkrConnectorTestMutation,
+    ibkrPortfolioError,
+    ibkrPortfolioQuery,
     setConnectorDraftsById,
     setConnectorPickerOpen,
     setConnectorSetupError,
@@ -102,19 +107,39 @@ export function DashboardWorkspace() {
     selectedDashboardAccountKey,
   });
 
+  const assignedIbkrAccountId = ibkrConnectorStatusQuery.data?.enabled ? ibkrConnectorStatusQuery.data.accountId : null;
+  const {
+    connectMutation,
+    connectionQuery,
+    executionEnabled,
+    openOrders,
+    optionPositions,
+    positions,
+    reconnectMutation,
+    risk,
+    selectedAccount,
+  } = useAccountData(assignedIbkrAccountId);
+
   const activeExecutionRoute = executionRoutePresentation(connectionQuery.data);
-  const routedAccount = activeExecutionRoute.accountId;
-  const routedAccountPill = { label: activeExecutionRoute.label, tone: activeExecutionRoute.tone };
+  const routedAccount = assignedIbkrAccountId;
+  const assignedRoutePresentation = routedAccount ? routePresentation(routeKindFromAccountId(routedAccount)) : activeExecutionRoute;
+  const routedAccountPill = { label: assignedRoutePresentation.label, tone: assignedRoutePresentation.tone };
   const connectError = connectMutation.error instanceof Error ? connectMutation.error.message : null;
   const reconnectError = reconnectMutation.error instanceof Error ? reconnectMutation.error.message : null;
   const connectionQueryError = connectionQuery.error instanceof Error ? connectionQuery.error.message : null;
-  const connectionEndpoint = connectionQuery.data ? `${connectionQuery.data.host}:${connectionQuery.data.port}` : "127.0.0.1:4002";
-  const sourceError = connectError ?? reconnectError ?? connectionQueryError ?? connectionQuery.data?.lastError ?? null;
+  const connectionEndpoint = ibkrConnectorStatusQuery.data
+    ? `${ibkrConnectorStatusQuery.data.host}:${ibkrConnectorStatusQuery.data.port}`
+    : connectionQuery.data
+      ? `${connectionQuery.data.host}:${connectionQuery.data.port}`
+      : "127.0.0.1:4002";
+  const sourceError = ibkrConnectorStatusError ?? connectError ?? reconnectError ?? connectionQueryError ?? connectionQuery.data?.lastError ?? null;
   const coinbaseAssignedAccount = getDashboardAccountWithAttachedSource("coinbase");
   const coinbaseConnectorTone: ConnectionHealthTone = coinbaseStatusQuery.isLoading
     ? "caution"
     : coinbaseStatusQuery.data?.available
-      ? coinbasePortfolioQuery.data?.isStale || Boolean(coinbasePortfolioError)
+      ? coinbasePortfolioQuery.data?.isStale ||
+        coinbasePortfolioQuery.data?.summary.coverage !== "complete" ||
+        Boolean(coinbasePortfolioError)
         ? "caution"
         : "safe"
       : "danger";
@@ -125,7 +150,9 @@ export function DashboardWorkspace() {
       : coinbaseStatusQuery.data?.available
         ? coinbasePortfolioQuery.data?.isStale
           ? "Connected - stale snapshot"
-          : "Connected"
+          : coinbasePortfolioQuery.data?.summary.coverage === "complete"
+            ? "Connected"
+            : "Connected - partial metrics"
         : coinbaseStatusQuery.data?.authMode === "missing"
           ? "Needs setup"
           : "Degraded";
@@ -148,38 +175,43 @@ export function DashboardWorkspace() {
     ],
   );
   const selectedDashboardAccount = getDashboardAccountByKey(selectedDashboardAccountKey);
-  const selectedDashboardOwnsRoute = dashboardAccountOwnsRoute(selectedDashboardAccount.key, routedAccount);
+  const selectedDashboardOwnsRoute = Boolean(
+    ibkrConnectorStatusQuery.data?.connected &&
+      routedAccount &&
+      selectedAccount?.trim().toUpperCase() === routedAccount,
+  );
   const dashboardOptionPositions = selectedDashboardOwnsRoute ? optionPositions : [];
   const dashboardOpenOrders = selectedDashboardOwnsRoute ? openOrders : [];
 
   function buildIbkrConnectorCard(accountKey: DashboardAccountKey): AccountConnectorCard {
-    const ownsRoute = dashboardAccountOwnsRoute(accountKey, routedAccount);
-    return {
-      id: `ibkr-${accountKey}`,
-      title: "IBKR route",
-      status: connectionQuery.isLoading
-        ? "Checking"
-        : ownsRoute
-          ? risk?.isStale
-            ? "Connected - stale snapshot"
-            : "Connected"
-          : connectionQuery.data?.connected
-            ? "Connected to another route"
-            : "Disconnected",
-      detail: connectionQuery.isLoading
-        ? "Loading broker route state"
-        : ownsRoute
-          ? `${connectionEndpoint} - ${executionEnabled ? "execution enabled" : "execution disabled"}`
-          : sourceError ?? (routedAccount ? `Current Gateway route is ${routedAccount}` : `${connectionEndpoint} - waiting for gateway`),
-      tone: connectionQuery.isLoading
-        ? "caution"
-        : ownsRoute
-          ? risk?.isStale
+    const status = ibkrConnectorStatusQuery.data;
+    const ownsRoute = accountKey === selectedDashboardAccount.key && selectedDashboardOwnsRoute;
+    const tone: ConnectionHealthTone = ibkrConnectorStatusQuery.isLoading
+      ? "caution"
+      : !status || ibkrConnectorStatusError
+        ? "danger"
+        : status.status === "ready"
+          ? risk?.isStale ||
+            status.flexStatus !== "ready" ||
+            ibkrPortfolioQuery.data?.summary.coverage !== "complete" ||
+            Boolean(ibkrPortfolioError)
             ? "caution"
             : "safe"
-          : connectionQuery.data?.connected
-            ? "caution"
-            : "danger",
+          : status.status === "unconfigured" || status.status === "disabled"
+            ? "planned"
+            : "danger";
+    return {
+      id: `ibkr-${accountKey}`,
+      title: status?.displayName ?? "Interactive Brokers",
+      status: ibkrConnectorStatusLabel(
+        ibkrConnectorStatusQuery.isLoading,
+        status?.status,
+        status?.flexStatus,
+        ownsRoute,
+        Boolean(risk?.isStale),
+      ),
+      detail: ibkrPortfolioQuery.data?.sourceNotice ?? status?.detail ?? sourceError ?? "Loading IBKR connector status.",
+      tone,
       countsTowardHealth: true,
       icon: <BrokerIcon />,
     };
@@ -187,34 +219,11 @@ export function DashboardWorkspace() {
 
   function buildIbkrAccountSourceSummary(accountKey: DashboardAccountKey): AccountSourceSummary {
     const connector = buildIbkrConnectorCard(accountKey);
-    const ownsRoute = dashboardAccountOwnsRoute(accountKey, routedAccount);
-    const totalPnl = ownsRoute ? sumPositionPnl(positions) + sumOptionPositionPnl(optionPositions) : null;
-    return {
-      ...connector,
-      totalPnl,
-      todayPnl: null,
-      monthlyPnl: null,
-      totalPnlPct: null,
-      todayPnlPct: null,
-      monthlyPnlPct: null,
-      totalPnlPctBasis: null,
-      todayPnlPctBasis: null,
-      monthlyPnlPctBasis: null,
-      netWorth: ownsRoute ? risk?.account.netLiquidation ?? null : null,
-      netContributions: null,
-    };
+    return buildAccountSourceSummary(connector, ibkrPortfolioQuery.data?.summary);
   }
 
   function buildCoinbaseAccountSourceSummary(accountKey: DashboardAccountKey): AccountSourceSummary {
-    const portfolio = coinbasePortfolioQuery.data;
-    const netWorth = portfolio?.totalUsdValue ?? null;
-    const netContributions = portfolio?.netContributions ?? null;
-    const totalPnl = portfolio?.totalPnl ?? deriveDashboardTotalPnl(netWorth, netContributions);
-    const todayPnl = portfolio?.todayPnl ?? null;
-    const monthlyPnl = portfolio?.monthlyPnl ?? null;
-    const todayPnlPctBasis = portfolio?.todayPnlPctBasis ?? null;
-    const monthlyPnlPctBasis = portfolio?.monthlyPnlPctBasis ?? null;
-    return {
+    const connector: AccountConnectorCard = {
       id: `coinbase-${accountKey}`,
       title: "Coinbase account",
       status: coinbaseConnectorStatus,
@@ -222,18 +231,8 @@ export function DashboardWorkspace() {
       tone: coinbaseConnectorTone,
       countsTowardHealth: true,
       icon: <CoinbaseIcon />,
-      totalPnl,
-      todayPnl,
-      monthlyPnl,
-      totalPnlPct: derivePnlPct(totalPnl, netContributions),
-      todayPnlPct: derivePnlPct(todayPnl, todayPnlPctBasis),
-      monthlyPnlPct: derivePnlPct(monthlyPnl, monthlyPnlPctBasis),
-      totalPnlPctBasis: netContributions,
-      todayPnlPctBasis,
-      monthlyPnlPctBasis,
-      netWorth,
-      netContributions,
     };
+    return buildAccountSourceSummary(connector, coinbasePortfolioQuery.data?.summary);
   }
 
   function buildFilesystemConnectorCard(status: FilesystemConnectorStatus): AccountConnectorCard {
@@ -243,16 +242,25 @@ export function DashboardWorkspace() {
     const documentFolder = filesystemDocumentFolderBySourceId[status.sourceId];
     const documentFolderError = filesystemDocumentFolderErrorBySourceId[status.sourceId] ?? null;
     const detailIsStale = status.connectorId === CSV_FOLDER_CONNECTOR_ID ? Boolean(portfolio?.isStale) : Boolean(documentFolder?.isStale);
+    const metricCoverageIncomplete =
+      status.connectorId === CSV_FOLDER_CONNECTOR_ID && portfolio?.summary.coverage !== "complete";
     const detailError = status.connectorId === CSV_FOLDER_CONNECTOR_ID ? portfolioError : documentFolderError;
     const connectorTone = localBackendUnavailable
       ? "danger"
-      : filesystemConnectorTone(status, detailIsStale, detailError ?? filesystemConnectorStatusesError);
+      : filesystemConnectorTone(status, detailIsStale || metricCoverageIncomplete, detailError ?? filesystemConnectorStatusesError);
     const connectorStatus = localBackendUnavailable
       ? "Backend unavailable"
-      : filesystemConnectorStatusLabel(status, detailIsStale, detailError ?? filesystemConnectorStatusesError);
+      : filesystemConnectorStatusLabel(
+          status,
+          detailIsStale,
+          detailError ?? filesystemConnectorStatusesError,
+          metricCoverageIncomplete,
+        );
     const connectorDetail = localBackendUnavailable
       ? connectionQueryError ?? filesystemConnectorStatusesError ?? detailError ?? "The local backend is unavailable."
-      : status.directoryPath
+      : portfolio?.sourceNotice && metricCoverageIncomplete
+        ? portfolio.sourceNotice
+        : status.directoryPath
         ? `${status.directoryPath} - ${fmtWholeNumber(
             status.connectorId === CSV_FOLDER_CONNECTOR_ID ? status.csvFilesCount : documentFolder?.pdfFilesCount ?? 0,
           )} files`
@@ -271,33 +279,7 @@ export function DashboardWorkspace() {
   function buildFilesystemAccountSourceSummary(status: FilesystemConnectorStatus): AccountSourceSummary {
     const connector = buildFilesystemConnectorCard(status);
     const portfolio = filesystemConnectorPortfolioBySourceId[status.sourceId];
-    const netWorth = status.connectorId === CSV_FOLDER_CONNECTOR_ID ? portfolio?.totalValue ?? null : null;
-    const netContributions = status.connectorId === CSV_FOLDER_CONNECTOR_ID ? portfolio?.netContributions ?? null : null;
-    const derivedTotalPnl = deriveDashboardTotalPnl(netWorth, netContributions);
-    const totalPnl =
-      portfolio?.totalPnl ??
-      derivedTotalPnl ??
-      (status.connectorId === CSV_FOLDER_CONNECTOR_ID
-        ? portfolio?.holdings.reduce((total, holding) => total + (holding.gainLoss ?? 0), 0) ?? null
-        : null);
-    const todayPnl = status.connectorId === CSV_FOLDER_CONNECTOR_ID ? portfolio?.todayPnl ?? null : null;
-    const monthlyPnl = status.connectorId === CSV_FOLDER_CONNECTOR_ID ? portfolio?.monthlyPnl ?? null : null;
-    const todayPnlPctBasis = status.connectorId === CSV_FOLDER_CONNECTOR_ID ? portfolio?.todayPnlPctBasis ?? null : null;
-    const monthlyPnlPctBasis = status.connectorId === CSV_FOLDER_CONNECTOR_ID ? portfolio?.monthlyPnlPctBasis ?? null : null;
-    return {
-      ...connector,
-      totalPnl,
-      todayPnl,
-      monthlyPnl,
-      totalPnlPct: derivePnlPct(totalPnl, netContributions),
-      todayPnlPct: derivePnlPct(todayPnl, todayPnlPctBasis),
-      monthlyPnlPct: derivePnlPct(monthlyPnl, monthlyPnlPctBasis),
-      totalPnlPctBasis: netContributions,
-      todayPnlPctBasis,
-      monthlyPnlPctBasis,
-      netWorth,
-      netContributions,
-    };
+    return buildAccountSourceSummary(connector, status.connectorId === CSV_FOLDER_CONNECTOR_ID ? portfolio?.summary : undefined);
   }
 
   const {
@@ -345,10 +327,10 @@ export function DashboardWorkspace() {
     const dashboardSourceDerivedTotalPnl = deriveDashboardTotalPnlFromSourceContributions(accountSourceSummaries);
     const dashboardSourceContributionBasis = deriveDashboardContributionBasisFromSources(accountSourceSummaries);
     const dashboardDerivedTotalPnl = deriveDashboardTotalPnl(dashboardNetWorth, selectedDashboardAccount.netContributionsUsd);
-    const dashboardTotalPnl = dashboardSourceDerivedTotalPnl ?? dashboardDerivedTotalPnl ?? dashboardReportedTotalPnl;
+    const dashboardTotalPnl = dashboardDerivedTotalPnl ?? dashboardSourceDerivedTotalPnl ?? dashboardReportedTotalPnl;
     const dashboardTotalPnlPct =
-      (dashboardSourceDerivedTotalPnl != null ? derivePnlPct(dashboardSourceDerivedTotalPnl, dashboardSourceContributionBasis) : null) ??
       (dashboardDerivedTotalPnl != null ? derivePnlPct(dashboardDerivedTotalPnl, selectedDashboardAccount.netContributionsUsd) : null) ??
+      (dashboardSourceDerivedTotalPnl != null ? derivePnlPct(dashboardSourceDerivedTotalPnl, dashboardSourceContributionBasis) : null) ??
       deriveAggregatePnlPct(accountSourceSummaries, "totalPnl", "totalPnlPctBasis");
     const dashboardTodayPnlPct = deriveAggregatePnlPct(accountSourceSummaries, "todayPnl", "todayPnlPctBasis");
     const dashboardMonthlyPnlPct = deriveAggregatePnlPct(accountSourceSummaries, "monthlyPnl", "monthlyPnlPctBasis");
@@ -358,6 +340,7 @@ export function DashboardWorkspace() {
       dashboardDerivedTotalPnl,
       dashboardReportedTotalPnl,
       dashboardNetWorth,
+      selectedDashboardAccount.netContributionsUsd,
     );
     const dashboardTodayPnlHint = describeAccountSourceMetricCoverage(accountSourceSummaries, "todayPnl");
     const dashboardMonthlyPnlHint = describeAccountSourceMetricCoverage(accountSourceSummaries, "monthlyPnl");
@@ -418,13 +401,16 @@ export function DashboardWorkspace() {
     filesystemConnectorStatusesError,
     filesystemDocumentFolderBySourceId,
     filesystemDocumentFolderErrorBySourceId,
+    ibkrConnectorStatusError,
+    ibkrConnectorStatusQuery.data,
+    ibkrConnectorStatusQuery.isLoading,
+    ibkrPortfolioError,
+    ibkrPortfolioQuery.data,
     localBackendUnavailable,
-    optionPositions,
-    positions,
-    risk?.account.netLiquidation,
     risk?.isStale,
     routedAccount,
     routedAccountPill.label,
+    selectedAccount,
     selectedDashboardAccount,
     selectedDashboardOwnsRoute,
     sourceError,
@@ -577,6 +563,7 @@ export function DashboardWorkspace() {
       setConnectorSetupError("This connector source could not be found.");
       return;
     }
+    setEditingIbkrConnector(false);
     setEditingFilesystemSourceId(sourceId);
     setConnectorPickerOpen(false);
     setConnectorSetupError(null);
@@ -589,6 +576,22 @@ export function DashboardWorkspace() {
   function stopEditingFilesystemConnector() {
     setEditingFilesystemSourceId(null);
     setConnectorSetupError(null);
+  }
+
+  async function saveIbkrConnector(request: IbkrConnectorConfigRequest) {
+    await ibkrConnectorConfigureMutation.mutateAsync({ accountKey: selectedDashboardAccount.key, request });
+  }
+
+  async function testIbkrConnector() {
+    await ibkrConnectorTestMutation.mutateAsync(selectedDashboardAccount.key);
+  }
+
+  async function syncIbkrFlex() {
+    await ibkrConnectorFlexSyncMutation.mutateAsync(selectedDashboardAccount.key);
+  }
+
+  async function removeIbkrConnector() {
+    await ibkrConnectorRemoveMutation.mutateAsync(selectedDashboardAccount.key);
   }
 
   async function saveFilesystemConnector(connectorId: ConnectorCatalogId, draftKey: string, sourceId?: string) {
@@ -629,6 +632,7 @@ export function DashboardWorkspace() {
         positionsDirectoryPath,
         historyCsvPath,
         detectFooter: isCsvConnector ? draft.detectFooter : false,
+        enabled: true,
         sourceId,
       });
       if (sourceId) {
@@ -903,6 +907,7 @@ export function DashboardWorkspace() {
           className="inline-flex items-center gap-2 rounded-full border border-accent/30 bg-accent/10 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.16em] text-accent transition hover:border-accent/50 hover:bg-accent/16 disabled:cursor-not-allowed disabled:opacity-50"
           disabled={availableConnectorCount === 0}
           onClick={() => {
+            setEditingIbkrConnector(false);
             setEditingFilesystemSourceId(null);
             setConnectorPickerOpen((value) => !value);
             setConnectorSetupError(null);
@@ -920,11 +925,18 @@ export function DashboardWorkspace() {
           {accountSettingsConnectors.map((connector) => (
             <ConnectorStatusCard
               key={connector.id}
+              testId={`connector-card-${connector.id}`}
               detail={connector.detail}
               icon={connector.icon}
-              actionLabel={filesystemConnectorStatusBySourceId[connector.id] ? "Edit" : undefined}
+              actionLabel={connector.id.startsWith("ibkr-") || filesystemConnectorStatusBySourceId[connector.id] ? "Edit" : undefined}
               onOpen={
-                filesystemConnectorStatusBySourceId[connector.id]
+                connector.id.startsWith("ibkr-")
+                  ? () => {
+                      setEditingIbkrConnector(true);
+                      setEditingFilesystemSourceId(null);
+                      setConnectorPickerOpen(false);
+                    }
+                  : filesystemConnectorStatusBySourceId[connector.id]
                   ? () => {
                       startEditingFilesystemConnector(connector.id);
                     }
@@ -936,6 +948,23 @@ export function DashboardWorkspace() {
             />
           ))}
         </div>
+
+        {editingIbkrConnector && ibkrConnectorStatusQuery.data ? (
+          <IbkrConnectorEditor
+            key={selectedDashboardAccount.key}
+            accountName={selectedDashboardAccount.name}
+            onCancel={() => setEditingIbkrConnector(false)}
+            onRemove={removeIbkrConnector}
+            onSave={saveIbkrConnector}
+            onSyncFlex={syncIbkrFlex}
+            onTest={testIbkrConnector}
+            removing={ibkrConnectorRemoveMutation.isPending}
+            saving={ibkrConnectorConfigureMutation.isPending}
+            status={ibkrConnectorStatusQuery.data}
+            syncingFlex={ibkrConnectorFlexSyncMutation.isPending}
+            testing={ibkrConnectorTestMutation.isPending}
+          />
+        ) : null}
 
         {editingFilesystemSourceId ? (
           (() => {
@@ -1043,6 +1072,16 @@ export function DashboardWorkspace() {
               tone={connectionQuery.data?.connected ? (selectedDashboardOwnsRoute ? "safe" : "caution") : "neutral"}
             />
             <InlinePill label={routedAccountPill.label} tone={routedAccountPill.tone} />
+            <InlinePill
+              label={
+                ibkrConnectorStatusQuery.data?.flexStatus === "ready"
+                  ? "Flex synced"
+                  : ibkrConnectorStatusQuery.data?.flexStatus === "partial"
+                    ? "Partial metrics"
+                    : "Flex history pending"
+              }
+              tone={ibkrConnectorStatusQuery.data?.flexStatus === "ready" ? "safe" : "caution"}
+            />
           </div>
         }
         eyebrow="IBKR source"
@@ -1059,6 +1098,11 @@ export function DashboardWorkspace() {
             todayPnlPct={ibkrAccountSourceSummary?.todayPnlPct ?? null}
             totalPnl={ibkrAccountSourceSummary?.totalPnl ?? null}
             totalPnlPct={ibkrAccountSourceSummary?.totalPnlPct ?? null}
+            totalPnlHint={
+              ibkrConnectorStatusQuery.data?.flexNetContributions != null
+                ? `Derived from IBKR net liquidation minus ${fmtCurrency(ibkrConnectorStatusQuery.data.flexNetContributions)} of Flex-reported net contributions.`
+                : "Open-position gain/loss only. Configure Flex historical reporting to derive account-level total PnL."
+            }
           />
 
           <div className="grid gap-6 xl:grid-cols-2">
@@ -1163,6 +1207,8 @@ export function DashboardWorkspace() {
       onSelectAccount={(accountKey) => {
         setSelectedDashboardAccountKey(accountKey);
         setAccountSettingsOpen(false);
+        setEditingIbkrConnector(false);
+        setEditingFilesystemSourceId(null);
       }}
       onToggleSettings={() => setAccountSettingsOpen((value) => !value)}
       selectedAccountKey={selectedDashboardAccount.key}
@@ -1185,12 +1231,61 @@ function pnlTone(value: number | null | undefined) {
   return "text-text";
 }
 
-function sumPositionPnl(positions: Position[]) {
-  return positions.reduce((total, position) => total + (position.unrealizedPnL ?? 0) + (position.realizedPnL ?? 0), 0);
+function ibkrConnectorStatusLabel(
+  loading: boolean,
+  status: IbkrConnectorStatus["status"] | undefined,
+  flexStatus: IbkrConnectorStatus["flexStatus"] | undefined,
+  ownsRoute: boolean,
+  riskIsStale: boolean,
+) {
+  if (loading) {
+    return "Checking";
+  }
+  if (status === "unconfigured") {
+    return "Needs assignment";
+  }
+  if (status === "disabled") {
+    return "Disabled";
+  }
+  if (ownsRoute) {
+    if (riskIsStale) {
+      return "Connected - stale snapshot";
+    }
+    if (flexStatus === "ready") {
+      return "Connected - history synced";
+    }
+    if (flexStatus === "partial") {
+      return "Connected - metric history incomplete";
+    }
+    return flexStatus === "error" ? "Connected - history error" : "Connected - history needs setup";
+  }
+  return status === "misconfigured" ? "Needs attention" : "Disconnected";
 }
 
-function sumOptionPositionPnl(positions: OptionPosition[]) {
-  return positions.reduce((total, position) => total + (position.unrealizedPnL ?? 0) + (position.realizedPnL ?? 0), 0);
+function buildAccountSourceSummary(
+  connector: AccountConnectorCard,
+  metrics: AccountSourceMetrics | null | undefined,
+): AccountSourceSummary {
+  const totalPnl = metrics?.totalPnl ?? null;
+  const todayPnl = metrics?.todayPnl ?? null;
+  const monthlyPnl = metrics?.monthlyPnl ?? null;
+  const totalPnlPctBasis = metrics?.totalPnlPctBasis ?? null;
+  const todayPnlPctBasis = metrics?.todayPnlPctBasis ?? null;
+  const monthlyPnlPctBasis = metrics?.monthlyPnlPctBasis ?? null;
+  return {
+    ...connector,
+    totalPnl,
+    todayPnl,
+    monthlyPnl,
+    totalPnlPct: derivePnlPct(totalPnl, totalPnlPctBasis),
+    todayPnlPct: derivePnlPct(todayPnl, todayPnlPctBasis),
+    monthlyPnlPct: derivePnlPct(monthlyPnl, monthlyPnlPctBasis),
+    totalPnlPctBasis,
+    todayPnlPctBasis,
+    monthlyPnlPctBasis,
+    netWorth: metrics?.netWorth ?? null,
+    netContributions: metrics?.netContributions ?? null,
+  };
 }
 
 function filesystemConnectorTone(
@@ -1214,12 +1309,16 @@ function filesystemConnectorStatusLabel(
   status: FilesystemConnectorStatus | undefined,
   detailIsStale: boolean,
   detailError: string | null,
+  metricCoverageIncomplete = false,
 ) {
   if (!status) {
     return "Checking";
   }
   if (!status.connected) {
     return "Ready";
+  }
+  if (metricCoverageIncomplete) {
+    return "Connected - partial metrics";
   }
   if (status.status === "degraded" || detailIsStale || detailError) {
     return "Connected - stale snapshot";
@@ -1332,14 +1431,15 @@ function describeDashboardTotalPnl(
   derivedTotalPnl: number | null,
   reportedTotalPnl: number | null,
   netWorth: number | null,
+  configuredFundContributions: number | null,
 ) {
+  if (derivedTotalPnl != null && netWorth != null && configuredFundContributions != null) {
+    const netWorthCoverage = describeAccountSourceMetricCoverage(summaries, "netWorth").replace(/\.$/, "");
+    return `${netWorthCoverage}. Derived from ${fmtCurrency(netWorth)} of net worth minus ${fmtCurrency(configuredFundContributions)} of configured fund contributions.`;
+  }
   if (sourceDerivedTotalPnl != null) {
     const netWorthCoverage = describeAccountSourceMetricCoverage(summaries, "netWorth").replace(/\.$/, "");
     return `${netWorthCoverage}. Derived from source net worth minus source net contributions.`;
-  }
-  if (derivedTotalPnl != null) {
-    const netWorthCoverage = describeAccountSourceMetricCoverage(summaries, "netWorth").replace(/\.$/, "");
-    return `${netWorthCoverage}. Derived as net worth minus configured net contributions.`;
   }
   const netWorthContributors = summaries.filter((summary) => summary.netWorth != null && !Number.isNaN(summary.netWorth));
   const contributionContributors = netWorthContributors.filter(
@@ -1401,6 +1501,7 @@ function executionRoutePresentation(
 }
 
 function ConnectorStatusCard({
+  testId,
   title,
   status,
   detail,
@@ -1409,6 +1510,7 @@ function ConnectorStatusCard({
   actionLabel,
   onOpen,
 }: {
+  testId?: string;
   title: string;
   status: string;
   detail: string;
@@ -1418,7 +1520,7 @@ function ConnectorStatusCard({
   onOpen?: () => void;
 }) {
   return (
-    <div className={`rounded-2xl border p-4 ${connectionTonePanelClass(tone)}`}>
+    <div className={`rounded-2xl border p-4 ${connectionTonePanelClass(tone)}`} data-testid={testId}>
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-center gap-3">
           <span className={`inline-flex h-10 w-10 items-center justify-center rounded-xl ${connectionToneIconClass(tone)}`}>{icon}</span>

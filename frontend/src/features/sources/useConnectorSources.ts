@@ -9,6 +9,7 @@ import type {
   FilesystemConnectorPortfolioResponse,
   FilesystemConnectorStatus,
   FilesystemDocumentFolderResponse,
+  IbkrConnectorConfigRequest,
   MarketDataSourceConfigRequest,
 } from "../../lib/types";
 
@@ -32,7 +33,13 @@ type FilesystemConnectorConfigureVariables = {
   positionsDirectoryPath: string | null;
   historyCsvPath: string | null;
   detectFooter: boolean;
+  enabled: boolean;
   sourceId?: string;
+};
+
+type IbkrConnectorConfigureVariables = {
+  accountKey: DashboardAccountKey;
+  request: IbkrConnectorConfigRequest;
 };
 
 type UseConnectorSourcesArgs = {
@@ -53,6 +60,19 @@ export function useConnectorSources({ accountSettingsOpen, globalSettingsActive,
     queryKey: queryKeys.sources.coinbaseStatus,
     queryFn: sourceApi.coinbaseStatus,
     refetchInterval: 30_000,
+  });
+
+  const ibkrConnectorStatusQuery = useQuery({
+    queryKey: queryKeys.sources.ibkrConnectorStatus(selectedDashboardAccountKey),
+    queryFn: () => sourceApi.ibkrConnectorStatus(selectedDashboardAccountKey),
+    refetchInterval: 10_000,
+  });
+
+  const ibkrPortfolioQuery = useQuery({
+    queryKey: queryKeys.sources.ibkrPortfolio(selectedDashboardAccountKey),
+    queryFn: () => sourceApi.ibkrPortfolio(selectedDashboardAccountKey),
+    enabled: ibkrConnectorStatusQuery.data?.connected ?? false,
+    refetchInterval: 10_000,
   });
 
   const coinbasePortfolioQuery = useQuery({
@@ -138,11 +158,11 @@ export function useConnectorSources({ accountSettingsOpen, globalSettingsActive,
   });
 
   const filesystemConnectorConfigureMutation = useMutation({
-    mutationFn: ({ accountKey, connectorId, displayName, directoryPath, positionsDirectoryPath, historyCsvPath, detectFooter, sourceId }: FilesystemConnectorConfigureVariables) =>
+    mutationFn: ({ accountKey, connectorId, displayName, directoryPath, positionsDirectoryPath, historyCsvPath, detectFooter, enabled, sourceId }: FilesystemConnectorConfigureVariables) =>
       sourceApi.filesystemConnectorConfigure(
         accountKey,
         connectorId,
-        { displayName, directoryPath, positionsDirectoryPath, historyCsvPath, detectFooter },
+        { displayName, directoryPath, positionsDirectoryPath, historyCsvPath, detectFooter, enabled },
         sourceId,
       ),
     onSuccess: async (_data, variables) => {
@@ -151,6 +171,34 @@ export function useConnectorSources({ accountSettingsOpen, globalSettingsActive,
         queryClient.invalidateQueries({ queryKey: queryKeys.sources.filesystemConnectorPortfolio(variables.accountKey) }),
         queryClient.invalidateQueries({ queryKey: queryKeys.sources.filesystemConnectorDocuments(variables.accountKey) }),
       ]);
+    },
+  });
+
+  const ibkrConnectorConfigureMutation = useMutation({
+    mutationFn: ({ accountKey, request }: IbkrConnectorConfigureVariables) => sourceApi.ibkrConnectorConfigure(accountKey, request),
+    onSuccess: async (_data, variables) => {
+      await invalidateIbkrAccountQueries(queryClient, variables.accountKey);
+    },
+  });
+
+  const ibkrConnectorTestMutation = useMutation({
+    mutationFn: (accountKey: DashboardAccountKey) => sourceApi.ibkrConnectorTest(accountKey),
+    onSuccess: async (_data, accountKey) => {
+      await invalidateIbkrAccountQueries(queryClient, accountKey);
+    },
+  });
+
+  const ibkrConnectorFlexSyncMutation = useMutation({
+    mutationFn: (accountKey: DashboardAccountKey) => sourceApi.ibkrConnectorFlexSync(accountKey),
+    onSuccess: async (_data, accountKey) => {
+      await invalidateIbkrAccountQueries(queryClient, accountKey);
+    },
+  });
+
+  const ibkrConnectorRemoveMutation = useMutation({
+    mutationFn: (accountKey: DashboardAccountKey) => sourceApi.ibkrConnectorRemove(accountKey),
+    onSuccess: async (_data, accountKey) => {
+      await invalidateIbkrAccountQueries(queryClient, accountKey);
     },
   });
 
@@ -259,6 +307,14 @@ export function useConnectorSources({ accountSettingsOpen, globalSettingsActive,
     filesystemDocumentFolderErrorBySourceId,
     filesystemDocumentFolderLoadingBySourceId,
     filesystemPdfConnectorStatuses,
+    ibkrConnectorConfigureMutation,
+    ibkrConnectorFlexSyncMutation,
+    ibkrConnectorRemoveMutation,
+    ibkrConnectorStatusError: ibkrConnectorStatusQuery.error instanceof Error ? ibkrConnectorStatusQuery.error.message : null,
+    ibkrConnectorStatusQuery,
+    ibkrPortfolioError: ibkrPortfolioQuery.error instanceof Error ? ibkrPortfolioQuery.error.message : null,
+    ibkrPortfolioQuery,
+    ibkrConnectorTestMutation,
     finnhubApiKeyInput,
     finnhubConfigureError: finnhubConfigureMutation.error instanceof Error ? finnhubConfigureMutation.error.message : null,
     finnhubConfigureMutation,
@@ -279,4 +335,16 @@ export function useConnectorSources({ accountSettingsOpen, globalSettingsActive,
     setFinnhubApiKeyInput,
     setMarketDataSourceKeyInputs,
   };
+}
+
+async function invalidateIbkrAccountQueries(queryClient: ReturnType<typeof useQueryClient>, accountKey: DashboardAccountKey) {
+  await Promise.all([
+    queryClient.invalidateQueries({ queryKey: queryKeys.sources.ibkrConnectorStatus(accountKey) }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.sources.ibkrPortfolio(accountKey) }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.account.connectionStatus }),
+    queryClient.invalidateQueries({ queryKey: ["risk-summary"] }),
+    queryClient.invalidateQueries({ queryKey: ["positions"] }),
+    queryClient.invalidateQueries({ queryKey: ["option-positions"] }),
+    queryClient.invalidateQueries({ queryKey: ["open-orders"] }),
+  ]);
 }

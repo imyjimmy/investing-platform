@@ -12,6 +12,7 @@ from investing_platform.services.edgar import EdgarDownloader
 from investing_platform.services.filesystem_connectors import FilesystemConnectorService
 from investing_platform.services.finnhub import FinnhubService
 from investing_platform.services.ib_gateway import IBGatewayBrokerService
+from investing_platform.services.ibkr_connectors import IbkrConnectorService
 from investing_platform.services.investor_pdfs import InvestorPdfDownloader
 from investing_platform.services.market_data import MarketDataService
 from investing_platform.services.market_data_sources import MarketDataSourceService
@@ -31,7 +32,9 @@ def get_settings() -> DashboardSettings:
 def get_broker_service() -> BrokerService:
     settings = get_settings()
     if settings.data_mode == "ibkr":
-        return IBGatewayBrokerService(settings)
+        service = IBGatewayBrokerService(settings)
+        IbkrConnectorService(settings, service).apply_saved_configuration()
+        return service
     return MockBrokerService(settings)
 
 
@@ -68,6 +71,11 @@ def get_okx_service() -> OkxService:
 @lru_cache(maxsize=1)
 def get_filesystem_connector_service() -> FilesystemConnectorService:
     return FilesystemConnectorService(get_settings())
+
+
+@lru_cache(maxsize=1)
+def get_ibkr_connector_service() -> IbkrConnectorService:
+    return IbkrConnectorService(get_settings(), get_broker_service())
 
 
 @lru_cache(maxsize=1)

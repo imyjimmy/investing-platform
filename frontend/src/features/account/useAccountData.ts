@@ -8,7 +8,9 @@ function uniqueAccounts(accounts: Array<string | null | undefined>) {
   return Array.from(new Set(accounts.map((accountId) => accountId?.trim().toUpperCase()).filter(Boolean) as string[]));
 }
 
-export function useAccountData() {
+const ACCOUNT_REFRESH_INTERVAL_MS = 30_000;
+
+export function useAccountData(preferredAccountId?: string | null) {
   const [selectedAccountId, setSelectedAccountId] = useState<string | undefined>(undefined);
 
   const connectionQuery = useConnectionStatusQuery();
@@ -16,25 +18,25 @@ export function useAccountData() {
   const riskSummaryQuery = useQuery({
     queryKey: queryKeys.account.riskSummary(selectedAccountId),
     queryFn: () => accountApi.riskSummary(selectedAccountId),
-    refetchInterval: false,
+    refetchInterval: connectionQuery.data?.connected ? ACCOUNT_REFRESH_INTERVAL_MS : false,
   });
 
   const positionsQuery = useQuery({
     queryKey: queryKeys.account.positions(selectedAccountId),
     queryFn: () => accountApi.positions(selectedAccountId),
-    refetchInterval: false,
+    refetchInterval: connectionQuery.data?.connected ? ACCOUNT_REFRESH_INTERVAL_MS : false,
   });
 
   const optionPositionsQuery = useQuery({
     queryKey: queryKeys.account.optionPositions(selectedAccountId),
     queryFn: () => accountApi.optionPositions(selectedAccountId),
-    refetchInterval: false,
+    refetchInterval: connectionQuery.data?.connected ? ACCOUNT_REFRESH_INTERVAL_MS : false,
   });
 
   const openOrdersQuery = useQuery({
     queryKey: queryKeys.account.openOrders(selectedAccountId),
     queryFn: () => accountApi.openOrders(selectedAccountId),
-    refetchInterval: false,
+    refetchInterval: connectionQuery.data?.connected ? ACCOUNT_REFRESH_INTERVAL_MS : false,
   });
 
   const connectMutation = useMutation({ mutationFn: accountApi.connect });
@@ -49,10 +51,23 @@ export function useAccountData() {
     if (availableAccounts.length === 0) {
       return;
     }
+    const preferredAccount = preferredAccountId?.trim().toUpperCase();
+    if (preferredAccount && availableAccounts.includes(preferredAccount)) {
+      if (selectedAccountId !== preferredAccount) {
+        setSelectedAccountId(preferredAccount);
+      }
+      return;
+    }
     if (!selectedAccountId || !availableAccounts.includes(selectedAccountId)) {
       setSelectedAccountId(availableAccounts[0]);
     }
-  }, [connectionQuery.data?.accountId, connectionQuery.data?.managedAccounts, riskSummaryQuery.data?.account.accountId, selectedAccountId]);
+  }, [
+    connectionQuery.data?.accountId,
+    connectionQuery.data?.managedAccounts,
+    preferredAccountId,
+    riskSummaryQuery.data?.account.accountId,
+    selectedAccountId,
+  ]);
 
   const risk = riskSummaryQuery.data;
   const positions = positionsQuery.data?.positions ?? [];

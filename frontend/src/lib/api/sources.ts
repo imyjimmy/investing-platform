@@ -26,12 +26,15 @@ import type {
   InvestorPdfDownloadRequest,
   InvestorPdfDownloadResponse,
   InvestorPdfSourceStatus,
+  IbkrConnectorConfigRequest,
+  IbkrConnectorStatus,
+  IbkrPortfolioResponse,
   MarketDataSourceConfigRequest,
   MarketDataSourceStatus,
   MarketDataSourcesResponse,
   OkxSourceStatus,
 } from "../types";
-import { fetchJson, postJson, withAccountKey } from "./transport";
+import { deleteJson, fetchJson, postJson, withAccountKey } from "./transport";
 
 function withProbe(path: string, probe = false) {
   if (!probe) {
@@ -42,6 +45,18 @@ function withProbe(path: string, probe = false) {
 }
 
 export const sourceApi = {
+  ibkrConnectorStatus: (accountKey: string) =>
+    fetchJson<IbkrConnectorStatus>(withAccountKey("/api/sources/ibkr/connector", accountKey)),
+  ibkrPortfolio: (accountKey: string) =>
+    fetchJson<IbkrPortfolioResponse>(withAccountKey("/api/sources/ibkr/portfolio", accountKey)),
+  ibkrConnectorConfigure: (accountKey: string, request: IbkrConnectorConfigRequest) =>
+    postJson<IbkrConnectorStatus>(withAccountKey("/api/sources/ibkr/connector", accountKey), request),
+  ibkrConnectorTest: (accountKey: string) =>
+    postJson<IbkrConnectorStatus>(withAccountKey("/api/sources/ibkr/connector/test", accountKey)),
+  ibkrConnectorFlexSync: (accountKey: string) =>
+    postJson<IbkrConnectorStatus>(withAccountKey("/api/sources/ibkr/connector/flex/sync", accountKey)),
+  ibkrConnectorRemove: (accountKey: string) =>
+    deleteJson(withAccountKey("/api/sources/ibkr/connector", accountKey)),
   coinbaseStatus: () => fetchJson<CoinbaseSourceStatus>("/api/sources/coinbase/status"),
   coinbasePortfolio: () => fetchJson<CoinbasePortfolioResponse>("/api/sources/coinbase/portfolio"),
   finnhubStatus: (probe = false) => fetchJson<FinnhubSourceStatus>(withProbe("/api/sources/finnhub/status", probe)),
@@ -68,6 +83,16 @@ export const sourceApi = {
       ),
       request,
     ),
+  filesystemConnectorSetEnabled: (accountKey: string, sourceId: string, enabled: boolean) =>
+    postJson<FilesystemConnectorStatus>(
+      withAccountKey(`/api/sources/filesystem/sources/${encodeURIComponent(sourceId)}/enabled?enabled=${enabled}`, accountKey),
+    ),
+  filesystemConnectorTest: (accountKey: string, sourceId: string) =>
+    postJson<FilesystemConnectorStatus>(
+      withAccountKey(`/api/sources/filesystem/sources/${encodeURIComponent(sourceId)}/test`, accountKey),
+    ),
+  filesystemConnectorRemove: (accountKey: string, sourceId: string) =>
+    deleteJson(withAccountKey(`/api/sources/filesystem/sources/${encodeURIComponent(sourceId)}`, accountKey)),
   filesystemConnectorPortfolio: (accountKey: string, sourceId: string) =>
     fetchJson<FilesystemConnectorPortfolioResponse>(
       withAccountKey(`/api/sources/filesystem/sources/${encodeURIComponent(sourceId)}/portfolio`, accountKey),

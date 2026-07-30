@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Response, status
 
 from investing_platform.models import (
     CoinbasePortfolioResponse,
@@ -13,6 +13,9 @@ from investing_platform.models import (
     FilesystemDocumentFolderResponse,
     FinnhubConnectorConfigRequest,
     FinnhubSourceStatus,
+    IbkrConnectorConfigRequest,
+    IbkrConnectorStatus,
+    IbkrPortfolioResponse,
     MarketDataSourceConfigRequest,
     MarketDataSourceStatus,
     MarketDataSourcesResponse,
@@ -24,6 +27,7 @@ from ._helpers import (
     coinbase_service,
     filesystem_connector_service,
     finnhub_service,
+    ibkr_connector_service,
     market_data_source_service,
     not_found,
     okx_service,
@@ -33,6 +37,58 @@ from ._helpers import (
 
 
 router = APIRouter(prefix="/sources", tags=["sources"])
+
+
+@router.get("/ibkr/connector", response_model=IbkrConnectorStatus)
+def ibkr_connector_status(accountKey: str = Query(...)) -> IbkrConnectorStatus:
+    return ibkr_connector_service().status(accountKey)
+
+
+@router.get("/ibkr/portfolio", response_model=IbkrPortfolioResponse)
+def ibkr_connector_portfolio(accountKey: str = Query(...)) -> IbkrPortfolioResponse:
+    try:
+        return ibkr_connector_service().portfolio(accountKey)
+    except ValueError as exc:
+        bad_request(exc)
+    except Exception as exc:
+        service_unavailable(exc)
+
+
+@router.post("/ibkr/connector", response_model=IbkrConnectorStatus)
+def ibkr_connector_configure(request: IbkrConnectorConfigRequest, accountKey: str = Query(...)) -> IbkrConnectorStatus:
+    try:
+        return ibkr_connector_service().configure(accountKey, request)
+    except ValueError as exc:
+        bad_request(exc)
+
+
+@router.post("/ibkr/connector/test", response_model=IbkrConnectorStatus)
+def ibkr_connector_test(accountKey: str = Query(...)) -> IbkrConnectorStatus:
+    try:
+        return ibkr_connector_service().test(accountKey)
+    except ValueError as exc:
+        bad_request(exc)
+    except Exception as exc:
+        service_unavailable(exc)
+
+
+@router.post("/ibkr/connector/flex/sync", response_model=IbkrConnectorStatus)
+def ibkr_connector_flex_sync(accountKey: str = Query(...)) -> IbkrConnectorStatus:
+    try:
+        return ibkr_connector_service().sync_flex(accountKey)
+    except ValueError as exc:
+        bad_request(exc)
+    except Exception as exc:
+        service_unavailable(exc)
+
+
+@router.delete("/ibkr/connector", status_code=status.HTTP_204_NO_CONTENT)
+def ibkr_connector_remove(accountKey: str = Query(...)) -> Response:
+    try:
+        ibkr_connector_service().remove(accountKey)
+    except ValueError as exc:
+        not_found(exc)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/coinbase/status", response_model=CoinbaseSourceStatus)
@@ -102,6 +158,35 @@ def filesystem_connector_configure(
         return filesystem_connector_service().configure_connector(accountKey, connector_id, request, sourceId)
     except ValueError as exc:
         bad_request(exc)
+
+
+@router.post("/filesystem/sources/{source_id}/enabled", response_model=FilesystemConnectorStatus)
+def filesystem_connector_set_enabled(
+    source_id: str,
+    enabled: bool = Query(...),
+    accountKey: str = Query(...),
+) -> FilesystemConnectorStatus:
+    try:
+        return filesystem_connector_service().set_enabled(accountKey, source_id, enabled)
+    except ValueError as exc:
+        not_found(exc)
+
+
+@router.post("/filesystem/sources/{source_id}/test", response_model=FilesystemConnectorStatus)
+def filesystem_connector_test(source_id: str, accountKey: str = Query(...)) -> FilesystemConnectorStatus:
+    try:
+        return filesystem_connector_service().test_connector(accountKey, source_id)
+    except ValueError as exc:
+        bad_request(exc)
+
+
+@router.delete("/filesystem/sources/{source_id}", status_code=status.HTTP_204_NO_CONTENT)
+def filesystem_connector_remove(source_id: str, accountKey: str = Query(...)) -> Response:
+    try:
+        filesystem_connector_service().remove_connector(accountKey, source_id)
+    except ValueError as exc:
+        not_found(exc)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/filesystem/sources/{source_id}/status", response_model=FilesystemConnectorStatus)

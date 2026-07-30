@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+import math
 from typing import Annotated, Any, Literal
 from urllib.parse import urlparse
 
@@ -13,6 +14,48 @@ class DashboardModel(BaseModel):
     """Base model with camel-friendly serialization support."""
 
     model_config = ConfigDict(populate_by_name=True)
+
+
+AccountSourceMetricName = Literal[
+    "totalPnl",
+    "todayPnl",
+    "monthlyPnl",
+    "netWorth",
+    "netContributions",
+]
+
+
+class AccountSourceMetrics(DashboardModel):
+    """Common dashboard metric contract implemented by every investment account source."""
+
+    totalPnl: float | None = None
+    todayPnl: float | None = None
+    monthlyPnl: float | None = None
+    totalPnlPctBasis: float | None = None
+    todayPnlPctBasis: float | None = None
+    monthlyPnlPctBasis: float | None = None
+    netWorth: float | None = None
+    netContributions: float | None = None
+    missingMetrics: list[AccountSourceMetricName] = Field(default_factory=list)
+    coverage: Literal["complete", "partial", "unavailable"] = "unavailable"
+
+    @model_validator(mode="after")
+    def derive_metric_coverage(self) -> "AccountSourceMetrics":
+        required: tuple[AccountSourceMetricName, ...] = (
+            "totalPnl",
+            "todayPnl",
+            "monthlyPnl",
+            "netWorth",
+            "netContributions",
+        )
+        missing = [
+            name
+            for name in required
+            if (value := getattr(self, name)) is None or not math.isfinite(value)
+        ]
+        self.missingMetrics = missing
+        self.coverage = "complete" if not missing else "unavailable" if len(missing) == len(required) else "partial"
+        return self
 
 
 RiskLevel = Literal["Low", "Moderate", "Elevated", "High"]
@@ -138,6 +181,9 @@ class AccountSnapshot(DashboardModel):
     initMarginReq: float
     maintMarginReq: float
     cashBalance: float | None = None
+    todayPnl: float | None = None
+    unrealizedPnl: float | None = None
+    realizedPnl: float | None = None
     marginUsagePct: float
     optionPositionsCount: int
     openOrdersCount: int
@@ -1057,6 +1103,7 @@ class CoinbasePortfolioResponse(DashboardModel):
     todayPnlPctBasis: float | None = None
     monthlyPnlPctBasis: float | None = None
     netContributions: float | None = None
+    summary: AccountSourceMetrics
     visibleHoldingsCount: int
     totalAccountsCount: int
     holdings: list[CoinbaseHolding]
@@ -1081,6 +1128,7 @@ class FilesystemConnectorStatus(DashboardModel):
     latestCsvPath: str | None = None
     lastSuccessfulSyncAt: datetime | None = None
     lastError: str | None = None
+    enabled: bool = True
 
 
 class FilesystemConnectorConfigRequest(DashboardModel):
@@ -1089,6 +1137,68 @@ class FilesystemConnectorConfigRequest(DashboardModel):
     positionsDirectoryPath: str | None = None
     historyCsvPath: str | None = None
     detectFooter: bool = True
+    enabled: bool = True
+
+
+class IbkrConnectorConfigRequest(DashboardModel):
+    displayName: str = "Interactive Brokers"
+    enabled: bool = True
+    host: str = "127.0.0.1"
+    port: int = Field(default=4002, ge=1, le=65535)
+    clientId: int = Field(default=17, ge=0, le=2147483647)
+    readonly: bool = True
+    accountId: str | None = None
+    flexEnabled: bool = False
+    flexToken: str | None = None
+    clearFlexToken: bool = False
+    flexQueryId: str | None = None
+
+
+class IbkrConnectorStatus(DashboardModel):
+    sourceId: str = "ibkrGateway"
+    connectorId: str = "ibkrGateway"
+    accountKey: str
+    displayName: str = "Interactive Brokers"
+    configured: bool
+    enabled: bool
+    connected: bool
+    status: Literal["ready", "degraded", "misconfigured", "disabled", "unconfigured"]
+    detail: str
+    host: str
+    port: int
+    clientId: int
+    readonly: bool
+    accountId: str | None = None
+    discoveredAccounts: list[str] = Field(default_factory=list)
+    lastSuccessfulConnectAt: datetime | None = None
+    lastHeartbeatAt: datetime | None = None
+    lastError: str | None = None
+    flexEnabled: bool = False
+    flexConfigured: bool = False
+    flexTokenConfigured: bool = False
+    flexQueryId: str | None = None
+    flexStatus: Literal["unconfigured", "disabled", "partial", "ready", "error"] = "unconfigured"
+    flexDetail: str = "Historical reporting is not configured."
+    flexNetContributions: float | None = None
+    flexCashTransactionsCount: int = 0
+    flexEquitySnapshotsCount: int = 0
+    flexPerformanceReady: bool = False
+    flexMissingSections: list[str] = Field(default_factory=list)
+    flexPeriodStart: date | None = None
+    flexPeriodEnd: date | None = None
+    lastSuccessfulFlexSyncAt: datetime | None = None
+    lastFlexError: str | None = None
+
+
+class IbkrPortfolioResponse(DashboardModel):
+    sourceId: str = "ibkrGateway"
+    connectorId: str = "ibkrGateway"
+    accountKey: str
+    accountId: str
+    summary: AccountSourceMetrics
+    sourceNotice: str | None = None
+    generatedAt: datetime
+    isStale: bool = False
 
 
 class FilesystemInvestmentAccount(DashboardModel):
@@ -1126,6 +1236,7 @@ class FilesystemConnectorPortfolioResponse(DashboardModel):
     todayPnlPctBasis: float | None = None
     monthlyPnlPctBasis: float | None = None
     netContributions: float | None = None
+    summary: AccountSourceMetrics
     annualizedSharpeRatio: float | None = None
     sharpeObservations: int = 0
     sharpePeriodStart: date | None = None

@@ -16,7 +16,14 @@ from urllib.parse import urljoin, urlparse
 import requests
 
 from investing_platform.config import DashboardSettings
-from investing_platform.models import CoinbaseHolding, CoinbasePortfolioResponse, CoinbaseSourceStatus, CryptoMarketQuote, CryptoMarketResponse
+from investing_platform.models import (
+    AccountSourceMetrics,
+    CoinbaseHolding,
+    CoinbasePortfolioResponse,
+    CoinbaseSourceStatus,
+    CryptoMarketQuote,
+    CryptoMarketResponse,
+)
 from investing_platform.services.base import CacheEntry
 
 
@@ -286,16 +293,32 @@ class CoinbaseService:
             if contribution_summary is not None
             else brokerage_summary.total_unrealized_pnl if brokerage_summary is not None else None
         )
+        today_pnl = period_pnl_summary.today_pnl if period_pnl_summary is not None else None
+        monthly_pnl = period_pnl_summary.monthly_pnl if period_pnl_summary is not None else None
+        today_pnl_pct_basis = period_pnl_summary.today_pnl_pct_basis if period_pnl_summary is not None else None
+        monthly_pnl_pct_basis = period_pnl_summary.monthly_pnl_pct_basis if period_pnl_summary is not None else None
+        net_contributions = round(contribution_summary.net_contributions, 2) if contribution_summary is not None else None
+        summary = AccountSourceMetrics(
+            totalPnl=total_pnl,
+            todayPnl=today_pnl,
+            monthlyPnl=monthly_pnl,
+            totalPnlPctBasis=net_contributions,
+            todayPnlPctBasis=today_pnl_pct_basis,
+            monthlyPnlPctBasis=monthly_pnl_pct_basis,
+            netWorth=total_usd_value,
+            netContributions=net_contributions,
+        )
         return CoinbasePortfolioResponse(
             totalUsdValue=total_usd_value,
             cryptoUsdValue=crypto_usd_value,
             cashLikeUsdValue=cash_like_usd_value,
             totalPnl=total_pnl,
-            todayPnl=period_pnl_summary.today_pnl if period_pnl_summary is not None else None,
-            monthlyPnl=period_pnl_summary.monthly_pnl if period_pnl_summary is not None else None,
-            todayPnlPctBasis=period_pnl_summary.today_pnl_pct_basis if period_pnl_summary is not None else None,
-            monthlyPnlPctBasis=period_pnl_summary.monthly_pnl_pct_basis if period_pnl_summary is not None else None,
-            netContributions=round(contribution_summary.net_contributions, 2) if contribution_summary is not None else None,
+            todayPnl=today_pnl,
+            monthlyPnl=monthly_pnl,
+            todayPnlPctBasis=today_pnl_pct_basis,
+            monthlyPnlPctBasis=monthly_pnl_pct_basis,
+            netContributions=net_contributions,
+            summary=summary,
             visibleHoldingsCount=len(holdings),
             totalAccountsCount=len(accounts),
             holdings=holdings,
@@ -1081,6 +1104,19 @@ def _external_cash_flow_amount_usd(transaction: dict[str, Any]) -> tuple[float |
         if _transaction_counterparty_is_internal(transaction.get("to")):
             return None, False
         return amount_usd, amount_usd is None
+    if transaction_type in {"buy", "sell"}:
+        trade_payload = transaction.get(transaction_type)
+        payment_method = (
+            str(trade_payload.get("payment_method_name") or "").strip()
+            if isinstance(trade_payload, dict)
+            else ""
+        )
+        if not payment_method or _coinbase_payment_method_is_internal(payment_method):
+            return None, False
+        if amount_usd is None:
+            return None, True
+        signed_amount = abs(amount_usd) if transaction_type == "buy" else -abs(amount_usd)
+        return signed_amount, False
     return None, False
 
 
@@ -1107,6 +1143,11 @@ def _transaction_counterparty_is_internal(counterparty: Any) -> bool:
     resource = str(counterparty.get("resource") or "").strip().lower()
     resource_path = str(counterparty.get("resource_path") or "").strip().lower()
     return resource == "account" or resource_path.startswith("/v2/accounts/")
+
+
+def _coinbase_payment_method_is_internal(value: str) -> bool:
+    normalized = value.strip().lower()
+    return "wallet" in normalized or normalized in {"cash", "coinbase cash"}
 
 
 def _parse_timestamp(value: Any) -> datetime | None:

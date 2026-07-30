@@ -27,6 +27,7 @@ class IBGatewayPortfolioMixin:
         generated_at = datetime.now(UTC)
         account_id = self._resolve_account_id(ib, requested_account_id)
         self._remember_account_id(account_id)
+        today_pnl, unrealized_pnl, realized_pnl = _request_account_pnl(ib, account_id)
         account_summary_rows = list(ib.accountSummary(account_id))
         account_values = {item.tag: item.value for item in account_summary_rows}
         portfolio_items = list(ib.portfolio(account_id))
@@ -165,6 +166,9 @@ class IBGatewayPortfolioMixin:
             initMarginReq=round(init_margin, 2),
             maintMarginReq=round(maint_margin, 2),
             cashBalance=round(cash_balance, 2),
+            todayPnl=_round_signed_or_none(today_pnl, 2),
+            unrealizedPnl=_round_signed_or_none(unrealized_pnl, 2),
+            realizedPnl=_round_signed_or_none(realized_pnl, 2),
             marginUsagePct=round((init_margin / net_liq) * 100.0, 2) if net_liq > 0 else 0.0,
             optionPositionsCount=len(option_positions),
             openOrdersCount=len(open_orders),
@@ -195,4 +199,27 @@ class IBGatewayPortfolioMixin:
             is_stale=False,
         )
 
+
+def _request_account_pnl(ib: Any, account_id: str) -> tuple[float | None, float | None, float | None]:
+    try:
+        pnl = ib.reqPnL(account_id, "")
+    except Exception:
+        return None, None, None
+    try:
+        deadline = time.monotonic() + 2.5
+        while time.monotonic() < deadline:
+            values = (
+                _safe_float(getattr(pnl, "dailyPnL", None)),
+                _safe_float(getattr(pnl, "unrealizedPnL", None)),
+                _safe_float(getattr(pnl, "realizedPnL", None)),
+            )
+            if all(_is_finite_number(value) for value in values):
+                return values
+            ib.sleep(0.1)
+        return tuple(value if _is_finite_number(value) else None for value in values)  # type: ignore[return-value]
+    finally:
+        try:
+            ib.cancelPnL(account_id, "")
+        except Exception:
+            pass
 

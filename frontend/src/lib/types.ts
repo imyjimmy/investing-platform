@@ -29,6 +29,9 @@ export interface AccountSnapshot {
   initMarginReq: number;
   maintMarginReq: number;
   cashBalance: number | null;
+  todayPnl: number | null;
+  unrealizedPnl: number | null;
+  realizedPnl: number | null;
   marginUsagePct: number;
   optionPositionsCount: number;
   openOrdersCount: number;
@@ -856,6 +859,21 @@ export interface CoinbaseHolding {
   updatedAt: string | null;
 }
 
+export type AccountSourceMetricName = "totalPnl" | "todayPnl" | "monthlyPnl" | "netWorth" | "netContributions";
+
+export interface AccountSourceMetrics {
+  totalPnl: number | null;
+  todayPnl: number | null;
+  monthlyPnl: number | null;
+  totalPnlPctBasis: number | null;
+  todayPnlPctBasis: number | null;
+  monthlyPnlPctBasis: number | null;
+  netWorth: number | null;
+  netContributions: number | null;
+  missingMetrics: AccountSourceMetricName[];
+  coverage: "complete" | "partial" | "unavailable";
+}
+
 export interface CoinbasePortfolioResponse {
   totalUsdValue: number;
   cryptoUsdValue: number;
@@ -866,6 +884,7 @@ export interface CoinbasePortfolioResponse {
   todayPnlPctBasis: number | null;
   monthlyPnlPctBasis: number | null;
   netContributions: number | null;
+  summary: AccountSourceMetrics;
   visibleHoldingsCount: number;
   totalAccountsCount: number;
   holdings: CoinbaseHolding[];
@@ -890,6 +909,7 @@ export interface FilesystemConnectorStatus {
   latestCsvPath: string | null;
   lastSuccessfulSyncAt: string | null;
   lastError: string | null;
+  enabled: boolean;
 }
 
 export interface FilesystemConnectorConfigRequest {
@@ -898,6 +918,68 @@ export interface FilesystemConnectorConfigRequest {
   positionsDirectoryPath: string | null;
   historyCsvPath: string | null;
   detectFooter: boolean;
+  enabled: boolean;
+}
+
+export interface IbkrConnectorConfigRequest {
+  displayName: string;
+  enabled: boolean;
+  host: string;
+  port: number;
+  clientId: number;
+  readonly: boolean;
+  accountId: string | null;
+  flexEnabled: boolean;
+  flexToken: string | null;
+  clearFlexToken: boolean;
+  flexQueryId: string | null;
+}
+
+export interface IbkrConnectorStatus {
+  sourceId: "ibkrGateway";
+  connectorId: "ibkrGateway";
+  accountKey: string;
+  displayName: string;
+  configured: boolean;
+  enabled: boolean;
+  connected: boolean;
+  status: "ready" | "degraded" | "misconfigured" | "disabled" | "unconfigured";
+  detail: string;
+  host: string;
+  port: number;
+  clientId: number;
+  readonly: boolean;
+  accountId: string | null;
+  discoveredAccounts: string[];
+  lastSuccessfulConnectAt: string | null;
+  lastHeartbeatAt: string | null;
+  lastError: string | null;
+  flexEnabled: boolean;
+  flexConfigured: boolean;
+  flexTokenConfigured: boolean;
+  flexQueryId: string | null;
+  flexStatus: "unconfigured" | "disabled" | "partial" | "ready" | "error";
+  flexDetail: string;
+  flexNetContributions: number | null;
+  flexCashTransactionsCount: number;
+  flexEquitySnapshotsCount: number;
+  flexPerformanceReady: boolean;
+  flexMissingSections: string[];
+  flexPeriodStart: string | null;
+  flexPeriodEnd: string | null;
+  lastSuccessfulFlexSyncAt: string | null;
+  lastFlexError: string | null;
+}
+
+export interface IbkrPortfolioResponse {
+  sourceId: "ibkrGateway";
+  connectorId: "ibkrGateway";
+  accountKey: string;
+  accountId: string;
+  summary: AccountSourceMetrics;
+  sourceNotice: string | null;
+  generatedAt: string;
+  isStale: boolean;
 }
 
 export interface FilesystemInvestmentAccount {
@@ -935,6 +1017,7 @@ export interface FilesystemConnectorPortfolioResponse {
   todayPnlPctBasis: number | null;
   monthlyPnlPctBasis: number | null;
   netContributions: number | null;
+  summary: AccountSourceMetrics;
   annualizedSharpeRatio: number | null;
   sharpeObservations: number;
   sharpePeriodStart: string | null;

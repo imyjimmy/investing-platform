@@ -13,6 +13,7 @@ from investing_platform.services.app_state import (
     get_filesystem_connector_service,
     get_finnhub_service,
     get_investor_pdf_service,
+    get_ibkr_connector_service,
     get_market_data_source_service,
     get_market_data_service,
     get_okx_service,
@@ -50,6 +51,10 @@ def coinbase_service():
 
 def filesystem_connector_service():
     return get_filesystem_connector_service()
+
+
+def ibkr_connector_service():
+    return get_ibkr_connector_service()
 
 
 def finnhub_service():
