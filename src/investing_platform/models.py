@@ -1123,6 +1123,7 @@ class FilesystemConnectorStatus(DashboardModel):
     directoryPath: str | None = None
     positionsDirectoryPath: str | None = None
     historyCsvPath: str | None = None
+    historyStartDate: date | None = None
     detectFooter: bool = False
     csvFilesCount: int = 0
     latestCsvPath: str | None = None
@@ -1136,6 +1137,7 @@ class FilesystemConnectorConfigRequest(DashboardModel):
     directoryPath: str | None = None
     positionsDirectoryPath: str | None = None
     historyCsvPath: str | None = None
+    historyStartDate: date | None = None
     detectFooter: bool = True
     enabled: bool = True
 

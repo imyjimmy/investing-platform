@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 import math
+import json
 import os
 from pathlib import Path
 
@@ -10,6 +11,25 @@ import pytest
 from investing_platform.config import DashboardSettings
 from investing_platform.models import FilesystemConnectorConfigRequest
 from investing_platform.services.filesystem_connectors import CSV_FOLDER_CONNECTOR_ID, FilesystemConnectorService
+
+
+def test_history_inception_round_trip_and_older_client_compatibility(tmp_path: Path) -> None:
+    state_file = tmp_path / "connectors.json"
+    positions = tmp_path / "positions"
+    positions.mkdir()
+    service = FilesystemConnectorService(DashboardSettings(filesystem_connectors_state_file=state_file))
+    fields = {"displayName": "Fidelity", "positionsDirectoryPath": str(positions)}
+    status = service.configure_connector("fund", CSV_FOLDER_CONNECTOR_ID,
+        FilesystemConnectorConfigRequest(**fields, historyStartDate=date(2026, 2, 25)))
+    assert status.historyStartDate == date(2026, 2, 25)
+    assert json.loads(state_file.read_text())["accounts"]["fund"]["csvFolder"]["history_start_date"] == "2026-02-25"
+    service = FilesystemConnectorService(DashboardSettings(filesystem_connectors_state_file=state_file))
+    status = service.configure_connector("fund", CSV_FOLDER_CONNECTOR_ID,
+        FilesystemConnectorConfigRequest(**fields), source_id=CSV_FOLDER_CONNECTOR_ID)
+    assert status.historyStartDate == date(2026, 2, 25)
+    status = service.configure_connector("fund", CSV_FOLDER_CONNECTOR_ID,
+        FilesystemConnectorConfigRequest(**fields, historyStartDate=None), source_id=CSV_FOLDER_CONNECTOR_ID)
+    assert status.historyStartDate is None
 
 
 def test_csv_folder_portfolio_calculates_flow_adjusted_sharpe(tmp_path: Path) -> None:

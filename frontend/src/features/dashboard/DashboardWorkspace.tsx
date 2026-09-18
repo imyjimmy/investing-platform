@@ -417,7 +417,7 @@ export function DashboardWorkspace() {
   ]);
 
   function emptyConnectorDraft(): ConnectorDraftState {
-    return { displayName: "", directoryPath: "", positionsDirectoryPath: "", historyCsvPath: "", detectFooter: true };
+    return { displayName: "", directoryPath: "", positionsDirectoryPath: "", historyCsvPath: "", historyStartDate: "", detectFooter: true };
   }
 
   function getConnectorDraft(draftKey: string): ConnectorDraftState {
@@ -432,6 +432,7 @@ export function DashboardWorkspace() {
         directoryPath: patch.directoryPath ?? current[draftKey]?.directoryPath ?? "",
         positionsDirectoryPath: patch.positionsDirectoryPath ?? current[draftKey]?.positionsDirectoryPath ?? "",
         historyCsvPath: patch.historyCsvPath ?? current[draftKey]?.historyCsvPath ?? "",
+        historyStartDate: patch.historyStartDate ?? current[draftKey]?.historyStartDate ?? "",
         detectFooter: patch.detectFooter ?? current[draftKey]?.detectFooter ?? true,
       },
     }));
@@ -443,6 +444,7 @@ export function DashboardWorkspace() {
       directoryPath: status.directoryPath?.trim() ?? "",
       positionsDirectoryPath: status.positionsDirectoryPath?.trim() ?? status.directoryPath?.trim() ?? "",
       historyCsvPath: status.historyCsvPath?.trim() ?? detectedHistoryCsvPath?.trim() ?? "",
+      historyStartDate: status.historyStartDate ?? "",
       detectFooter: status.detectFooter,
     };
   }
@@ -631,6 +633,7 @@ export function DashboardWorkspace() {
         directoryPath,
         positionsDirectoryPath,
         historyCsvPath,
+        historyStartDate: isCsvConnector ? draft.historyStartDate || null : null,
         detectFooter: isCsvConnector ? draft.detectFooter : false,
         enabled: true,
         sourceId,
@@ -787,6 +790,16 @@ export function DashboardWorkspace() {
                     Choose File
                   </button>
                 </div>
+              </label>
+              <label className="grid gap-2">
+                <span className="text-[11px] uppercase tracking-[0.16em] text-muted">Account inception date</span>
+                <input
+                  className="w-full rounded-xl border border-line/80 bg-panelSoft px-4 py-3 text-sm text-text outline-none transition focus:border-accent/60"
+                  onChange={(event) => updateConnectorDraft(draftKey, { historyStartDate: event.target.value })}
+                  type="date"
+                  value={connectorDraft.historyStartDate}
+                />
+                <span className="text-xs text-muted">Full account-history downloads start on this date.</span>
               </label>
               <label className="flex items-center gap-3 rounded-xl border border-line/80 bg-panelSoft px-4 py-3 text-sm text-text">
                 <input

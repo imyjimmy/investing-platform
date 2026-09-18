@@ -904,6 +904,7 @@ export interface FilesystemConnectorStatus {
   directoryPath: string | null;
   positionsDirectoryPath: string | null;
   historyCsvPath: string | null;
+  historyStartDate?: string | null;
   detectFooter: boolean;
   csvFilesCount: number;
   latestCsvPath: string | null;
@@ -917,6 +918,7 @@ export interface FilesystemConnectorConfigRequest {
   directoryPath: string | null;
   positionsDirectoryPath: string | null;
   historyCsvPath: string | null;
+  historyStartDate?: string | null;
   detectFooter: boolean;
   enabled: boolean;
 }

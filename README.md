@@ -29,6 +29,7 @@ The original options-scanner pipeline is still present under `src/options_scanne
 - Pulls account summary, portfolio positions, and open orders
 - Pulls Coinbase account balances into an account-bound dashboard section
 - Links account-owned CSV folder connectors from Account Settings for broker or custodian exports
+- Stores each CSV source's positions folder, account-history CSV path, and account inception date in Account Settings. The separate Fidelity downloader reads these saved settings to route exports; full history replaces the configured CSV filename.
 - Normalizes option positions into short-put / covered-call views
 - Estimates collateral usage and free option-selling capacity
 - Fetches option chains for selected symbols, including **NVDA**

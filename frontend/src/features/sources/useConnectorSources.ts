@@ -22,6 +22,7 @@ export type ConnectorDraftState = {
   directoryPath: string;
   positionsDirectoryPath: string;
   historyCsvPath: string;
+  historyStartDate: string;
   detectFooter: boolean;
 };
 
@@ -32,6 +33,7 @@ type FilesystemConnectorConfigureVariables = {
   directoryPath: string | null;
   positionsDirectoryPath: string | null;
   historyCsvPath: string | null;
+  historyStartDate: string | null;
   detectFooter: boolean;
   enabled: boolean;
   sourceId?: string;
@@ -158,11 +160,11 @@ export function useConnectorSources({ accountSettingsOpen, globalSettingsActive,
   });
 
   const filesystemConnectorConfigureMutation = useMutation({
-    mutationFn: ({ accountKey, connectorId, displayName, directoryPath, positionsDirectoryPath, historyCsvPath, detectFooter, enabled, sourceId }: FilesystemConnectorConfigureVariables) =>
+    mutationFn: ({ accountKey, connectorId, displayName, directoryPath, positionsDirectoryPath, historyCsvPath, historyStartDate, detectFooter, enabled, sourceId }: FilesystemConnectorConfigureVariables) =>
       sourceApi.filesystemConnectorConfigure(
         accountKey,
         connectorId,
-        { displayName, directoryPath, positionsDirectoryPath, historyCsvPath, detectFooter, enabled },
+        { displayName, directoryPath, positionsDirectoryPath, historyCsvPath, historyStartDate, detectFooter, enabled },
         sourceId,
       ),
     onSuccess: async (_data, variables) => {

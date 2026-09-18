@@ -62,6 +62,7 @@ class StoredFilesystemConnector:
     directory_path: str
     positions_directory_path: str | None
     history_csv_path: str | None
+    history_start_date: str | None
     detect_footer: bool
     enabled: bool
     created_at: datetime
@@ -153,6 +154,7 @@ class FilesystemConnectorService:
                 directoryPath=record.directory_path,
                 positionsDirectoryPath=record.positions_directory_path,
                 historyCsvPath=record.history_csv_path,
+                historyStartDate=record.history_start_date,
                 detectFooter=record.detect_footer,
                 enabled=False,
             )
@@ -177,6 +179,7 @@ class FilesystemConnectorService:
                 directoryPath=str(directory),
                 positionsDirectoryPath=str(directory) if record.connector_id == CSV_FOLDER_CONNECTOR_ID else None,
                 historyCsvPath=str(history_csv_path) if history_csv_path is not None else None,
+                historyStartDate=record.history_start_date,
                 detectFooter=record.detect_footer,
                 csvFilesCount=0,
                 latestCsvPath=None,
@@ -196,6 +199,7 @@ class FilesystemConnectorService:
                 directoryPath=str(directory),
                 positionsDirectoryPath=str(directory),
                 historyCsvPath=str(history_csv_path) if history_csv_path is not None else None,
+                historyStartDate=record.history_start_date,
                 detectFooter=record.detect_footer,
                 csvFilesCount=0,
                 latestCsvPath=None,
@@ -239,6 +243,7 @@ class FilesystemConnectorService:
             directoryPath=str(directory),
             positionsDirectoryPath=str(directory) if record.connector_id == CSV_FOLDER_CONNECTOR_ID else None,
             historyCsvPath=str(history_csv_path) if history_csv_path is not None else None,
+            historyStartDate=record.history_start_date,
             detectFooter=record.detect_footer,
             csvFilesCount=len(csv_files) if record.connector_id == CSV_FOLDER_CONNECTOR_ID else len(pdf_files),
             latestCsvPath=latest_csv_path if record.connector_id == CSV_FOLDER_CONNECTOR_ID else latest_pdf_path,
@@ -286,6 +291,12 @@ class FilesystemConnectorService:
         now = datetime.now(UTC)
         normalized_source_id = _normalize_source_id(source_id) if source_id is not None else self._next_source_id(normalized_account_key, connector_id)
         existing = self._read_record(normalized_account_key, normalized_source_id)
+        history_start_date = None
+        if connector_id == CSV_FOLDER_CONNECTOR_ID:
+            if "historyStartDate" not in request.model_fields_set and existing is not None:
+                history_start_date = existing.history_start_date
+            elif request.historyStartDate is not None:
+                history_start_date = request.historyStartDate.isoformat()
         record = StoredFilesystemConnector(
             account_key=normalized_account_key,
             source_id=normalized_source_id,
@@ -294,6 +305,7 @@ class FilesystemConnectorService:
             directory_path=str(directory),
             positions_directory_path=str(positions_directory) if positions_directory is not None else None,
             history_csv_path=str(history_csv_path) if history_csv_path is not None else None,
+            history_start_date=history_start_date,
             detect_footer=request.detectFooter if connector_id == CSV_FOLDER_CONNECTOR_ID else False,
             enabled=request.enabled,
             created_at=existing.created_at if existing else now,
@@ -606,6 +618,7 @@ class FilesystemConnectorService:
                     directory_path=directory_path,
                     positions_directory_path=positions_directory_path,
                     history_csv_path=history_csv_path,
+                    history_start_date=str(raw.get("history_start_date") or "").strip() or None,
                     detect_footer=_parse_bool(raw.get("detect_footer"), default=connector_id == CSV_FOLDER_CONNECTOR_ID),
                     enabled=_parse_bool(raw.get("enabled"), default=True),
                     created_at=_parse_datetime(raw.get("created_at")) or datetime.now(UTC),
@@ -632,6 +645,7 @@ class FilesystemConnectorService:
             "directory_path": record.directory_path,
             "positions_directory_path": record.positions_directory_path,
             "history_csv_path": record.history_csv_path,
+            "history_start_date": record.history_start_date,
             "detect_footer": record.detect_footer,
             "enabled": record.enabled,
             "created_at": record.created_at.isoformat(),
