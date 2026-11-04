@@ -243,8 +243,8 @@ class IbkrConnectorService:
             notice = f"IBKR is connected, but the account-source metric contract is incomplete: {missing}."
             if "monthlyPnl" in summary.missingMetrics:
                 notice += (
-                    " Update the Activity Flex Query to include Equity Summary by Report Date in Base "
-                    "(Report Date and Net Liquidation) and Cash Transactions "
+                    " Update the Activity Flex Query to include Net Asset Value (NAV) in Base "
+                    "(Report Date and Total), enable Breakout by Day, and include Cash Transactions "
                     "(Date/Time, Amount, Currency, and FX Rate to Base)."
                 )
         return IbkrPortfolioResponse(

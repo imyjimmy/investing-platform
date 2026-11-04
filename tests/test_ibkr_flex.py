@@ -49,6 +49,33 @@ def test_parse_flex_cash_flows_requires_cash_transactions_section() -> None:
         parse_flex_cash_flows(xml, account_id="U-TARGET")
 
 
+def test_parse_flex_nav_total_from_daily_statements() -> None:
+    xml = '''<FlexQueryResponse><FlexStatements>
+      <FlexStatement accountId="U-TARGET" fromDate="20261030" toDate="20261030">
+        <CashTransactions />
+        <EquitySummaryInBase>
+          <EquitySummaryByReportDateInBase accountId="U-TARGET" reportDate="20261030"
+            total="40,000.50" totalLong="50000.50" totalShort="-10000" />
+        </EquitySummaryInBase>
+      </FlexStatement>
+      <FlexStatement accountId="U-TARGET" fromDate="20261102" toDate="20261102">
+        <CashTransactions />
+        <EquitySummaryInBase>
+          <EquitySummaryByReportDateInBase accountId="U-TARGET" reportDate="20261102"
+            total="0" totalLong="10000" totalShort="-10000" />
+          <EquitySummaryByReportDateInBase accountId="U-OTHER" reportDate="20261102" total="999" />
+        </EquitySummaryInBase>
+      </FlexStatement>
+    </FlexStatements></FlexQueryResponse>'''
+
+    summary = parse_flex_cash_flows(xml, account_id="U-TARGET")
+
+    assert summary.equity_by_date == {date(2026, 10, 30): 40000.50, date(2026, 11, 2): 0.0}
+    assert summary.period_start == date(2026, 10, 30)
+    assert summary.period_end == date(2026, 11, 2)
+    assert summary.missing_sections == ()
+
+
 def test_flex_client_runs_two_step_workflow_and_retries_pending_statement() -> None:
     session = FakeSession(
         [

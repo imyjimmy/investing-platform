@@ -181,14 +181,18 @@ def parse_flex_cash_flows(xml_text: str, *, account_id: str) -> FlexCashFlowSumm
     equity_by_date: dict[date, float] = {}
     for equity_row in equity_rows:
         report_date = _parse_flex_date(equity_row.attrib.get("reportDate"))
-        net_liquidation = _float_attr(equity_row, "netLiquidation")
+        # Client Portal's "Net Asset Value (NAV) in Base" exports its Total
+        # field as `total`; retain compatibility with older netLiquidation rows.
+        net_liquidation = _float_attr(equity_row, "total")
+        if net_liquidation is None:
+            net_liquidation = _float_attr(equity_row, "netLiquidation")
         if report_date is None or net_liquidation is None:
             continue
         equity_by_date[report_date] = net_liquidation
 
     missing_sections: list[str] = []
     if not equity_by_date:
-        missing_sections.append("Equity Summary by Report Date in Base")
+        missing_sections.append("Net Asset Value (NAV) in Base (Report Date and Total)")
     if dated_transactions < transaction_count:
         missing_sections.append("Cash Transactions date/time")
 
