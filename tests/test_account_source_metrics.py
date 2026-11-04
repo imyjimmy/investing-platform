@@ -24,6 +24,8 @@ def test_common_account_source_contract_exposes_required_dashboard_metrics() -> 
         "totalPnlPctBasis",
         "todayPnlPctBasis",
         "monthlyPnlPctBasis",
+        "quarterlyPnl",
+        "quarterlyPnlPctBasis",
         "netWorth",
         "netContributions",
         "missingMetrics",

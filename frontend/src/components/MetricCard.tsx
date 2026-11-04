@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 
 interface MetricCardProps {
-  label: string;
+  label: ReactNode;
   value: string;
   secondaryValue?: string | null;
   tone?: "neutral" | "safe" | "caution" | "danger";

@@ -214,3 +214,35 @@ def test_ibkr_connected_source_fulfills_common_metric_contract(tmp_path: Path) -
     assert portfolio.summary.netContributions == 20000.0
     assert portfolio.summary.todayPnlPctBasis == 22900.0
     assert portfolio.summary.monthlyPnlPctBasis == 20000.0
+
+
+@pytest.mark.parametrize("month", [1, 2, 4, 5, 7, 8, 10, 11])
+@pytest.mark.parametrize("has_opening", [True, False])
+def test_quarterly_pnl_uses_calendar_opening_and_adjusts_cash_flows(tmp_path, monkeypatch, month, has_opening):
+    from types import SimpleNamespace
+
+    current = datetime(2026, month, 15, 17, tzinfo=UTC)
+    quarter_start = current.date().replace(month=((month - 1) // 3) * 3 + 1, day=1)
+    opening = quarter_start - timedelta(days=1)
+    broker = FakeBroker(["U-FOUND"])
+    snapshot = broker.get_portfolio_snapshot("U-FOUND")
+    snapshot.generated_at = current
+    # Live equity includes a 500 deposit not yet present in the Flex report.
+    snapshot.account.netLiquidation = 23500
+    monkeypatch.setattr(broker, "get_portfolio_snapshot", lambda account: snapshot)
+    service = IbkrConnectorService(DashboardSettings(filesystem_connectors_state_file=tmp_path / "state.json"), broker)
+    monkeypatch.setattr(service, "status", lambda account: SimpleNamespace(connected=True, accountId="U-FOUND", flexNetContributions=20000))
+    history = [{"date": (current.date() - timedelta(days=1)).isoformat(), "net_liquidation": 22900}]
+    if has_opening:
+        history.append({"date": opening.isoformat(), "net_liquidation": 18000})
+    monkeypatch.setattr(service, "_record", lambda account: {
+        "flex_equity_history": history,
+        "flex_cash_flows": [
+            {"date": quarter_start.isoformat(), "amount": 1000},
+            {"date": (quarter_start + timedelta(days=1)).isoformat(), "amount": -200},
+            {"date": opening.isoformat(), "amount": 5000},
+        ],
+    })
+    summary = service.portfolio("fund").summary
+    assert summary.quarterlyPnl == (4200 if has_opening else None)
+    assert summary.quarterlyPnlPctBasis == (18000 if has_opening else None)

@@ -1,3 +1,4 @@
+import { PnlPeriodProvider } from "../../components/account-sources/PnlPeriodControl";
 import { useMemo, useState, type ReactNode } from "react";
 
 import { AccountDashboardView } from "../../components/AccountDashboardView";
@@ -42,19 +43,22 @@ type AccountConnectorCard = {
   icon: ReactNode;
 };
 
-type AccountSourceSummaryMetricKey = "totalPnl" | "todayPnl" | "monthlyPnl" | "netWorth" | "netContributions";
-type AccountSourceSummaryPnlBasisKey = "totalPnlPctBasis" | "todayPnlPctBasis" | "monthlyPnlPctBasis";
+type AccountSourceSummaryMetricKey = "totalPnl" | "todayPnl" | "monthlyPnl" | "quarterlyPnl" | "netWorth" | "netContributions";
+type AccountSourceSummaryPnlBasisKey = "totalPnlPctBasis" | "todayPnlPctBasis" | "monthlyPnlPctBasis" | "quarterlyPnlPctBasis";
 
 type AccountSourceSummary = AccountConnectorCard & {
   totalPnl: number | null;
   todayPnl: number | null;
   monthlyPnl: number | null;
+  quarterlyPnl: number | null;
   totalPnlPct: number | null;
   todayPnlPct: number | null;
   monthlyPnlPct: number | null;
+  quarterlyPnlPct: number | null;
   totalPnlPctBasis: number | null;
   todayPnlPctBasis: number | null;
   monthlyPnlPctBasis: number | null;
+  quarterlyPnlPctBasis: number | null;
   netWorth: number | null;
   netContributions: number | null;
 };
@@ -291,6 +295,9 @@ export function DashboardWorkspace() {
     coinbaseAccountSourceSummary,
     dashboardHeaderRouteLabel,
     dashboardMonthlyPnl,
+    dashboardQuarterlyPnl,
+    dashboardQuarterlyPnlPct,
+    dashboardQuarterlyPnlHint,
     dashboardMonthlyPnlHint,
     dashboardMonthlyPnlPct,
     dashboardNetWorth,
@@ -323,6 +330,9 @@ export function DashboardWorkspace() {
     const dashboardReportedTotalPnl = sumAccountSourceMetric(accountSourceSummaries, "totalPnl");
     const dashboardTodayPnl = sumAccountSourceMetric(accountSourceSummaries, "todayPnl");
     const dashboardMonthlyPnl = sumAccountSourceMetric(accountSourceSummaries, "monthlyPnl");
+    const dashboardQuarterlyPnl = sumAccountSourceMetric(accountSourceSummaries, "quarterlyPnl");
+    const dashboardQuarterlyPnlPct = deriveAggregatePnlPct(accountSourceSummaries, "quarterlyPnl", "quarterlyPnlPctBasis");
+    const dashboardQuarterlyPnlHint = describeMissingPeriodSources(accountSourceSummaries, "quarterlyPnl");
     const dashboardNetWorth = sumAccountSourceMetric(accountSourceSummaries, "netWorth");
     const dashboardSourceDerivedTotalPnl = deriveDashboardTotalPnlFromSourceContributions(accountSourceSummaries);
     const dashboardSourceContributionBasis = deriveDashboardContributionBasisFromSources(accountSourceSummaries);
@@ -343,7 +353,7 @@ export function DashboardWorkspace() {
       selectedDashboardAccount.netContributionsUsd,
     );
     const dashboardTodayPnlHint = describeAccountSourceMetricCoverage(accountSourceSummaries, "todayPnl");
-    const dashboardMonthlyPnlHint = describeAccountSourceMetricCoverage(accountSourceSummaries, "monthlyPnl");
+    const dashboardMonthlyPnlHint = describeMissingPeriodSources(accountSourceSummaries, "monthlyPnl");
     const dashboardNetWorthHint = describeAccountSourceMetricCoverage(accountSourceSummaries, "netWorth");
     const ibkrAccountSourceSummary = accountSourceSummaries.find((summary) => summary.id === `ibkr-${selectedDashboardAccount.key}`) ?? null;
     const coinbaseAccountSourceSummary =
@@ -370,6 +380,9 @@ export function DashboardWorkspace() {
       coinbaseAccountSourceSummary,
       dashboardHeaderRouteLabel,
       dashboardMonthlyPnl,
+      dashboardQuarterlyPnl,
+      dashboardQuarterlyPnlPct,
+      dashboardQuarterlyPnlHint,
       dashboardMonthlyPnlHint,
       dashboardMonthlyPnlPct,
       dashboardNetWorth,
@@ -485,6 +498,8 @@ export function DashboardWorkspace() {
     ) : coinbasePortfolioQuery.data ? (
       <div className="grid gap-4">
         <AccountSourceSummaryCards
+          quarterlyPnl={coinbaseAccountSourceSummary?.quarterlyPnl}
+          quarterlyPnlPct={coinbaseAccountSourceSummary?.quarterlyPnlPct}
           monthlyPnl={coinbaseMonthlyPnl}
           monthlyPnlPct={coinbaseMonthlyPnlPct}
           netWorth={coinbaseNetWorth}
@@ -875,6 +890,8 @@ export function DashboardWorkspace() {
         portfolio={portfolio}
         portfolioError={portfolioError}
         portfolioLoading={portfolioLoading}
+        quarterlyPnl={summary?.quarterlyPnl ?? null}
+        quarterlyPnlPct={summary?.quarterlyPnlPct ?? null}
         monthlyPnl={summary?.monthlyPnl ?? null}
         monthlyPnlPct={summary?.monthlyPnlPct ?? null}
         netWorth={summary?.netWorth ?? null}
@@ -892,6 +909,9 @@ export function DashboardWorkspace() {
   const dashboardSummaryContent = (
     <>
       <AccountSourceSummaryCards
+        quarterlyPnl={dashboardQuarterlyPnl}
+        quarterlyPnlPct={dashboardQuarterlyPnlPct}
+        quarterlyPnlHint={dashboardQuarterlyPnlHint}
         monthlyPnl={dashboardMonthlyPnl}
         monthlyPnlPct={dashboardMonthlyPnlPct}
         monthlyPnlHint={dashboardMonthlyPnlHint}
@@ -1104,6 +1124,8 @@ export function DashboardWorkspace() {
       >
         <div className="grid gap-6">
           <AccountSourceSummaryCards
+            quarterlyPnl={ibkrAccountSourceSummary?.quarterlyPnl ?? null}
+            quarterlyPnlPct={ibkrAccountSourceSummary?.quarterlyPnlPct ?? null}
             monthlyPnl={ibkrAccountSourceSummary?.monthlyPnl ?? null}
             monthlyPnlPct={ibkrAccountSourceSummary?.monthlyPnlPct ?? null}
             netWorth={ibkrAccountSourceSummary?.netWorth ?? null}
@@ -1211,23 +1233,25 @@ export function DashboardWorkspace() {
   );
 
   return (
-    <AccountDashboardView
-      accountSettingsOpen={accountSettingsOpen}
-      bodyContent={dashboardBodyContent}
-      headerRouteLabel={dashboardHeaderRouteLabel}
-      headerStatusIndicatorClassName={connectionToneIndicatorClass(accountStatusTone)}
-      headerStatusLabel={accountStatusLabel}
-      onSelectAccount={(accountKey) => {
-        setSelectedDashboardAccountKey(accountKey);
-        setAccountSettingsOpen(false);
-        setEditingIbkrConnector(false);
-        setEditingFilesystemSourceId(null);
-      }}
-      onToggleSettings={() => setAccountSettingsOpen((value) => !value)}
-      selectedAccountKey={selectedDashboardAccount.key}
-      settingsContent={dashboardSettingsContent}
-      summaryContent={dashboardSummaryContent}
-    />
+    <PnlPeriodProvider key={selectedDashboardAccount.key}>
+      <AccountDashboardView
+        accountSettingsOpen={accountSettingsOpen}
+        bodyContent={dashboardBodyContent}
+        headerRouteLabel={dashboardHeaderRouteLabel}
+        headerStatusIndicatorClassName={connectionToneIndicatorClass(accountStatusTone)}
+        headerStatusLabel={accountStatusLabel}
+        onSelectAccount={(accountKey) => {
+          setSelectedDashboardAccountKey(accountKey);
+          setAccountSettingsOpen(false);
+          setEditingIbkrConnector(false);
+          setEditingFilesystemSourceId(null);
+        }}
+        onToggleSettings={() => setAccountSettingsOpen((value) => !value)}
+        selectedAccountKey={selectedDashboardAccount.key}
+        settingsContent={dashboardSettingsContent}
+        summaryContent={dashboardSummaryContent}
+      />
+    </PnlPeriodProvider>
   );
 }
 
@@ -1282,6 +1306,8 @@ function buildAccountSourceSummary(
   const totalPnl = metrics?.totalPnl ?? null;
   const todayPnl = metrics?.todayPnl ?? null;
   const monthlyPnl = metrics?.monthlyPnl ?? null;
+  const quarterlyPnl = metrics?.quarterlyPnl ?? null;
+  const quarterlyPnlPctBasis = metrics?.quarterlyPnlPctBasis ?? null;
   const totalPnlPctBasis = metrics?.totalPnlPctBasis ?? null;
   const todayPnlPctBasis = metrics?.todayPnlPctBasis ?? null;
   const monthlyPnlPctBasis = metrics?.monthlyPnlPctBasis ?? null;
@@ -1290,6 +1316,9 @@ function buildAccountSourceSummary(
     totalPnl,
     todayPnl,
     monthlyPnl,
+    quarterlyPnl,
+    quarterlyPnlPctBasis,
+    quarterlyPnlPct: derivePnlPct(quarterlyPnl, quarterlyPnlPctBasis),
     totalPnlPct: derivePnlPct(totalPnl, totalPnlPctBasis),
     todayPnlPct: derivePnlPct(todayPnl, todayPnlPctBasis),
     monthlyPnlPct: derivePnlPct(monthlyPnl, monthlyPnlPctBasis),
@@ -1366,6 +1395,13 @@ function sumAccountSourceMetric(summaries: AccountSourceSummary[], key: AccountS
   return values.reduce((total, value) => total + value, 0);
 }
 
+function describeMissingPeriodSources(summaries: AccountSourceSummary[], key: "monthlyPnl" | "quarterlyPnl") {
+  const missing = summaries.filter((summary) => summary[key] == null || !Number.isFinite(summary[key]));
+  if (!missing.length) return undefined;
+  const period = key === "monthlyPnl" ? "Month" : "Quarter";
+  return `${period} PnL ${missing.length === summaries.length ? "is unavailable for" : "excludes"} ${missing.map((source) => source.title).join(", ")}; period history is unavailable.`;
+}
+
 function describeAccountSourceMetricCoverage(summaries: AccountSourceSummary[], key: AccountSourceSummaryMetricKey) {
   if (!summaries.length) {
     return "No account sources attached.";
@@ -1423,7 +1459,7 @@ function deriveDashboardContributionBasisFromSources(summaries: AccountSourceSum
 
 function deriveAggregatePnlPct(
   summaries: AccountSourceSummary[],
-  valueKey: "totalPnl" | "todayPnl" | "monthlyPnl",
+  valueKey: "totalPnl" | "todayPnl" | "monthlyPnl" | "quarterlyPnl",
   basisKey: AccountSourceSummaryPnlBasisKey,
 ) {
   const contributingSources = summaries.filter((summary) => summary[valueKey] != null && !Number.isNaN(summary[valueKey]));

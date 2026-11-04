@@ -12,6 +12,8 @@ def test_every_investment_account_source_exposes_the_common_metric_schema() -> N
         "totalPnlPctBasis",
         "todayPnlPctBasis",
         "monthlyPnlPctBasis",
+        "quarterlyPnl",
+        "quarterlyPnlPctBasis",
         "netWorth",
         "netContributions",
         "missingMetrics",

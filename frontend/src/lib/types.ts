@@ -865,9 +865,11 @@ export interface AccountSourceMetrics {
   totalPnl: number | null;
   todayPnl: number | null;
   monthlyPnl: number | null;
+  quarterlyPnl: number | null;
   totalPnlPctBasis: number | null;
   todayPnlPctBasis: number | null;
   monthlyPnlPctBasis: number | null;
+  quarterlyPnlPctBasis: number | null;
   netWorth: number | null;
   netContributions: number | null;
   missingMetrics: AccountSourceMetricName[];

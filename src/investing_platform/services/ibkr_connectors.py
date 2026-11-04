@@ -210,12 +210,11 @@ class IbkrConnectorService:
         if today_pnl_basis is None and today_pnl is not None:
             today_pnl_basis = round(net_worth - today_pnl, 2)
 
-        monthly_pnl: float | None = None
-        monthly_pnl_basis: float | None = None
-        month_start = snapshot_date.replace(day=1)
-        month_start_equity = _latest_value_before(equity_by_date, month_start)
-        if month_start_equity is not None:
-            basis_date, monthly_pnl_basis = month_start_equity
+        def period_pnl(period_start: date) -> tuple[float | None, float | None]:
+            opening_equity = _latest_value_before(equity_by_date, period_start)
+            if opening_equity is None:
+                return None, None
+            basis_date, basis = opening_equity
             external_flows = sum(
                 amount
                 for flow_date, amount in cash_flows_by_date.items()
@@ -225,15 +224,22 @@ class IbkrConnectorService:
                 implied_today_flow = net_worth - previous_equity[1] - today_pnl
                 if snapshot_date not in cash_flows_by_date:
                     external_flows += implied_today_flow
-            monthly_pnl = round(net_worth - monthly_pnl_basis - external_flows, 2)
+            return round(net_worth - basis - external_flows, 2), round(basis, 2)
+
+        monthly_pnl, monthly_pnl_basis = period_pnl(snapshot_date.replace(day=1))
+        quarterly_pnl, quarterly_pnl_basis = period_pnl(
+            snapshot_date.replace(month=((snapshot_date.month - 1) // 3) * 3 + 1, day=1)
+        )
 
         summary = AccountSourceMetrics(
             totalPnl=total_pnl,
             todayPnl=today_pnl,
             monthlyPnl=monthly_pnl,
+            quarterlyPnl=quarterly_pnl,
             totalPnlPctBasis=net_contributions,
             todayPnlPctBasis=round(today_pnl_basis, 2) if today_pnl_basis is not None else None,
-            monthlyPnlPctBasis=round(monthly_pnl_basis, 2) if monthly_pnl_basis is not None else None,
+            monthlyPnlPctBasis=monthly_pnl_basis,
+            quarterlyPnlPctBasis=quarterly_pnl_basis,
             netWorth=round(net_worth, 2),
             netContributions=net_contributions,
         )

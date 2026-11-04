@@ -101,6 +101,8 @@ class SnapshotPeriodPnl:
     monthly_pnl: float | None
     today_pnl_pct_basis: float | None
     monthly_pnl_pct_basis: float | None
+    quarterly_pnl: float | None
+    quarterly_pnl_pct_basis: float | None
     notices: list[str]
 
 
@@ -501,9 +503,11 @@ class FilesystemConnectorService:
             totalPnl=period_pnl.total_pnl,
             todayPnl=period_pnl.today_pnl,
             monthlyPnl=period_pnl.monthly_pnl,
+            quarterlyPnl=period_pnl.quarterly_pnl,
             totalPnlPctBasis=net_contributions,
             todayPnlPctBasis=period_pnl.today_pnl_pct_basis,
             monthlyPnlPctBasis=period_pnl.monthly_pnl_pct_basis,
+            quarterlyPnlPctBasis=period_pnl.quarterly_pnl_pct_basis,
             netWorth=total_value,
             netContributions=net_contributions,
         )
@@ -780,11 +784,13 @@ def _derive_snapshot_period_pnl(
     latest_snapshot_date = _extract_snapshot_date(latest_csv)
     total_pnl = round(latest_total_value - total_net_contributions, 2) if total_net_contributions is not None else None
     if latest_snapshot_date is None:
-        notices.append("Could not parse a snapshot date from the latest CSV, so day and month PnL are unavailable.")
+        notices.append("Could not parse a snapshot date from the latest CSV, so day, month, and quarter PnL are unavailable.")
         return SnapshotPeriodPnl(
             total_pnl=total_pnl,
             today_pnl=None,
             monthly_pnl=None,
+            quarterly_pnl=None,
+            quarterly_pnl_pct_basis=None,
             today_pnl_pct_basis=None,
             monthly_pnl_pct_basis=None,
             notices=notices,
@@ -844,10 +850,34 @@ def _derive_snapshot_period_pnl(
     else:
         notices.append("Month PnL is unavailable because no comparable month-start snapshot was found.")
 
+    quarter_start = latest_snapshot_date.replace(month=((latest_snapshot_date.month - 1) // 3) * 3 + 1, day=1)
+    # Do not present a partial-quarter history as quarter-to-date performance.
+    quarter_snapshot = _latest_snapshot_before(historical_snapshots, quarter_start)
+    quarterly_pnl: float | None = None
+    quarterly_pnl_pct_basis: float | None = None
+    if quarter_snapshot is not None:
+        start_date = quarter_snapshot.snapshot_date + timedelta(days=1)
+        quarterly_flows = _derive_net_contributions(
+            directory, [], explicit_history_csv_path, start_date=start_date, end_date=latest_snapshot_date,
+        )
+        quarterly_net_flow = (quarterly_flows.net_contributions if quarterly_flows is not None else 0.0) + _inferred_snapshot_flow_between(
+            inferred_snapshot_flows, start_date, latest_snapshot_date,
+        )
+        quarterly_pnl = round(latest_total_value - quarter_snapshot.total_value - quarterly_net_flow, 2)
+        quarterly_pnl_pct_basis = round(quarter_snapshot.total_value, 2)
+        notices.append(
+            f"Quarter PnL uses the latest snapshot date {latest_snapshot_date.strftime('%b %-d, %Y')} versus "
+            f"{quarter_snapshot.snapshot_date.strftime('%b %-d, %Y')}."
+        )
+    else:
+        notices.append("Quarter PnL is unavailable because no quarter-opening snapshot was found.")
+
     return SnapshotPeriodPnl(
         total_pnl=total_pnl,
         today_pnl=today_pnl,
         monthly_pnl=monthly_pnl,
+        quarterly_pnl=quarterly_pnl,
+        quarterly_pnl_pct_basis=quarterly_pnl_pct_basis,
         today_pnl_pct_basis=today_pnl_pct_basis,
         monthly_pnl_pct_basis=monthly_pnl_pct_basis,
         notices=notices,

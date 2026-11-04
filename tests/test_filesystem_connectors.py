@@ -154,3 +154,20 @@ def _mean(values: list[float]) -> float:
 def _sample_standard_deviation(values: list[float]) -> float:
     mean_value = _mean(values)
     return math.sqrt(sum((value - mean_value) ** 2 for value in values) / (len(values) - 1))
+
+
+@pytest.mark.parametrize("opening_date,latest_date", [(date(2025, 12, 31), date(2026, 2, 15)), (date(2026, 9, 30), date(2026, 11, 4))])
+@pytest.mark.parametrize("has_opening", [True, False])
+def test_quarterly_snapshot_pnl_requires_opening_and_excludes_deposits(tmp_path, opening_date, latest_date, has_opening):
+    from investing_platform.services.filesystem_connectors import _derive_snapshot_period_pnl
+
+    if has_opening:
+        opening = tmp_path / f"Portfolio_Positions_{opening_date.strftime('%b-%d-%Y')}.csv"
+        _write_snapshot(opening, 1000, modified_at=datetime.combine(opening_date, datetime.min.time()))
+    latest = tmp_path / f"Portfolio_Positions_{latest_date.strftime('%b-%d-%Y')}.csv"
+    _write_snapshot(latest, 1350, modified_at=datetime.combine(latest_date, datetime.min.time()))
+    history = tmp_path / "history.csv"
+    history.write_text(f"Run Date,Action,Amount ($)\n{latest_date.strftime('%m/%d/%Y')},ELECTRONIC FUNDS TRANSFER RECEIVED,200\n")
+    result = _derive_snapshot_period_pnl(tmp_path, latest, 1350, False, history, 1200)
+    assert result.quarterly_pnl == (150 if has_opening else None)
+    assert result.quarterly_pnl_pct_basis == (1000 if has_opening else None)

@@ -62,6 +62,8 @@ class CoinbasePeriodPnlSummary:
     monthly_pnl: float | None
     today_pnl_pct_basis: float | None
     monthly_pnl_pct_basis: float | None
+    quarterly_pnl: float | None
+    quarterly_pnl_pct_basis: float | None
     notices: list[str] = field(default_factory=list)
 
 
@@ -302,9 +304,11 @@ class CoinbaseService:
             totalPnl=total_pnl,
             todayPnl=today_pnl,
             monthlyPnl=monthly_pnl,
+            quarterlyPnl=period_pnl_summary.quarterly_pnl if period_pnl_summary is not None else None,
             totalPnlPctBasis=net_contributions,
             todayPnlPctBasis=today_pnl_pct_basis,
             monthlyPnlPctBasis=monthly_pnl_pct_basis,
+            quarterlyPnlPctBasis=period_pnl_summary.quarterly_pnl_pct_basis if period_pnl_summary is not None else None,
             netWorth=total_usd_value,
             netContributions=net_contributions,
         )
@@ -608,9 +612,32 @@ class CoinbaseService:
                 "Today's PnL and Month PnL are derived from current Coinbase balances, completed account transactions since the local period start, and Coinbase public USD candles."
             )
 
+        start_of_quarter = start_of_month.replace(month=((now_local.month - 1) // 3) * 3 + 1)
+        if start_of_quarter == start_of_month:
+            quarterly_pnl, quarterly_pnl_pct_basis = monthly_pnl, monthly_pnl_pct_basis
+        else:
+            try:
+                quarterly_pnl, quarterly_pnl_pct_basis, quarterly_notice = self._calculate_period_pnl(
+                    track_accounts=track_accounts,
+                    credentials=credentials,
+                    current_quantities_by_asset=current_quantities_by_asset,
+                    cash_like_assets=cash_like_assets,
+                    current_total_usd_value=current_total_usd_value,
+                    period_start=start_of_quarter,
+                    price_cache=price_cache,
+                )
+            except (requests.RequestException, RuntimeError, ValueError) as exc:
+                # Older history can fail independently of the day/month data already loaded.
+                quarterly_pnl, quarterly_pnl_pct_basis = None, None
+                quarterly_notice = f"quarter-opening history could not be loaded: {exc}"
+            if quarterly_notice:
+                notices.append(f"Quarter PnL: {quarterly_notice}")
+
         return CoinbasePeriodPnlSummary(
             today_pnl=today_pnl,
             monthly_pnl=monthly_pnl,
+            quarterly_pnl=quarterly_pnl,
+            quarterly_pnl_pct_basis=quarterly_pnl_pct_basis,
             today_pnl_pct_basis=round(today_pnl_pct_basis, 2) if today_pnl_pct_basis is not None else None,
             monthly_pnl_pct_basis=round(monthly_pnl_pct_basis, 2) if monthly_pnl_pct_basis is not None else None,
             notices=notices,

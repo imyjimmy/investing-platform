@@ -31,9 +31,12 @@ class AccountSourceMetrics(DashboardModel):
     totalPnl: float | None = None
     todayPnl: float | None = None
     monthlyPnl: float | None = None
+    # Optional period extension; legacy coverage continues to describe the default month view.
+    quarterlyPnl: float | None = None
     totalPnlPctBasis: float | None = None
     todayPnlPctBasis: float | None = None
     monthlyPnlPctBasis: float | None = None
+    quarterlyPnlPctBasis: float | None = None
     netWorth: float | None = None
     netContributions: float | None = None
     missingMetrics: list[AccountSourceMetricName] = Field(default_factory=list)
