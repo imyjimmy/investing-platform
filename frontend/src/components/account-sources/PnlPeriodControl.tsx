@@ -144,8 +144,8 @@ export function PnlViewToggle() {
       </span>
       <span className="pnl-view-icon" aria-hidden="true">
         <svg width="20" height="18" viewBox="0 0 28 22" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M3 2.5V19H26" strokeWidth="1" opacity="0.65" />
-          <path d="M6 14L11 9L16 13L24 5" strokeWidth="1.5" />
+          <path d="M3 2.5V19H26" strokeWidth="1.575" opacity="0.65" />
+          <path d="M6 14L11 9L16 13L24 5" strokeWidth="1.575" />
         </svg>
       </span>
     </button>
