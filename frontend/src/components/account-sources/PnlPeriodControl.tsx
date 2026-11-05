@@ -1,28 +1,15 @@
-import { createContext, useContext, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 
 export type PnlPeriod = "month" | "quarter";
-const PnlPeriodContext = createContext<{ period: PnlPeriod; setPeriod: (period: PnlPeriod) => void } | null>(null);
-
-/** All source cards share the period so the account total remains comparable. */
-export function PnlPeriodProvider({ children }: { children: ReactNode }) {
-  const [period, setPeriod] = useState<PnlPeriod>("month");
-  const value = useMemo(() => ({ period, setPeriod }), [period]);
-  return <PnlPeriodContext.Provider value={value}>{children}</PnlPeriodContext.Provider>;
-}
-
-export function usePnlPeriod() {
-  const context = useContext(PnlPeriodContext);
-  if (!context) throw new Error("P&L cards must be inside PnlPeriodProvider");
-  return context;
-}
-
 const PERIOD_OPTIONS: { value: PnlPeriod; label: string }[] = [
   { value: "month", label: "Month" },
   { value: "quarter", label: "Quarter" },
 ];
 
-export function PnlPeriodControl() {
-  const { period, setPeriod } = usePnlPeriod();
+export function PnlPeriodControl({ period, setPeriod }: {
+  period: PnlPeriod;
+  setPeriod: (period: PnlPeriod) => void;
+}) {
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
   const rootRef = useRef<HTMLSpanElement>(null);

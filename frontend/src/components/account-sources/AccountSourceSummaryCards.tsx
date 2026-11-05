@@ -1,4 +1,5 @@
-import { PnlPeriodControl, PnlViewToggle, usePnlPeriod } from "./PnlPeriodControl";
+import { useState } from "react";
+import { PnlPeriodControl, PnlViewToggle, type PnlPeriod } from "./PnlPeriodControl";
 import { fmtCurrency, fmtSignedPct } from "../../lib/formatters";
 import { MetricCard } from "../MetricCard";
 
@@ -35,7 +36,7 @@ export function AccountSourceSummaryCards({
   monthlyPnlHint,
   netWorthHint,
 }: AccountSourceSummaryCardsProps) {
-  const { period } = usePnlPeriod();
+  const [period, setPeriod] = useState<PnlPeriod>("month");
   const periodPnl = period === "month" ? monthlyPnl : quarterlyPnl;
   const periodPct = period === "month" ? monthlyPnlPct : quarterlyPnlPct;
   const periodHint = period === "month" ? monthlyPnlHint : quarterlyPnlHint;
@@ -56,7 +57,7 @@ export function AccountSourceSummaryCards({
           value={fmtCurrency(todayPnl)}
         />
         <MetricCard
-          label={<PnlPeriodControl />}
+          label={<PnlPeriodControl period={period} setPeriod={setPeriod} />}
           kicker={<PnlViewToggle />}
           secondaryValue={fmtSignedPct(periodPct) ?? null}
           tone={pnlMetricTone(periodPnl)}

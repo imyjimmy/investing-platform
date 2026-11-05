@@ -34,15 +34,22 @@ function periodCards(page) {
   return page.locator(".panel-soft").filter({ has: page.getByRole("combobox", { name: "P&L period" }) });
 }
 
-test("month/quarter stays synchronized across account and all sources; switch is visual-only", async ({ page }) => {
+test("each card selects its own period independently; switch is visual-only", async ({ page }) => {
   await mockSources(page);
   const selectors = page.getByRole("combobox", { name: "P&L period" });
-  await expect(periodCards(page).nth(0)).toContainText("$60");
-  await selectors.nth(2).click();
-  await page.getByRole("option", { name: "Quarter", exact: true }).click();
-  for (let i = 0; i < 4; i++) await expect(selectors.nth(i)).toHaveText("Quarter");
-  for (const [index, amount] of ["$600", "$100", "$200", "$300"].entries()) {
-    await expect(periodCards(page).nth(index)).toContainText(amount);
+  const monthValues = ["$60", "$10", "$20", "$30"];
+  const quarterValues = ["$600", "$100", "$200", "$300"];
+  // Exercise each source as well as the aggregate: only the chosen card may change.
+  for (const selected of [2, 1, 3, 0]) {
+    await selectors.nth(selected).click();
+    await page.getByRole("option", { name: "Quarter", exact: true }).click();
+    for (let index = 0; index < 4; index++) {
+      await expect(selectors.nth(index)).toHaveText(index === selected ? "Quarter" : "Month");
+      await expect(periodCards(page).nth(index)).toContainText(index === selected ? quarterValues[index] : monthValues[index]);
+    }
+    await selectors.nth(selected).click();
+    await page.getByRole("option", { name: "Month", exact: true }).click();
+    await expect(periodCards(page).nth(selected)).toContainText(monthValues[selected]);
   }
   const toggles = page.getByRole("switch", { name: "Chart view" });
   const content = await periodCards(page).allTextContents();
@@ -65,6 +72,11 @@ test("missing quarter history is excluded with a visible section note", async ({
   await selector.press("Enter");
   await expect(periodCards(page).first()).toContainText("$300");
   await expect(page.getByText("Quarter PnL excludes Fidelity; period history is unavailable.")).toBeVisible();
+  // The Fidelity card stays on month until its own selector changes.
+  await expect(periodCards(page).last()).toContainText("$30");
+  await expect(page.getByText("Quarter PnL is unavailable; opening history is missing.")).toHaveCount(0);
+  await page.getByRole("combobox", { name: "P&L period" }).last().click();
+  await page.getByRole("option", { name: "Quarter", exact: true }).click();
   await expect(periodCards(page).last()).not.toContainText("$0");
   await expect(page.getByText("Quarter PnL is unavailable; opening history is missing.")).toBeVisible();
 });

@@ -1,4 +1,3 @@
-import { PnlPeriodProvider } from "../../components/account-sources/PnlPeriodControl";
 import { useMemo, useState, type ReactNode } from "react";
 
 import { AccountDashboardView } from "../../components/AccountDashboardView";
@@ -1233,25 +1232,24 @@ export function DashboardWorkspace() {
   );
 
   return (
-    <PnlPeriodProvider key={selectedDashboardAccount.key}>
-      <AccountDashboardView
-        accountSettingsOpen={accountSettingsOpen}
-        bodyContent={dashboardBodyContent}
-        headerRouteLabel={dashboardHeaderRouteLabel}
-        headerStatusIndicatorClassName={connectionToneIndicatorClass(accountStatusTone)}
-        headerStatusLabel={accountStatusLabel}
-        onSelectAccount={(accountKey) => {
-          setSelectedDashboardAccountKey(accountKey);
-          setAccountSettingsOpen(false);
-          setEditingIbkrConnector(false);
-          setEditingFilesystemSourceId(null);
-        }}
-        onToggleSettings={() => setAccountSettingsOpen((value) => !value)}
-        selectedAccountKey={selectedDashboardAccount.key}
-        settingsContent={dashboardSettingsContent}
-        summaryContent={dashboardSummaryContent}
-      />
-    </PnlPeriodProvider>
+    <AccountDashboardView
+      key={selectedDashboardAccount.key}
+      accountSettingsOpen={accountSettingsOpen}
+      bodyContent={dashboardBodyContent}
+      headerRouteLabel={dashboardHeaderRouteLabel}
+      headerStatusIndicatorClassName={connectionToneIndicatorClass(accountStatusTone)}
+      headerStatusLabel={accountStatusLabel}
+      onSelectAccount={(accountKey) => {
+        setSelectedDashboardAccountKey(accountKey);
+        setAccountSettingsOpen(false);
+        setEditingIbkrConnector(false);
+        setEditingFilesystemSourceId(null);
+      }}
+      onToggleSettings={() => setAccountSettingsOpen((value) => !value)}
+      selectedAccountKey={selectedDashboardAccount.key}
+      settingsContent={dashboardSettingsContent}
+      summaryContent={dashboardSummaryContent}
+    />
   );
 }
 
