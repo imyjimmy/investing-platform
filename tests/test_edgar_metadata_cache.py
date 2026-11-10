@@ -98,6 +98,7 @@ def test_bulk_baseline_refresh_writes_app_global_archives(tmp_path: Path) -> Non
     assert persisted_state["artifacts"]["submissions.zip"]["status"] == "ready"
     assert persisted_state["artifacts"]["companyfacts.zip"]["status"] == "ready"
     assert persisted_state["normalizedStores"]["submissions.sqlite3"]["status"] == "ready"
+    assert persisted_state["normalizedStores"]["submissions.sqlite3"]["scope"] == "all-filers"
     assert persisted_state["normalizedStores"]["submissions.sqlite3"]["issuersImported"] == 1
     assert persisted_state["normalizedStores"]["submissions.sqlite3"]["filingsImported"] == 1
     assert persisted_state["normalizedStores"]["companyfacts.sqlite3"]["status"] == "deferred"

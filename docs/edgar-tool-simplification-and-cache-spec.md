@@ -2,6 +2,8 @@
 
 Prepared 2026-04-26.
 
+Storage update, November 2026: [SEC research storage redesign](sec-storage-redesign-2026-11-09.md) supersedes the bulk-cache defaults below. Ordinary issuer refreshes now fetch issuer submissions and companyfacts directly, with complete available metadata history and a bounded document window.
+
 ## Status
 
 Proposed product and architecture spec for simplifying `Stock Intel > EDGAR Filings` and introducing a layered EDGAR cache that supports local filing intelligence without mirroring the full SEC corpus.

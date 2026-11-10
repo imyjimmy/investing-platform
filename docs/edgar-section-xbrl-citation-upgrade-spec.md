@@ -2,6 +2,8 @@
 
 Prepared 2026-05-02.
 
+Storage update, November 2026: issuer-scoped facts, compressed exports, exhibit coverage and index publication now follow [SEC research storage redesign](sec-storage-redesign-2026-11-09.md). The bulk-archive dependency and uncompressed artifact paths below describe the earlier implementation.
+
 ## Status
 
 Implementation spec for upgrading the existing Stock Intel SEC/Qwen workflow with:

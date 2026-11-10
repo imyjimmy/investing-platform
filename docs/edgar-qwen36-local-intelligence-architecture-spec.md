@@ -2,6 +2,8 @@
 
 Prepared 2026-04-26.
 
+Storage update, November 2026: see [SEC research storage redesign](sec-storage-redesign-2026-11-09.md) for the implemented source storage, token limits, compressed artifacts and incremental index refresh. The broader AI architecture below remains a separate specification.
+
 ## Status
 
 Proposed architecture spec for adding local filing analysis on top of the simplified EDGAR sync and cache architecture.

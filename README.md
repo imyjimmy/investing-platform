@@ -247,6 +247,8 @@ SEC EDGAR download helper:
 ./scripts/sec-download --ticker NVDA --start-date 2026-01-01 --mode metadata-only
 ```
 
+For rebuilding the holdings/research library, verifying complete issuer histories, or fetching older reports, see [SEC research storage redesign](docs/sec-storage-redesign-2026-11-09.md) and `scripts/rebuild_sec_holdings.py`. Normal refreshes use issuer-specific SEC feeds; market-wide bulk archives are optional.
+
 ## Notes on live data
 
 - The app uses the **socket API**, not the Client Portal REST gateway.

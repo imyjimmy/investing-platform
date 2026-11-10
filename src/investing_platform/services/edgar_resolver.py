@@ -72,7 +72,25 @@ class EdgarResolverService:
         if request.ticker:
             matches = [item for item in company_lookup if str(item.get("ticker", "")).upper() == request.ticker]
             if not matches:
-                raise ValueError(f"Unable to resolve ticker '{request.ticker}' through SEC company_tickers.json.")
+                aliases = self._load_json_document(self._app_global_cache_root() / ".sec" / "issuer-registry" / "ticker-overrides.json") or {}
+                alias = aliases.get(request.ticker, {})
+                alias_cik = str(alias.get("cik") or "")
+                if alias_cik.isdigit():
+                    payload = self._get_json(SUBMISSIONS_URL_TEMPLATE.format(cik10=alias_cik.zfill(10)), options)
+                    return self._resolved_company_from_payload(payload, fallback_ticker=request.ticker)
+                fund_path = self._app_global_cache_root() / ".sec" / "issuer-registry" / "company_tickers_mf.json"
+                funds = self._get_json("https://www.sec.gov/files/company_tickers_mf.json", options)
+                fund_path.parent.mkdir(parents=True, exist_ok=True)
+                fund_path.write_text(json.dumps(funds, separators=(",", ":")), encoding="utf-8")
+                rows = [dict(zip(funds.get("fields", []), row, strict=True)) for row in funds.get("data", [])]
+                match = next((row for row in rows if row.get("symbol") == request.ticker), None)
+                if match is None:
+                    raise ValueError(f"Unable to resolve ticker '{request.ticker}' through SEC company or fund registries.")
+                payload = self._get_json(SUBMISSIONS_URL_TEMPLATE.format(cik10=str(match["cik"]).zfill(10)), options)
+                resolved = self._resolved_company_from_payload(payload, fallback_ticker=request.ticker)
+                resolved.series_id = str(match["seriesId"])
+                resolved.class_id = str(match["classId"])
+                return resolved
             cik10 = str(matches[0]["cik_str"]).zfill(10)
             submissions_payload = self._get_json(SUBMISSIONS_URL_TEMPLATE.format(cik10=cik10), options)
             return self._resolved_company_from_payload(submissions_payload, fallback_ticker=request.ticker)
@@ -118,7 +136,7 @@ class EdgarResolverService:
         if not cik10.strip("0"):
             raise ValueError("SEC submissions payload did not include a valid CIK.")
         tickers = payload.get("tickers") or []
-        ticker = str(tickers[0]).upper() if tickers else (fallback_ticker or cik10).upper()
+        ticker = (fallback_ticker or (str(tickers[0]) if tickers else cik10)).upper()
         company_name = str(payload.get("name") or ticker).strip()
         return ResolvedCompany(
             cik=cik10.lstrip("0") or "0",

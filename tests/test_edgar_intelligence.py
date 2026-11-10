@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 import json
+import gzip
 import numpy as np
 import sqlite3
 from types import SimpleNamespace
@@ -211,7 +212,7 @@ def test_intelligence_index_builds_ticker_scoped_corpus_scaffold(tmp_path) -> No
     assert response.indexState.indexedAccessions == 1
     assert response.indexState.indexedChunks == 1
     assert (paths.intelligence_dir / "corpus" / "filing-corpus.json").exists()
-    assert (paths.intelligence_dir / "corpus" / "chunks.jsonl").exists()
+    assert (paths.intelligence_dir / "corpus" / "chunks.jsonl.gz").exists()
     assert (paths.intelligence_dir / "index" / "embeddings.f16.npy").exists()
     assert (paths.intelligence_dir / "index" / "embeddings.meta.json").exists()
     assert (paths.intelligence_dir / "index" / "retrieval.sqlite3").exists()
@@ -276,12 +277,12 @@ def test_intelligence_index_persists_section_metadata_for_ask_time_retrieval(tmp
     assert response.indexState.indexedChunks == 3
     sections = [
         json.loads(line)
-        for line in (paths.intelligence_dir / "corpus" / "sections.jsonl").read_text(encoding="utf-8").splitlines()
+        for line in gzip.open(paths.intelligence_dir / "corpus" / "sections.jsonl.gz", "rt", encoding="utf-8").read().splitlines()
         if line.strip()
     ]
     chunks = [
         json.loads(line)
-        for line in (paths.intelligence_dir / "corpus" / "chunks.jsonl").read_text(encoding="utf-8").splitlines()
+        for line in gzip.open(paths.intelligence_dir / "corpus" / "chunks.jsonl.gz", "rt", encoding="utf-8").read().splitlines()
         if line.strip()
     ]
     assert [section["sectionCode"] for section in sections] == ["1", "1A", "7"]

@@ -144,7 +144,8 @@ class EdgarSyncService:
 
         manifest = self._artifact_store._load_manifest(paths.manifest_path)
         counters = DownloadCounters()
-        baseline_state = self._metadata_cache.ensure_bulk_baseline(options, force_refresh=request.forceRefresh)
+        if not resolved.series_id:
+            self._metadata_cache.refresh_issuer_facts(resolved, options, force_refresh=request.forceRefresh)
         previous_metadata_snapshot = self._metadata_cache.load_snapshot(resolved.cik10)
         baseline_filings = self._metadata_cache.load_filing_rows(resolved)
         history_seed_snapshot = previous_metadata_snapshot
@@ -184,9 +185,9 @@ class EdgarSyncService:
             else:
                 raise
 
-        if baseline_state.get("status") == "degraded" and metadata_status != "fresh":
-            baseline_message = "The app-global EDGAR bulk baseline could not be fully refreshed."
-            metadata_message = f"{metadata_message} {baseline_message}".strip() if metadata_message else baseline_message
+        if resolved.series_id:
+            series_accessions = self._artifact_store._fund_series_accessions(resolved, options, paths)
+            all_filings = [filing for filing in all_filings if filing.get("accessionNumber") in series_accessions]
 
         latest_submission_url = SUBMISSIONS_URL_TEMPLATE.format(cik10=resolved.cik10)
         self._artifact_store._write_json_artifact(paths.exports_dir / "all-filings.json", all_filings, latest_submission_url, manifest, paths.edgar_root)
@@ -250,7 +251,7 @@ class EdgarSyncService:
                     counters=counters,
                 )
                 if exhibit_request is not None:
-                    self._artifact_store._download_filing_assets(
+                    self._artifact_store._download_research_exhibits(
                         filing=filing,
                         request=exhibit_request,
                         options=options,
@@ -459,13 +460,12 @@ class EdgarSyncService:
 
     def _warm_metadata_only(self, issuer_query: str, *, request: EdgarWarmRequest, options: Any) -> EdgarWarmIssuerResult:
         resolved = self._resolver.resolve_issuer_query(issuer_query, options, force_refresh=request.forceRefresh)
-        baseline_state = self._metadata_cache.ensure_bulk_baseline(options, force_refresh=request.forceRefresh)
         previous_snapshot = self._metadata_cache.load_snapshot(resolved.cik10)
         baseline_filings = self._metadata_cache.load_filing_rows(resolved)
         current_filings = self._artifact_store._build_filing_rows([resolved.submissions_payload], resolved)
         all_filings = self._metadata_cache.merge_cached_filing_rows([*baseline_filings, *current_filings], previous_snapshot)
         snapshot = self._metadata_cache.persist_snapshot(resolved, all_filings)
-        metadata_status = "fresh" if baseline_state.get("status") == "ready" else "degraded"
+        metadata_status = "fresh"
         return EdgarWarmIssuerResult(
             issuerQuery=issuer_query,
             ticker=resolved.ticker,

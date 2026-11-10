@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from investing_platform.config import DashboardSettings
@@ -133,7 +133,7 @@ def test_sync_writes_workspace_state_and_uses_app_global_cache_for_non_default_o
     filings = _sample_filings()
 
     monkeypatch.setattr(service._resolver_service, "resolve_issuer_query", lambda issuer_query, options, force_refresh=False: resolved)
-    monkeypatch.setattr(service._metadata_cache_service, "ensure_bulk_baseline", lambda options, force_refresh=False: {"status": "ready", "artifacts": {}})
+    monkeypatch.setattr(service._metadata_cache_service, "refresh_issuer_facts", lambda resolved, options, force_refresh=False: {"status": "ready", "artifacts": {}})
     monkeypatch.setattr(
         service,
         "_fetch_submission_payloads",
@@ -182,7 +182,7 @@ def test_sync_seeds_initial_history_from_normalized_metadata_cache(tmp_path, mon
     fetch_seed_snapshots: list[dict | None] = []
 
     monkeypatch.setattr(service._resolver_service, "resolve_issuer_query", lambda issuer_query, options, force_refresh=False: resolved)
-    monkeypatch.setattr(service._metadata_cache_service, "ensure_bulk_baseline", lambda options, force_refresh=False: {"status": "ready", "artifacts": {}})
+    monkeypatch.setattr(service._metadata_cache_service, "refresh_issuer_facts", lambda resolved, options, force_refresh=False: {"status": "ready", "artifacts": {}})
     monkeypatch.setattr(service._metadata_cache_service, "load_filing_rows", lambda resolved_company: [baseline_filing])
 
     def fake_fetch_submission_payloads(**kwargs):
@@ -219,7 +219,7 @@ def test_sync_advanced_overrides_filter_working_set_and_fetch_exhibits(tmp_path,
     filings = _sample_filings()
 
     monkeypatch.setattr(service._resolver_service, "resolve_issuer_query", lambda issuer_query, options, force_refresh=False: resolved)
-    monkeypatch.setattr(service._metadata_cache_service, "ensure_bulk_baseline", lambda options, force_refresh=False: {"status": "ready", "artifacts": {}})
+    monkeypatch.setattr(service._metadata_cache_service, "refresh_issuer_facts", lambda resolved, options, force_refresh=False: {"status": "ready", "artifacts": {}})
     monkeypatch.setattr(service, "_fetch_submission_payloads", lambda **kwargs: [{"stub": "payload"}])
     monkeypatch.setattr(service, "_build_filing_rows", lambda payloads, resolved_company: filings)
     monkeypatch.setattr(service, "_select_smart_working_set", lambda all_filings, usage_profile=None: all_filings)
@@ -236,6 +236,7 @@ def test_sync_advanced_overrides_filter_working_set_and_fetch_exhibits(tmp_path,
             counters.skipped_files += 1
 
     monkeypatch.setattr(service, "_download_filing_assets", fake_download_filing_assets)
+    monkeypatch.setattr(service, "_download_research_exhibits", fake_download_filing_assets)
 
     response = service.sync(
         EdgarSyncRequest(
@@ -281,7 +282,8 @@ def test_smart_working_set_expands_for_historical_and_current_report_usage(tmp_p
                 "accessionNumber": f"quarter-{index}",
             }
         )
-    filings.append({"form": "8-K", "filingDate": "2023-11-01", "reportDate": "2023-11-01", "accessionNumber": "older-current-report"})
+    older_date = (datetime.now(UTC).date() - timedelta(days=900)).isoformat()
+    filings.append({"form": "8-K", "filingDate": older_date, "reportDate": older_date, "accessionNumber": "older-current-report"})
 
     default_selection = service._select_smart_working_set(filings)
     usage_selection = service._select_smart_working_set(
@@ -306,7 +308,7 @@ def test_metadata_warm_refreshes_global_snapshot_without_body_workspace(tmp_path
     live_filing = _sample_filings()[2]
 
     monkeypatch.setattr(service._resolver_service, "resolve_issuer_query", lambda issuer_query, options, force_refresh=False: resolved)
-    monkeypatch.setattr(service._metadata_cache_service, "ensure_bulk_baseline", lambda options, force_refresh=False: {"status": "ready", "artifacts": {}})
+    monkeypatch.setattr(service._metadata_cache_service, "refresh_issuer_facts", lambda resolved, options, force_refresh=False: {"status": "ready", "artifacts": {}})
     monkeypatch.setattr(service._metadata_cache_service, "load_filing_rows", lambda resolved_company: [baseline_filing])
     monkeypatch.setattr(service, "_build_filing_rows", lambda payloads, resolved_company: [live_filing])
     monkeypatch.setattr(
@@ -354,7 +356,7 @@ def test_warm_defaults_to_watchlist_and_recent_usage_targets(tmp_path, monkeypat
         )
 
     monkeypatch.setattr(service._resolver_service, "resolve_issuer_query", fake_resolve_issuer_query)
-    monkeypatch.setattr(service._metadata_cache_service, "ensure_bulk_baseline", lambda options, force_refresh=False: {"status": "ready", "artifacts": {}})
+    monkeypatch.setattr(service._metadata_cache_service, "refresh_issuer_facts", lambda resolved, options, force_refresh=False: {"status": "ready", "artifacts": {}})
     monkeypatch.setattr(service._metadata_cache_service, "load_filing_rows", lambda resolved_company: [])
     monkeypatch.setattr(service, "_build_filing_rows", lambda payloads, resolved_company: [])
 
@@ -389,7 +391,7 @@ def test_warm_uses_runtime_watchlist_provider(tmp_path, monkeypatch) -> None:
         )
 
     monkeypatch.setattr(service._resolver_service, "resolve_issuer_query", fake_resolve_issuer_query)
-    monkeypatch.setattr(service._metadata_cache_service, "ensure_bulk_baseline", lambda options, force_refresh=False: {"status": "ready", "artifacts": {}})
+    monkeypatch.setattr(service._metadata_cache_service, "refresh_issuer_facts", lambda resolved, options, force_refresh=False: {"status": "ready", "artifacts": {}})
     monkeypatch.setattr(service._metadata_cache_service, "load_filing_rows", lambda resolved_company: [])
     monkeypatch.setattr(service, "_build_filing_rows", lambda payloads, resolved_company: [])
 
@@ -475,7 +477,7 @@ def test_ask_time_sync_limits_new_filing_body_downloads(tmp_path, monkeypatch) -
         )
 
     monkeypatch.setattr(service._resolver_service, "resolve_issuer_query", lambda issuer_query, options, force_refresh=False: resolved)
-    monkeypatch.setattr(service._metadata_cache_service, "ensure_bulk_baseline", lambda options, force_refresh=False: {"status": "ready", "artifacts": {}})
+    monkeypatch.setattr(service._metadata_cache_service, "refresh_issuer_facts", lambda resolved, options, force_refresh=False: {"status": "ready", "artifacts": {}})
     monkeypatch.setattr(service, "_fetch_submission_payloads", lambda **kwargs: [{"stub": "payload"}])
     monkeypatch.setattr(service, "_build_filing_rows", lambda payloads, resolved_company: filings)
     monkeypatch.setattr(service, "_select_smart_working_set", lambda all_filings, usage_profile=None: all_filings)

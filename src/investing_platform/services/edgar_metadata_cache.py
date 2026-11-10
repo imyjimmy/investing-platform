@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+import gzip
+import hashlib
 import json
 from pathlib import Path
 import sqlite3
@@ -21,7 +23,7 @@ from investing_platform.services.edgar_common import (
 )
 
 
-SUBMISSIONS_SQLITE_SCHEMA_VERSION = 1
+SUBMISSIONS_SQLITE_SCHEMA_VERSION = 2
 COMPANYFACTS_SQLITE_SCHEMA_VERSION = 1
 
 
@@ -36,6 +38,47 @@ class EdgarMetadataCacheService:
     ) -> None:
         self._settings = settings
         self._request = request
+
+    def refresh_issuer_facts(self, resolved: ResolvedCompany, options: EdgarRuntimeOptions, *, force_refresh: bool = False) -> dict[str, Any]:
+        """Keep one compressed SEC source per CIK; never fetch the market-wide ZIP implicitly."""
+        root = self._filing_metadata_root() / "companyfacts"
+        root.mkdir(parents=True, exist_ok=True)
+        path = root / f"CIK{resolved.cik10}.json.gz"
+        state_path = root / f"CIK{resolved.cik10}.state.json"
+        state = self._load_json_document(state_path) or {}
+        url = f"https://data.sec.gov/api/xbrl/companyfacts/CIK{resolved.cik10}.json"
+        recent = resolved.submissions_payload.get("filings", {}).get("recent", {}).get("accessionNumber", [])
+        latest_accession = recent[0] if recent else None
+        try:
+            age = datetime.now(UTC) - datetime.fromisoformat(str(state.get("lastRefreshedAt")))
+        except ValueError:
+            age = timedelta(days=2)
+        if not force_refresh and path.exists() and state.get("status") == "ready" and latest_accession and state.get("latestAccession") == latest_accession and age < timedelta(hours=24):
+            return state
+        try:
+            response = self._request("GET", url, options, False)
+            try:
+                payload = response.json()
+                if str(payload.get("cik", "")).zfill(10) != resolved.cik10 or not isinstance(payload.get("facts"), dict):
+                    raise ValueError("SEC companyfacts response does not match the requested issuer.")
+                raw = response.content
+                digest = hashlib.sha256(raw).hexdigest()
+                if not path.exists() or state.get("sha256") != digest:
+                    temporary = path.with_suffix(".part")
+                    temporary.write_bytes(gzip.compress(raw, mtime=0))
+                    temporary.replace(path)
+                state = {"status": "ready", "sourceUrl": url, "cik": resolved.cik10,
+                         "sha256": digest, "latestAccession": latest_accession, "lastRefreshedAt": datetime.now(UTC).isoformat(),
+                         "etag": response.headers.get("ETag"), "lastModified": response.headers.get("Last-Modified")}
+            finally:
+                response.close()
+        except (RuntimeError, ValueError, OSError, requests.RequestException) as exc:
+            state = {**state, "status": "stale" if path.exists() else "unavailable", "sourceUrl": url, "lastError": str(exc)}
+        state["lastCheckedAt"] = datetime.now(UTC).isoformat()
+        temporary_state = state_path.with_suffix(".part")
+        temporary_state.write_text(json.dumps(state, indent=2), encoding="utf-8")
+        temporary_state.replace(state_path)
+        return state
 
     def ensure_bulk_baseline(self, options: EdgarRuntimeOptions, *, force_refresh: bool = False) -> dict[str, Any]:
         state_path = self._bulk_state_path()
@@ -314,7 +357,7 @@ class EdgarMetadataCacheService:
 
         try:
             import_result = self._import_submissions_zip(Path(str(artifact_state["path"])), sqlite_path)
-            return {**result, **import_result, "status": "ready", "lastError": None}
+            return {**result, **import_result, "status": "ready", "scope": "all-filers", "lastError": None}
         except Exception as exc:
             return {
                 **result,
@@ -368,7 +411,8 @@ class EdgarMetadataCacheService:
 
     def _normalized_store_matches_source(self, state: dict[str, Any], artifact_state: dict[str, Any]) -> bool:
         return (
-            int(state.get("schemaVersion") or 0) == SUBMISSIONS_SQLITE_SCHEMA_VERSION
+            state.get("scope", "all-filers") == "all-filers"
+            and int(state.get("schemaVersion") or 0) == SUBMISSIONS_SQLITE_SCHEMA_VERSION
             and str(state.get("sourceLastModified") or "") == str(artifact_state.get("lastModified") or "")
             and str(state.get("sourceEtag") or "") == str(artifact_state.get("etag") or "")
             and str(state.get("sourceContentLength") or "") == str(artifact_state.get("contentLength") or "")
@@ -434,10 +478,9 @@ class EdgarMetadataCacheService:
             )
             """
         )
-        connection.execute(
-            """
+        filing_schema = """
             CREATE TABLE IF NOT EXISTS filing_metadata (
-                accession_number TEXT PRIMARY KEY,
+                accession_number TEXT NOT NULL,
                 cik10 TEXT NOT NULL,
                 ticker TEXT,
                 company_name TEXT,
@@ -459,10 +502,28 @@ class EdgarMetadataCacheService:
                 primary_document_url TEXT,
                 discovered_via TEXT,
                 source_file TEXT,
-                imported_at TEXT NOT NULL
+                imported_at TEXT NOT NULL,
+                PRIMARY KEY (cik10, accession_number)
             )
             """
-        )
+        connection.execute(filing_schema)
+        columns = connection.execute("PRAGMA table_info(filing_metadata)").fetchall()
+        primary_key = [row[1] for row in sorted(columns, key=lambda row: row[5]) if row[5]]
+        if primary_key == ["accession_number"]:
+            # Ownership and joint filings can appear in multiple issuer feeds.
+            # Preserve each issuer association instead of replacing another CIK.
+            connection.execute("SAVEPOINT migrate_filing_identity")
+            try:
+                connection.execute("ALTER TABLE filing_metadata RENAME TO filing_metadata_v1")
+                connection.execute(filing_schema)
+                names = ",".join(row[1] for row in columns)
+                connection.execute(f"INSERT INTO filing_metadata ({names}) SELECT {names} FROM filing_metadata_v1")
+                connection.execute("DROP TABLE filing_metadata_v1")
+                connection.execute("RELEASE SAVEPOINT migrate_filing_identity")
+            except Exception:
+                connection.execute("ROLLBACK TO SAVEPOINT migrate_filing_identity")
+                connection.execute("RELEASE SAVEPOINT migrate_filing_identity")
+                raise
         connection.execute("CREATE INDEX IF NOT EXISTS idx_filing_metadata_cik_date ON filing_metadata(cik10, filing_date DESC, accession_number DESC)")
         connection.execute("CREATE INDEX IF NOT EXISTS idx_filing_metadata_ticker_date ON filing_metadata(ticker, filing_date DESC, accession_number DESC)")
 
@@ -511,7 +572,7 @@ class EdgarMetadataCacheService:
                 )
                 VALUES (
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    COALESCE((SELECT discovered_via FROM filing_metadata WHERE accession_number = ?), ?),
+                    COALESCE((SELECT discovered_via FROM filing_metadata WHERE cik10 = ? AND accession_number = ?), ?),
                     ?, ?
                 )
                 """,
@@ -536,6 +597,7 @@ class EdgarMetadataCacheService:
                     filing.get("isInlineXBRL"),
                     filing.get("archiveBaseUrl"),
                     filing.get("primaryDocumentUrl"),
+                    str(filing.get("cik10") or "").zfill(10),
                     accession,
                     discovered_via,
                     source_file,

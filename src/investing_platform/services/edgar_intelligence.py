@@ -7,10 +7,17 @@ from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from math import ceil
 import json
+import gzip
 import numpy as np
 from pathlib import Path
 import re
 import sqlite3
+import shutil
+import tempfile
+import threading
+from tokenizers import Tokenizer
+from xml.etree import ElementTree
+from investing_platform.services.edgar_fund_facts import build_fund_store
 import time
 from typing import Any, Literal
 from urllib.parse import quote
@@ -56,7 +63,7 @@ from investing_platform.services.edgar_xbrl_facts import EdgarXbrlFactService, X
 from investing_platform.services.omlx_client import OmlxClient, OmlxClientError
 
 
-CORPUS_VERSION = "primary-documents-v1"
+CORPUS_VERSION = "primary-and-text-exhibits-v2"
 EMBEDDING_BATCH_SIZE = 16
 MIN_RETRIEVAL_SCORE = 0.15
 PROMPT_TOKEN_SAFETY_MARGIN = 12000
@@ -133,6 +140,14 @@ class EdgarIntelligenceService:
     """Manage ticker-scoped EDGAR intelligence state and first-pass corpus artifacts."""
 
     def __init__(self, settings: DashboardSettings, *, omlx_client: OmlxClient | None = None) -> None:
+        self._index_lock = threading.RLock()
+        self._single_embedding_requests = False
+        self._tokenizer = None
+        tokenizer_path = Path.home() / "models" / "mlx-community" / settings.llm_embed_model / "tokenizer.json"
+        if tokenizer_path.is_file():
+            self._tokenizer = Tokenizer.from_file(str(tokenizer_path))
+            self._tokenizer.no_truncation()
+            self._tokenizer.no_padding()
         self._settings = settings
         self._omlx_client = omlx_client or OmlxClient(settings)
         self._retrieval_planner = EdgarRetrievalPlanner()
@@ -219,24 +234,57 @@ class EdgarIntelligenceService:
             limitations=limitations,
         )
 
-    def index_workspace(
+    def index_workspace(self, *, paths: WorkspacePaths, **kwargs: Any) -> EdgarIntelligenceIndexResponse:
+        """Publish a complete generation; failed rebuilds leave the last usable index intact."""
+        with self._index_lock:
+            paths.edgar_root.mkdir(parents=True, exist_ok=True)
+            previous = paths.intelligence_dir.with_name(".intelligence.previous")
+            if previous.exists() and not paths.intelligence_dir.exists():
+                previous.replace(paths.intelligence_dir)
+            staging = Path(tempfile.mkdtemp(prefix=".intelligence-build-", dir=paths.edgar_root))
+            staged_paths = replace(paths, intelligence_dir=staging)
+            try:
+                response = self._index_workspace_generation(paths=staged_paths, previous_paths=paths, **kwargs)
+                old_state = self._index_state(paths)
+                omitted_accessions = self._indexed_accessions(paths.intelligence_dir / "index/retrieval.sqlite3") - self._indexed_accessions(staged_paths.intelligence_dir / "index/retrieval.sqlite3")
+                incomplete_refresh = response.job.status == "partial" or (omitted_accessions and not kwargs["request"].rebuild)
+                if incomplete_refresh and old_state.status in {"ready", "stale"}:
+                    message = "This refresh does not cover the complete existing library; the previous usable index was preserved. Run a full index refresh, or explicitly rebuild a narrower scope."
+                    deferred_job = response.job.model_copy(update={"status": "deferred", "message": message})
+                    preserved_state = old_state.model_copy(update={"limitations": [*old_state.limitations, message]})
+                    self._write_last_index(paths, index_state=preserved_state, job=deferred_job)
+                    return response.model_copy(update={"status": "failed", "indexState": preserved_state, "job": deferred_job, "message": message})
+                if response.indexState.status != "ready" and old_state.status in {"ready", "stale"}:
+                    return response.model_copy(update={"status": "failed", "message": "Rebuild failed; the previous usable index was preserved."})
+                if previous.exists():
+                    shutil.rmtree(previous)
+                if paths.intelligence_dir.exists():
+                    paths.intelligence_dir.replace(previous)
+                try:
+                    staging.replace(paths.intelligence_dir)
+                except OSError:
+                    if previous.exists():
+                        previous.replace(paths.intelligence_dir)
+                    raise
+                if previous.exists():
+                    shutil.rmtree(previous)
+                return response
+            finally:
+                if staging.exists():
+                    shutil.rmtree(staging)
+
+    def _index_workspace_generation(
         self,
         *,
         workspace: Any,
         request: EdgarIntelligenceIndexRequest,
         paths: WorkspacePaths,
+        previous_paths: WorkspacePaths,
         max_documents: int | None = None,
         max_chunks: int | None = None,
         max_index_seconds: float | None = None,
         job_kind: str = "index",
     ) -> EdgarIntelligenceIndexResponse:
-        if request.includeExhibits:
-            raise EdgarIntelligenceApiError(
-                status_code=400,
-                code="exhibits_not_supported",
-                message="Curated exhibit indexing is deferred beyond phase 1.",
-                ticker=request.ticker,
-            )
         if workspace is None:
             raise EdgarIntelligenceApiError(
                 status_code=404,
@@ -266,8 +314,10 @@ class EdgarIntelligenceService:
             budget_limitations.append(
                 f"Ask-time index preparation exceeded the {int(max_index_seconds)}s inline budget before embedding."
             )
-        embeddings, embedding_limitations = self._build_embeddings(chunks)
-        xbrl_result = self._xbrl_fact_service.build_issuer_facts(paths=paths, filings=filings)
+        embeddings, embedding_limitations = self._build_embeddings_incremental(previous_paths, chunks, rebuild=request.rebuild)
+        fact_filings = self._load_json_document(paths.exports_dir / "all-filings.json")
+        xbrl_result = self._xbrl_fact_service.build_issuer_facts(paths=paths, filings=fact_filings if isinstance(fact_filings, list) else filings)
+        build_fund_store(paths, filings)
         index_limitations = budget_limitations + embedding_limitations + (xbrl_result.limitations or [])
         self._write_corpus_artifacts(paths, documents=documents, chunks=chunks, sections=sections, embeddings=embeddings)
         completed_at = datetime.now(UTC)
@@ -282,7 +332,7 @@ class EdgarIntelligenceService:
             chunkingVersion=CHUNKING_VERSION,
             embeddingModel=self._settings.llm_embed_model or EMBEDDING_MODEL_VERSION,
             eligibleAccessions=len(eligible_filings),
-            indexedAccessions=len(documents),
+            indexedAccessions=len({doc["accessionNumber"] for doc in documents}),
             indexedChunks=len(chunks),
             indexedXbrlFacts=xbrl_result.facts_count,
             staleAccessions=[],
@@ -1491,9 +1541,20 @@ class EdgarIntelligenceService:
     def _load_selected_filings(self, paths: WorkspacePaths, forms: list[str]) -> list[dict[str, Any]]:
         payload = self._load_json_document(paths.exports_dir / "matched-filings.json")
         if not isinstance(payload, list):
-            return []
+            payload = []
         allowed_forms = {form.upper() for form in forms if form.strip()}
         filings = [filing for filing in payload if isinstance(filing, dict)]
+        # A smaller working set must not hide documents already in the library.
+        known = {str(filing.get("accessionNumber")): filing for filing in filings}
+        all_filings = self._load_json_document(paths.exports_dir / "all-filings.json")
+        if isinstance(all_filings, list):
+            for filing in all_filings:
+                if not isinstance(filing, dict):
+                    continue
+                document = str(filing.get("primaryDocument") or "")
+                if document and (paths.stock_root / self._filing_folder_name(filing) / "primary" / document).is_file():
+                    known[str(filing.get("accessionNumber"))] = filing
+        filings = sorted(known.values(), key=lambda row: (str(row.get("filingDate", "")), str(row.get("accessionNumber", ""))), reverse=True)
         if allowed_forms:
             filings = [filing for filing in filings if str(filing.get("form") or "").upper() in allowed_forms]
         return filings
@@ -1502,11 +1563,22 @@ class EdgarIntelligenceService:
         documents: list[dict[str, Any]] = []
         chunks: list[dict[str, Any]] = []
         sections: list[dict[str, Any]] = []
+        source_filings = []
         for filing in filings:
+            source_filings.append(filing)
+            root = paths.stock_root / self._filing_folder_name(filing) / "exhibits"
+            catalog = self._load_json_document(root / "catalog.json")
+            if isinstance(catalog, list):
+                for entry in catalog:
+                    name = str(entry.get("name") or "")
+                    if not name or Path(name).name != name:
+                        continue
+                    source_filings.append({**filing, "primaryDocument": name, "primaryDocumentUrl": entry.get("sourceUrl"), "_sourcePath": root / name})
+        for filing in source_filings:
             primary_document = str(filing.get("primaryDocument") or "").strip()
             if not primary_document:
                 continue
-            source_path = paths.stock_root / self._filing_folder_name(filing) / "primary" / primary_document
+            source_path = filing.get("_sourcePath") or paths.stock_root / self._filing_folder_name(filing) / "primary" / primary_document
             if not source_path.exists():
                 continue
             text = self._extract_structured_text(source_path)
@@ -1547,7 +1619,7 @@ class EdgarIntelligenceService:
                 sections.append({**document, **section_metadata})
                 section_key = self._section_chunk_key(section_metadata)
                 for chunk in self._chunk_text(section_text):
-                    chunk_id = f"{accession}:{section_key}:{chunk_index:04d}"
+                    chunk_id = f"{accession}:{primary_document}:{section_key}:{chunk_index:04d}"
                     chunks.append(
                         {
                             **document,
@@ -1575,8 +1647,8 @@ class EdgarIntelligenceService:
         corpus_dir.mkdir(parents=True, exist_ok=True)
         index_dir.mkdir(parents=True, exist_ok=True)
         (corpus_dir / "filing-corpus.json").write_text(json.dumps({"documents": documents}, indent=2, sort_keys=True), encoding="utf-8")
-        self._write_jsonl(corpus_dir / "chunks.jsonl", chunks)
-        self._write_jsonl(corpus_dir / "sections.jsonl", sections)
+        self._write_jsonl(corpus_dir / "chunks.jsonl.gz", chunks)
+        self._write_jsonl(corpus_dir / "sections.jsonl.gz", sections)
         embeddings_path = index_dir / "embeddings.f16.npy"
         if embeddings is not None:
             np.save(embeddings_path, embeddings.astype(np.float16))
@@ -1585,6 +1657,7 @@ class EdgarIntelligenceService:
         embedding_meta = {
             "status": "ready" if embeddings is not None else "missing",
             "embeddingModel": self._settings.llm_embed_model,
+            "chunkingVersion": CHUNKING_VERSION,
             "dimensions": int(embeddings.shape[1]) if embeddings is not None and embeddings.ndim == 2 else 0,
             "chunksEmbedded": int(embeddings.shape[0]) if embeddings is not None and embeddings.ndim == 2 else 0,
             "dtype": "float16" if embeddings is not None else None,
@@ -1610,15 +1683,20 @@ class EdgarIntelligenceService:
         try:
             if not self._omlx_client.has_model(self._settings.llm_embed_model):
                 return None, [f"Embedding model '{self._settings.llm_embed_model}' is not available in oMLX."]
-            vectors: list[list[float]] = []
+            vectors: list[list[float]] = [[] for _ in chunks]
             texts = [str(chunk.get("text") or "") for chunk in chunks]
-            for start in range(0, len(texts), EMBEDDING_BATCH_SIZE):
-                vectors.extend(
-                    self._embed_text_batch(
-                        texts[start : start + EMBEDDING_BATCH_SIZE],
-                        chunks[start : start + EMBEDDING_BATCH_SIZE],
-                    )
-                )
+            groups: dict[int, list[int]] = {}
+            for index, text in enumerate(texts):
+                length = len(self._tokenizer.encode(text).ids) if self._tokenizer is not None else 0
+                groups.setdefault(length, []).append(index)
+            # This quantized model produces invalid values in padded mixed-length
+            # batches. Equal token lengths avoid padding and keep batching useful.
+            for indices in groups.values():
+                for start in range(0, len(indices), EMBEDDING_BATCH_SIZE):
+                    selected = indices[start:start + EMBEDDING_BATCH_SIZE]
+                    batch = self._embed_text_batch([texts[i] for i in selected], [chunks[i] for i in selected])
+                    for index, vector in zip(selected, batch, strict=True):
+                        vectors[index] = vector
         except OmlxClientError as exc:
             return None, [str(exc)]
         if not vectors:
@@ -1633,7 +1711,39 @@ class EdgarIntelligenceService:
             return None, ["Embedding model returned non-finite vector values."]
         return matrix.astype(np.float16), []
 
+    def _build_embeddings_incremental(self, paths: WorkspacePaths, chunks: list[dict[str, Any]], *, rebuild: bool = False) -> tuple[np.ndarray | None, list[str]]:
+        """Reuse exact text vectors only when the embedding model and dimensions match."""
+        index_dir = paths.intelligence_dir / "index"
+        metadata = self._load_json_document(index_dir / "embeddings.meta.json") or {}
+        cached: dict[str, np.ndarray] = {}
+        if not rebuild and metadata.get("embeddingModel") == self._settings.llm_embed_model and metadata.get("chunkingVersion") == CHUNKING_VERSION:
+            try:
+                matrix = np.load(index_dir / "embeddings.f16.npy", mmap_mode="r")
+                with sqlite3.connect(f"file:{index_dir / 'retrieval.sqlite3'}?mode=ro", uri=True) as connection:
+                    rows = connection.execute("SELECT chunk_index, text FROM chunks").fetchall()
+                if matrix.ndim == 2 and len(rows) == len(matrix) and np.all(np.isfinite(matrix)):
+                    cached = {text: matrix[index].copy() for index, text in rows if 0 <= index < len(matrix)}
+            except (OSError, ValueError, sqlite3.Error):
+                cached = {}
+        missing: dict[str, dict[str, Any]] = {}
+        for chunk in chunks:
+            text = str(chunk.get("text") or "")
+            if text not in cached:
+                missing.setdefault(text, chunk)
+        if missing:
+            vectors, limitations = self._build_embeddings(list(missing.values()))
+            if vectors is None:
+                return None, limitations
+            if cached and len(next(iter(cached.values()))) != vectors.shape[1]:
+                return self._build_embeddings(chunks)
+            cached.update({text: vector for text, vector in zip(missing, vectors, strict=True)})
+        if not chunks:
+            return None, []
+        return np.asarray([cached[str(chunk.get("text") or "")] for chunk in chunks], dtype=np.float16), []
+
     def _embed_text_batch(self, texts: list[str], chunks: list[dict[str, Any]]) -> list[list[float]]:
+        if self._single_embedding_requests and len(texts) > 1:
+            return [self._omlx_client.embed_texts(model=self._settings.llm_embed_model, texts=[text])[0] for text in texts]
         try:
             return self._omlx_client.embed_texts(
                 model=self._settings.llm_embed_model,
@@ -1642,6 +1752,7 @@ class EdgarIntelligenceService:
         except OmlxClientError as batch_error:
             if len(texts) <= 1:
                 raise
+            self._single_embedding_requests = True
 
             vectors: list[list[float]] = []
             for text, chunk in zip(texts, chunks, strict=False):
@@ -1679,9 +1790,10 @@ class EdgarIntelligenceService:
         )
 
     def _write_retrieval_sqlite(self, destination: Path, chunks: list[dict[str, Any]]) -> None:
-        if destination.exists():
-            destination.unlink()
-        with sqlite3.connect(destination) as connection:
+        temporary = destination.with_suffix(".part")
+        if temporary.exists():
+            temporary.unlink()
+        with sqlite3.connect(temporary) as connection:
             connection.execute(
                 """
                 CREATE TABLE chunks (
@@ -1733,10 +1845,15 @@ class EdgarIntelligenceService:
                     for chunk_index, chunk in enumerate(chunks)
                 ],
             )
+            connection.execute("CREATE INDEX chunks_accession ON chunks(accession_number)")
+            connection.execute("CREATE INDEX chunks_form_date ON chunks(form, filing_date)")
+            connection.execute("CREATE VIRTUAL TABLE chunks_fts USING fts5(text, content='chunks', content_rowid='rowid')")
+            connection.execute("INSERT INTO chunks_fts(chunks_fts) VALUES ('rebuild')")
             connection.commit()
+        temporary.replace(destination)
 
     def _write_jsonl(self, destination: Path, rows: list[dict[str, Any]]) -> None:
-        with destination.open("w", encoding="utf-8") as handle:
+        with gzip.open(destination, "wt", encoding="utf-8") as handle:
             for row in rows:
                 handle.write(json.dumps(row, sort_keys=True))
                 handle.write("\n")
@@ -1746,7 +1863,28 @@ class EdgarIntelligenceService:
             raw_text = path.read_text(encoding="utf-8", errors="ignore")
         except OSError:
             return ""
-        if path.suffix.lower() in {".htm", ".html", ".xhtml", ".xml"}:
+        if path.suffix.lower() == ".txt" and re.search(r"<DOCUMENT>", raw_text, re.IGNORECASE):
+            bodies = []
+            for block in re.findall(r"<DOCUMENT>(.*?)</DOCUMENT>", raw_text, re.IGNORECASE | re.DOTALL):
+                form = re.search(r"<TYPE>\s*([^\r\n<]+)", block, re.IGNORECASE)
+                body = re.search(r"<TEXT>(.*?)</TEXT>", block, re.IGNORECASE | re.DOTALL)
+                kind = form.group(1).strip().upper() if form else ""
+                filename = re.search(r"<FILENAME>\s*([^\r\n<]+)", block, re.IGNORECASE)
+                if filename and Path(filename.group(1).strip()).suffix.lower() in {".pdf", ".jpg", ".gif", ".png", ".zip", ".xls", ".xlsx"}:
+                    continue
+                if body and re.search(r"(?:^|\n)\s*(?:begin [0-7]{3} |%PDF|<PDF>)", body.group(1), re.IGNORECASE):
+                    continue
+                if body and (kind.removesuffix("/A") in {"10-K", "10-K405", "10-KSB", "10-KT", "10-KT405", "10-Q", "10-QSB", "10-QT", "6-K", "20-F", "40-F", "N-CSR", "N-CSRS", "N-30D", "497", "497K", "485BPOS"} or kind.startswith(("8-K", "EX-99"))):
+                    bodies.append(f"Document type: {kind}\n{body.group(1)}")
+            # Never embed bundled graphics, executable data, or uuencoded payloads.
+            raw_text = "\n\n".join(bodies)
+        if path.suffix.lower() == ".xml":
+            try:
+                root = ElementTree.fromstring(raw_text)
+                return "\n".join(f"{node.tag.rsplit('}', 1)[-1]}: {(node.text or '').strip()} {' '.join(f'{key}={value}' for key, value in node.attrib.items())}".strip() for node in root.iter() if not len(node) and ((node.text and node.text.strip()) or node.attrib))
+            except ElementTree.ParseError:
+                pass
+        if path.suffix.lower() in {".htm", ".html", ".xhtml", ".xml"} or re.search(r"<html\b", raw_text, re.IGNORECASE):
             soup = BeautifulSoup(raw_text, "html.parser")
             for tag in soup(["script", "style"]):
                 tag.decompose()
@@ -1784,25 +1922,27 @@ class EdgarIntelligenceService:
         return re.sub(r"\s+", " ", raw_text).strip()
 
     def _chunk_text(self, text: str) -> list[dict[str, Any]]:
-        words = text.split()
-        if not words:
+        if not text.strip():
             return []
-        target_words = max(200, min(self._settings.llm_chunk_target_tokens, 1600))
-        overlap_words = max(0, min(self._settings.llm_chunk_overlap_tokens, target_words // 2))
+        # oMLX's installed embedding endpoint truncates at 512 tokens. Leave room
+        # for special tokens and preserve original character offsets for citations.
+        limit = max(32, min(self._settings.llm_chunk_target_tokens, 480))
+        overlap = min(self._settings.llm_chunk_overlap_tokens, limit // 4)
+        if self._tokenizer is not None:
+            offsets = self._tokenizer.encode(text, add_special_tokens=False).offsets
+        else:
+            # Conservative UTF-8 byte budget when the model tokenizer is not local.
+            offsets = [(i, i + 1) for i, char in enumerate(text) for _ in char.encode("utf-8")]
         chunks: list[dict[str, Any]] = []
-        offset = 0
-        start_word = 0
-        while start_word < len(words):
-            end_word = min(start_word + target_words, len(words))
-            chunk_words = words[start_word:end_word]
-            chunk_text = " ".join(chunk_words)
-            start_char = offset
-            end_char = start_char + len(chunk_text)
-            chunks.append({"text": chunk_text, "startChar": start_char, "endChar": end_char})
-            if end_word == len(words):
+        start = 0
+        while start < len(offsets):
+            end = min(start + limit, len(offsets))
+            start_char = offsets[start][0]
+            end_char = offsets[end - 1][1]
+            chunks.append({"text": text[start_char:end_char], "startChar": start_char, "endChar": end_char})
+            if end == len(offsets):
                 break
-            start_word = max(end_word - overlap_words, start_word + 1)
-            offset = max(0, end_char - len(" ".join(words[start_word:end_word])))
+            start = max(start + 1, end - overlap)
         return chunks
 
     def _resolve_comparison_targets(self, filings: list[dict[str, Any]], comparison_mode: str) -> list[str]:

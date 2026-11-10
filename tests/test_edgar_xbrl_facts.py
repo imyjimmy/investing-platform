@@ -24,7 +24,7 @@ def test_xbrl_fact_service_extracts_companyfacts_into_ticker_artifacts(tmp_path)
     assert result.limitations == []
     assert result.facts_count == 5
     assert result.concepts_count == 4
-    assert (paths.intelligence_dir / "xbrl" / "facts.jsonl").exists()
+    assert (paths.intelligence_dir / "xbrl" / "facts.jsonl.gz").exists()
     assert (paths.intelligence_dir / "xbrl" / "concepts.json").exists()
     sqlite_path = paths.intelligence_dir / "xbrl" / "facts.sqlite3"
     assert sqlite_path.exists()
@@ -50,7 +50,7 @@ def test_xbrl_fact_service_degrades_when_companyfacts_zip_is_missing(tmp_path) -
 
     assert result.facts_count == 0
     assert result.limitations
-    assert "companyfacts.zip was not found" in result.limitations[0]
+    assert "sync this issuer's SEC companyfacts feed" in result.limitations[0]
     assert not stale_sqlite.exists()
 
 

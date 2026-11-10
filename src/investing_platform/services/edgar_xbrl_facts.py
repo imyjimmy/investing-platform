@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
+from decimal import Decimal
 import hashlib
+import gzip
 import json
 from pathlib import Path
 import re
@@ -97,21 +99,28 @@ class EdgarXbrlFactService:
 
     def build_issuer_facts(self, *, paths: WorkspacePaths, filings: list[dict[str, Any]]) -> XbrlExtractionResult:
         ticker = paths.stock_root.name.upper()
+        if (paths.metadata_dir / "fund-scope.json").exists():
+            return self._unavailable(paths, "This is a fund series. Use its fund reports; registrant-wide companyfacts are not series-specific financial facts.")
         cik = self._issuer_cik(filings)
         if not cik:
             return self._unavailable(paths, "Structured XBRL facts were unavailable because no issuer CIK was present.")
 
-        companyfacts_path = self._companyfacts_zip_path()
-        if not companyfacts_path.exists():
+        companyfacts_path = self._settings.research_root / ".sec" / "filing-metadata" / "companyfacts" / f"CIK{cik.zfill(10)}.json.gz"
+        legacy_path = self._companyfacts_zip_path()
+        if not companyfacts_path.exists() and not legacy_path.exists():
             return self._unavailable(
                 paths,
-                f"Structured XBRL facts were unavailable because companyfacts.zip was not found at {companyfacts_path}.",
+                "Structured XBRL facts were unavailable; sync this issuer's SEC companyfacts feed first.",
             )
 
         try:
-            payload = self._read_companyfacts_payload(companyfacts_path, cik)
+            if companyfacts_path.exists():
+                with gzip.open(companyfacts_path, "rt", encoding="utf-8") as handle:
+                    payload = json.load(handle, parse_float=Decimal)
+            else:
+                payload = self._read_companyfacts_payload(legacy_path, cik)
         except (OSError, ValueError, zipfile.BadZipFile) as exc:
-            return self._unavailable(paths, f"Structured XBRL facts could not be read from companyfacts.zip: {exc}")
+            return self._unavailable(paths, f"Structured XBRL facts could not be read: {exc}")
         if payload is None:
             return self._unavailable(paths, f"Structured XBRL facts were unavailable for CIK {cik.zfill(10)} in companyfacts.zip.")
 
@@ -121,14 +130,20 @@ class EdgarXbrlFactService:
 
         xbrl_dir = paths.intelligence_dir / "xbrl"
         xbrl_dir.mkdir(parents=True, exist_ok=True)
-        facts_jsonl_path = xbrl_dir / "facts.jsonl"
-        with facts_jsonl_path.open("w", encoding="utf-8") as handle:
+        facts_jsonl_path = xbrl_dir / "facts.jsonl.gz"
+        with gzip.open(facts_jsonl_path, "wt", encoding="utf-8") as handle:
             for row in rows:
                 handle.write(json.dumps(row, sort_keys=True))
                 handle.write("\n")
         self._write_concepts_json(xbrl_dir / "concepts.json", rows)
         self._write_facts_sqlite(xbrl_dir / "facts.sqlite3", rows)
-        return XbrlExtractionResult(facts_count=len(rows), concepts_count=len({row["concept"] for row in rows}), limitations=[])
+        limitations = []
+        state_path = companyfacts_path.with_name(f"CIK{cik.zfill(10)}.state.json")
+        if state_path.exists():
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            if state.get("status") != "ready":
+                limitations.append("Using previously cached XBRL facts; the latest SEC refresh failed.")
+        return XbrlExtractionResult(facts_count=len(rows), concepts_count=len({row["concept"] for row in rows}), limitations=limitations)
 
     def _unavailable(self, paths: WorkspacePaths, limitation: str) -> XbrlExtractionResult:
         self._clear_xbrl_artifacts(paths)
@@ -136,7 +151,7 @@ class EdgarXbrlFactService:
 
     def _clear_xbrl_artifacts(self, paths: WorkspacePaths) -> None:
         xbrl_dir = paths.intelligence_dir / "xbrl"
-        for name in ("facts.jsonl", "concepts.json", "facts.sqlite3"):
+        for name in ("facts.jsonl", "facts.jsonl.gz", "concepts.json", "facts.sqlite3"):
             path = xbrl_dir / name
             if path.exists():
                 path.unlink()
@@ -170,7 +185,7 @@ class EdgarXbrlFactService:
 
         allowed_forms = {form.upper() for form in request.forms}
         allowed_accessions = {accession.strip() for accession in request.accessionNumbers if accession.strip()}
-        source_path = str(paths.intelligence_dir / "xbrl" / "facts.jsonl")
+        source_path = str(sqlite_path)
         facts: list[XbrlFact] = []
         aliases = {alias for alias, _concept, _rank in matches}
         for row in rows:
@@ -214,7 +229,7 @@ class EdgarXbrlFactService:
             if matched_name is None:
                 return None
             with archive.open(matched_name) as handle:
-                return json.loads(handle.read().decode("utf-8"))
+                return json.loads(handle.read().decode("utf-8"), parse_float=Decimal)
 
     def _normalize_companyfacts_payload(
         self,
@@ -514,6 +529,7 @@ class EdgarXbrlFactService:
                 "frame": raw_fact.get("frame"),
             },
             sort_keys=True,
+            default=str,
         )
         return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:24]
 

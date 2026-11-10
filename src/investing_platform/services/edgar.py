@@ -11,6 +11,9 @@ import random
 import re
 import threading
 import time
+from xml.etree import ElementTree
+from urllib.parse import urljoin, urlparse
+from bs4 import BeautifulSoup
 from typing import Any, Callable
 
 import requests
@@ -354,21 +357,57 @@ class EdgarDownloader:
         counters.metadata_files_synced += 1
 
         payloads: list[dict[str, Any]] = [resolved.submissions_payload]
-        cached_filings = previous_metadata_snapshot.get("filings") if previous_metadata_snapshot else None
-        should_fetch_full_history = force_refresh or not isinstance(cached_filings, list) or not cached_filings
-        if not should_fetch_full_history:
-            return payloads
-
         for older_reference in resolved.submissions_payload.get("filings", {}).get("files", []):
             name = str(older_reference.get("name") or "").strip()
             if not name:
                 continue
             older_url = OLDER_SUBMISSIONS_URL_TEMPLATE.format(name=name)
-            older_payload = self._get_json(older_url, options)
+            cached_path = submissions_dir / name
+            older_payload = None
+            if cached_path.exists() and not force_refresh:
+                try:
+                    older_payload = json.loads(cached_path.read_text(encoding="utf-8"))
+                    if not isinstance(older_payload, dict) or (
+                        older_reference.get("filingCount") is not None
+                        and len(older_payload.get("accessionNumber", [])) != int(older_reference["filingCount"])
+                    ):
+                        older_payload = None
+                except (ValueError, OSError):
+                    pass
+            if older_payload is None:
+                older_payload = self._get_json(older_url, options)
             payloads.append(older_payload)
             self._write_json_artifact(submissions_dir / name, older_payload, older_url, manifest, edgar_root)
             counters.metadata_files_synced += 1
         return payloads
+
+    def _fund_series_accessions(self, resolved: ResolvedCompany, options: EdgarRuntimeOptions, paths: WorkspacePaths) -> set[str]:
+        """Use the SEC's series-filtered feed, never the entire shared fund registrant."""
+        accessions: set[str] = set()
+        namespace = {"a": "http://www.w3.org/2005/Atom"}
+        offset = 0
+        while True:
+            url = f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK={resolved.series_id}&owner=exclude&count=100&start={offset}&output=atom"
+            response = self._request("GET", url, options, stream=False)
+            try:
+                raw = response.content
+                tree = ElementTree.fromstring(raw)
+            finally:
+                response.close()
+            entries = tree.findall("a:entry", namespace)
+            page = {entry.findtext("a:content/a:accession-number", namespaces=namespace) for entry in entries}
+            page.discard(None)
+            (paths.submissions_dir / f"{resolved.series_id}-{offset}.atom.xml").write_bytes(raw)
+            if not page:
+                break
+            if page <= accessions:
+                raise RuntimeError("SEC fund feed repeated a page; refusing to claim complete series coverage.")
+            accessions.update(page)
+            if len(entries) < 100:
+                break
+            offset += len(entries)
+        (paths.metadata_dir / "fund-scope.json").write_text(json.dumps({"ticker": resolved.ticker, "cik": resolved.cik10, "seriesId": resolved.series_id, "classId": resolved.class_id, "accessions": sorted(accessions), "sourceUrl": url, "checkedAt": datetime.now(UTC).isoformat()}, indent=2), encoding="utf-8")
+        return accessions
 
     def _merge_cached_filing_rows(
         self,
@@ -964,6 +1003,11 @@ class EdgarDownloader:
                     continue
                 accession_number_no_dashes = accession_number.replace("-", "")
                 primary_document = str(row.get("primaryDocument") or "").strip()
+                legacy_submission = not primary_document
+                if legacy_submission:
+                    primary_document = f"{accession_number}.txt"
+                if resolved.series_id and primary_document.startswith("xsl") and primary_document.endswith(".xml"):
+                    primary_document = Path(primary_document).name
                 archive_base_url = ARCHIVE_BASE_URL_TEMPLATE.format(cik=resolved.cik, accession=accession_number_no_dashes)
                 filing_row = {
                     "ticker": resolved.ticker,
@@ -986,7 +1030,7 @@ class EdgarDownloader:
                     "isXBRL": self._to_int(row.get("isXBRL")),
                     "isInlineXBRL": self._to_int(row.get("isInlineXBRL")),
                     "archiveBaseUrl": archive_base_url,
-                    "primaryDocumentUrl": f"{archive_base_url}/{primary_document}" if primary_document else None,
+                    "primaryDocumentUrl": f"https://www.sec.gov/Archives/edgar/data/{resolved.cik}/{accession_number}.txt" if legacy_submission else f"{archive_base_url}/{primary_document}",
                 }
                 deduped[accession_number] = filing_row
         return sorted(
@@ -1143,6 +1187,48 @@ class EdgarDownloader:
                 edgar_root=edgar_root,
                 counters=counters,
             )
+
+    def _download_research_exhibits(self, *, filing: dict[str, Any], request: EdgarDownloadRequest,
+                                   options: EdgarRuntimeOptions, filings_dir: Path, edgar_root: Path,
+                                   manifest: dict[str, Any], counters: DownloadCounters) -> None:
+        """Cache textual EX-99 exhibits using SEC document types, not filename guesses."""
+        form = str(filing.get("form", "")).removesuffix("/A")
+        if not form.startswith("8-K") and form not in {"6-K", "40-F"}:
+            return
+        if filing.get("primaryDocument") == f"{filing.get('accessionNumber')}.txt":
+            return  # Legacy complete submissions already contain their exhibits.
+        root = filings_dir / self._filing_folder_name(filing) / "exhibits"
+        root.mkdir(parents=True, exist_ok=True)
+        catalog_path = root / "catalog.json"
+        if request.resume and catalog_path.exists():
+            entries = json.loads(catalog_path.read_text(encoding="utf-8"))
+        else:
+            url = f"{filing['archiveBaseUrl']}/{filing['accessionNumber']}-index.html"
+            response = self._request("GET", url, options, stream=False)
+            try:
+                soup = BeautifulSoup(response.content, "html.parser")
+            finally:
+                response.close()
+            entries = []
+            for row in soup.select("table.tableFile tr"):
+                cells = row.find_all("td")
+                if len(cells) < 4 or not cells[3].get_text(strip=True).upper().startswith("EX-99"):
+                    continue
+                anchor = cells[2].find("a", href=True)
+                if anchor is None:
+                    continue
+                source_url = urljoin(url, str(anchor["href"]))
+                name = Path(urlparse(source_url).path).name
+                if not source_url.startswith(str(filing["archiveBaseUrl"]) + "/") or Path(name).suffix.lower() not in {".htm", ".html", ".txt", ".xml"}:
+                    continue
+                entries.append({"name": name, "type": cells[3].get_text(strip=True), "sourceUrl": source_url})
+            catalog_path.write_text(json.dumps(entries, indent=2), encoding="utf-8")
+        for entry in entries:
+            name = str(entry["name"])
+            if Path(name).name != name:
+                raise ValueError("Invalid exhibit filename")
+            self._download_one_file(url=entry["sourceUrl"], destination=root / name, request=request,
+                                    options=options, manifest=manifest, edgar_root=edgar_root, counters=counters)
 
     def _download_bundle_files(
         self,

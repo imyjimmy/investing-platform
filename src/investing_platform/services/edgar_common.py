@@ -43,7 +43,7 @@ FILING_EXPORT_FIELDS = [
 EXHIBIT_NAME_RE = re.compile(r"(?i)(?:^|[/_-])(?:ex(?:hibit)?|xex)\d")
 BODY_COVERAGE_POLICY_VERSION = "phase1-default-v1"
 INDEX_SCHEMA_VERSION = "edgar-intelligence-index-v1"
-CHUNKING_VERSION = "chunk-v1"
+CHUNKING_VERSION = "chunk-tokens-480-v2"
 EMBEDDING_MODEL_VERSION = "nomicai-modernbert-embed-base-4bit-v1"
 
 
@@ -62,6 +62,8 @@ class ResolvedCompany:
     ticker: str
     company_name: str
     submissions_payload: dict[str, Any]
+    series_id: str | None = None
+    class_id: str | None = None
 
 
 @dataclass(slots=True)
