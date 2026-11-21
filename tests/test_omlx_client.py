@@ -110,3 +110,17 @@ def test_chat_json_disables_thinking_for_structured_answers() -> None:
     assert captured["thinking_budget"] == 0
     assert captured["response_format"]["type"] == "json_schema"
     assert captured["response_format"]["json_schema"]["schema"]["properties"]["confidence"]["enum"] == ["low", "medium", "high"]
+
+
+def test_whitespace_heartbeats_do_not_extend_generation_deadline(monkeypatch):
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+
+    from investing_platform.services import omlx_client
+
+    clock = iter((0, 1, 3))
+    monkeypatch.setattr(omlx_client.time, "monotonic", lambda: next(clock))
+    response = SimpleNamespace(status_code=200, iter_content=lambda chunk_size: iter((b" ", b" ")))
+    monkeypatch.setattr(omlx_client.requests, "request", lambda *a, **kw: nullcontext(response))
+    with pytest.raises(OmlxClientError, match="timed out"):
+        OmlxClient(DashboardSettings())._request("POST", "/chat/completions", timeout=2)

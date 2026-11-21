@@ -9,22 +9,22 @@ use std::{
 
 use tauri::{Manager, RunEvent, WebviewWindow};
 
-struct BackendProcess(Mutex<Option<Child>>);
+struct AppProcesses(Mutex<Vec<Child>>);
 
-impl BackendProcess {
+impl AppProcesses {
   fn new() -> Self {
-    Self(Mutex::new(None))
+    Self(Mutex::new(Vec::new()))
   }
 
-  fn set(&self, child: Child) {
+  fn track(&self, child: Child) {
     if let Ok(mut slot) = self.0.lock() {
-      *slot = Some(child);
+      slot.push(child);
     }
   }
 
   fn stop(&self) {
     if let Ok(mut slot) = self.0.lock() {
-      if let Some(mut child) = slot.take() {
+      for mut child in slot.drain(..).rev() {
         let _ = child.kill();
         let _ = child.wait();
       }
@@ -34,7 +34,7 @@ impl BackendProcess {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-  let backend_process = BackendProcess::new();
+  let backend_process = AppProcesses::new();
 
   let app = tauri::Builder::default()
     .manage(backend_process)
@@ -52,9 +52,19 @@ pub fn run() {
         .get_webview_window("main")
         .expect("main window should be configured");
 
+      let root = project_root();
+      if let Ok(child) = Command::new(root.join(".venv/bin/python"))
+        .current_dir(&root)
+        .env("PYTHONPATH", python_path_for_project(&root))
+        .arg(root.join("scripts/desktop_omlx.py"))
+        .spawn()
+      {
+        app.state::<AppProcesses>().track(child);
+      }
+
       if !backend_is_available() {
         let child = spawn_backend()?;
-        app.state::<BackendProcess>().set(child);
+        app.state::<AppProcesses>().track(child);
       }
 
       wait_for_backend(Duration::from_secs(15));
@@ -66,7 +76,7 @@ pub fn run() {
 
   app.run(|app_handle, event| {
     if matches!(event, RunEvent::Exit) {
-      app_handle.state::<BackendProcess>().stop();
+      app_handle.state::<AppProcesses>().stop();
     }
   });
 }

@@ -101,3 +101,30 @@ def test_topic_language_does_not_create_a_plan() -> None:
     assert plan.forms == ()
     assert plan.accession_numbers == ()
     assert plan.reasons == ()
+
+
+def test_period_ended_selects_reporting_period_instead_of_filing_date() -> None:
+    planner = EdgarRetrievalPlanner()
+    filings = [
+        {"form": "10-K", "reportDate": "2025-01-26", "filingDate": "2025-02-26", "accessionNumber": "target"},
+        {"form": "10-K", "reportDate": "2024-01-28", "filingDate": "2024-02-21", "accessionNumber": "older"},
+    ]
+    question = "In its Form 10-K for the year ended January 26, 2025, what did the issuer report?"
+    assert planner.plan(question=question, filings=filings).accession_numbers == ("target",)
+    missing = planner.plan(question=question, filings=filings[1:])
+    assert "report_period_unavailable" in missing.reasons
+
+
+def test_guidance_change_selects_two_earnings_reports_within_scope() -> None:
+    planner = EdgarRetrievalPlanner()
+    filings = [
+        {"form": "8-K", "items": "5.02", "filingDate": "2026-06-03", "accessionNumber": "board"},
+        {"form": "8-K", "items": "2.02,9.01", "filingDate": "2026-06-01", "accessionNumber": "june"},
+        {"form": "8-K", "items": "2.02", "filingDate": "2026-03-01", "accessionNumber": "march"},
+        {"form": "8-K", "items": "2.02", "filingDate": "2025-12-01", "accessionNumber": "december"},
+    ]
+    question = "Did the company raise guidance?"
+    assert planner.plan(question=question, filings=filings).accession_numbers == ("june", "march")
+    assert planner.plan(question=question, filings=filings, end_date=date(2026, 5, 1)).accession_numbers == ("march", "december")
+    assert planner.plan(question="What is its revenue guidance?", filings=filings).accession_numbers == ("june",)
+    assert "earnings_outlook" not in planner.plan(question="What was guidance in 2021?", filings=filings).reasons

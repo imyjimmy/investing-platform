@@ -1,12 +1,9 @@
-import { useState } from "react";
-
-import type { StockIntelTab } from "./stockIntelTabs";
-import { useEdgarSync } from "./useEdgarSync";
+import { useStockIntelSession } from "./StockIntelSession";
 import { useInvestorPdfSync } from "./useInvestorPdfSync";
 import { useStockIntelSourceStatus } from "./useStockIntelSourceStatus";
 
 export function useStockIntelSync() {
-  const [activeStockIntelTab, setActiveStockIntelTab] = useState<StockIntelTab>("sec");
+  const { activeStockIntelTab, setActiveStockIntelTab, filingSync } = useStockIntelSession();
   const {
     edgarStatusError,
     edgarStatusQuery,
@@ -15,7 +12,7 @@ export function useStockIntelSync() {
     investorPdfStatusQuery,
     investorPdfSyncing,
   } = useStockIntelSourceStatus();
-  const { edgarSyncError, edgarSyncResult, runEdgarSync } = useEdgarSync();
+  const { edgarSyncError, edgarSyncResult, runEdgarSync } = filingSync;
   const { investorPdfSyncError, investorPdfSyncResult, runInvestorPdfDownload } = useInvestorPdfSync();
 
   return {

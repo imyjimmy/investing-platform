@@ -16,7 +16,6 @@ import {
   materializeStockFolder,
 } from "../features/stock-intel/requests";
 import {
-  workspaceEyebrowClassName,
   workspaceTitleClassName,
 } from "./shell/WorkspaceStage";
 import { WorkspaceFrame } from "./shell/WorkspaceFrame";
@@ -138,8 +137,6 @@ export function InvestorPdfsWorkspace({
   const canRun = Boolean(status?.available) && Boolean(identifierValue) && !syncing && stockTemplateValid && !formValidationError;
   const resolvedTicker = normalizedTicker || activeSyncResult?.ticker || "[resolved-ticker]";
   const predictedStockRoot = materializeStockFolder(effectiveStockTemplate, resolvedTicker);
-  const predictedPdfsPath = `${predictedStockRoot}/pdfs`;
-  const predictedWorkspacePath = `${predictedStockRoot}/.investor-pdfs`;
 
   function handleRun() {
     if (!canRun) {
@@ -151,15 +148,14 @@ export function InvestorPdfsWorkspace({
   const header = (
     <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
       <div>
-        <div className={workspaceEyebrowClassName}>Stocks</div>
         <div className="flex flex-wrap items-center gap-3">
           <h1 className={workspaceTitleClassName}>Company PDFs</h1>
           <div className="inline-flex items-center rounded-full border border-line bg-panelSoft px-4 py-1 text-sm font-medium text-text">
-            {status?.available ? "Ready" : statusLoading ? "Checking" : "Needs config"}
+            {status?.available ? "Connected" : statusLoading ? "Checking" : "Needs config"}
           </div>
         </div>
         <p className="mt-2 max-w-3xl text-sm text-muted">
-          Pull public investor PDFs into the visible stock folder. This finds annual reports, company reports, and SEC PDF exhibits; it does not generate PDFs.
+          Find investor reports and SEC exhibits and save the PDFs on this Mac.
         </p>
       </div>
       <div className="flex flex-col items-start gap-3 lg:items-end">
@@ -169,7 +165,7 @@ export function InvestorPdfsWorkspace({
           onClick={handleRun}
           type="button"
         >
-          {syncing ? "Finding PDFs..." : "Run PDF sync"}
+          {syncing ? "Finding PDFs..." : "Find PDFs"}
         </button>
       </div>
     </div>
@@ -232,6 +228,9 @@ export function InvestorPdfsWorkspace({
                 </div>
               </section>
 
+              <details>
+                <summary className="cursor-pointer text-sm font-medium">Search options</summary>
+                <div className="mt-4 grid gap-5">
               <section className="border-b border-line/70 pb-6">
                 <div className="mb-2 text-[11px] uppercase tracking-[0.22em] text-muted">Start URL</div>
                 <input
@@ -384,17 +383,11 @@ export function InvestorPdfsWorkspace({
                   ) : null}
                 </div>
               </section>
+                </div>
+              </details>
             </div>
-
-            <div className="grid gap-6 border-t border-line/70 pt-6 xl:border-l xl:border-t-0 xl:pl-8 xl:pt-0">
-              <section className="grid gap-3">
-                <div className="text-[11px] uppercase tracking-[0.22em] text-muted">Target paths</div>
-                <PathField label="Stock folder" value={activeSyncResult?.stockPath || predictedStockRoot} />
-                <PathField label="Visible PDFs" value={activeSyncResult?.pdfsPath || predictedPdfsPath} />
-                <PathField label="Hidden .investor-pdfs" value={activeSyncResult?.workspacePath || predictedWorkspacePath} />
-              </section>
-
-              <section className="grid gap-4 border-t border-line/70 pt-6">
+            <div className="grid gap-6 xl:border-l xl:border-line xl:pl-8">
+              <section className="grid gap-4">
                 <div className="text-[11px] uppercase tracking-[0.22em] text-muted">Latest run</div>
                 {activeSyncResult ? (
                   <>
@@ -402,18 +395,6 @@ export function InvestorPdfsWorkspace({
                       <div className="rounded-[12px] border border-line/80 bg-panelSoft px-4 py-3 text-sm text-muted">
                         No PDFs matched for <span className="text-text">{activeSyncResult.companyName}</span> in{" "}
                         <span className="text-text">{describeWindow(activeSyncResult)}</span>. Clear the dates or widen the window if you expected older documents.
-                      </div>
-                    ) : null}
-                    {activeSyncResult.cacheHit ? (
-                      <div className="rounded-[12px] border border-line/80 bg-panelSoft px-4 py-3 text-sm text-muted">
-                        Cached discovery served this result
-                        {activeSyncResult.cacheExpiresAt ? (
-                          <>
-                            {" "}
-                            until <span className="text-text">{formatDateTime(activeSyncResult.cacheExpiresAt)}</span>
-                          </>
-                        ) : null}
-                        .
                       </div>
                     ) : null}
                     <div className="grid gap-3 sm:grid-cols-3">
@@ -430,13 +411,13 @@ export function InvestorPdfsWorkspace({
                             <span>{artifact.host}</span>
                             {artifact.publishedAt ? <span>{artifact.publishedAt}</span> : null}
                           </div>
-                          {artifact.savedPath ? <div className="mono mt-2 break-all text-xs text-[#9cead8]">{artifact.savedPath}</div> : null}
+                          <a className="text-sm text-accent underline" href={artifact.sourceUrl} target="_blank" rel="noreferrer">Open source</a>
                         </div>
                       ))}
                     </div>
                   </>
                 ) : (
-                  <div className="text-sm text-muted">Run a PDF sync to populate the visible stock folder.</div>
+                  <div className="text-sm text-muted">Search for PDFs to see the reports available for this company.</div>
                 )}
               </section>
 
@@ -465,22 +446,6 @@ function describeWindow(result: InvestorPdfDownloadResponse) {
     return `the window ending ${result.endDate}`;
   }
   return `the previous ${result.lookbackYears} years`;
-}
-
-function formatDateTime(value: string) {
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(new Date(value));
-}
-
-function PathField({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <div className="mb-2 text-[11px] uppercase tracking-[0.22em] text-muted">{label}</div>
-      <div className="mono break-all text-sm text-[#9cead8]">{value}</div>
-    </div>
-  );
 }
 
 function Stat({ label, value }: { label: string; value: string }) {

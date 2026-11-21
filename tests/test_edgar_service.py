@@ -565,6 +565,20 @@ def test_ask_runs_bounded_maintenance_before_answer(tmp_path, monkeypatch) -> No
     assert response.maintenanceState.jobId == "job-ask-maintenance"
 
 
+def test_form_name_does_not_download_unrelated_annual_history(tmp_path):
+    service, _ = _build_service(tmp_path)
+    recent = _sample_filings()[0]
+    older = {**recent, "accessionNumber": "older", "reportDate": "2021-09-25", "filingDate": "2021-10-29"}
+    def needed(question):
+        return service._sync_service._question_required_filings(
+            request=EdgarQuestionRequest(ticker="AAPL", question=question),
+            all_filings=[older, recent], selected_accessions={recent["accessionNumber"]},
+        )
+    assert needed("What risks does the 10-K describe?") == []
+    assert needed("In the 10-K for the year ended September 27, 2025, what were the risks?") == []
+    assert needed("In the 10-K for the year ended September 25, 2021, what were the risks?") == [older]
+
+
 def test_ask_hydrates_explicit_older_accession_before_indexing(tmp_path, monkeypatch) -> None:
     service, settings = _build_service(tmp_path)
     sync_service = service._sync_service

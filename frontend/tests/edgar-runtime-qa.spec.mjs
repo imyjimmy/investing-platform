@@ -1,5 +1,93 @@
 import { expect, test } from "playwright/test";
 
+test("live NVDA filing answers cite the FY2025 filing and abstain on a missing identifier", async ({ page }, testInfo) => {
+  test.skip(process.env.INVESTING_PLATFORM_LIVE_SEC_QA !== "1", "Requires the local NVDA library and running inference server");
+  test.setTimeout(480_000);
+  await openEdgarWorkspace(page);
+  await openQwenIntelligenceTab(page);
+  await page.getByTestId("edgar-qwen-company-input").fill("NVDA");
+  const filing = "https://www.sec.gov/Archives/edgar/data/1045810/000104581025000023/nvda-20250126.htm";
+
+  async function ask(question) {
+    await page.getByTestId("edgar-qwen-question-input").fill(question);
+    const pending = page.waitForResponse(response =>
+      response.request().method() === "POST" && response.url().endsWith("/edgar/intelligence/ask"), { timeout: 180_000 });
+    await page.getByTestId("edgar-qwen-ask-button").click();
+    const response = await pending;
+    expect(response.status()).toBe(200);
+    const result = await response.json();
+    expect(result.question).toBe(question);
+    for (const id of new Set(Array.from(result.answer.matchAll(/\[(C\d+)\]/g), match => match[1]))) {
+      const card = page.getByTestId(`edgar-qwen-citation-${id}`);
+      await expect(card.getByRole("link", { name: /SEC source/i })).toHaveAttribute("href", filing);
+    }
+    return result;
+  }
+
+  const financial = await ask("According to NVIDIA’s fiscal 2025 Form 10-K, what were total revenue and net income for the year ended January 26, 2025? Give each amount in billions of US dollars.");
+  const metrics = [
+    { concept: "Revenues", label: /revenue/i, value: "130497000000" },
+    { concept: "NetIncomeLoss", label: /net income/i, value: "72880000000" },
+  ];
+  for (const metric of metrics) {
+    const fact = financial.citations.find(citation => citation.xbrlConcept === `us-gaap:${metric.concept}`);
+    expect(fact?.xbrlValue).toBe(metric.value);
+    expect(fact.xbrlUnit).toBe("USD");
+    expect(fact.xbrlPeriod).toContain("2025-01-26");
+    const claim = financial.answer.split(/\n|(?<=\.)\s+/).find(line => line.includes(`[${fact.citationId}]`));
+    expect(claim).toMatch(metric.label);
+    const amount = claim.match(/(\d+(?:\.\d+)?)\s+billion/i)?.[1];
+    expect(amount).toBeDefined();
+    const places = amount.split(".")[1]?.length ?? 0;
+    expect(amount).toBe((Number(metric.value) / 1e9).toFixed(places));
+  }
+
+  const risk = await ask("In its Form 10-K for the year ended January 26, 2025, what is one risk NVIDIA identifies from relying on third parties to manufacture its products?");
+  expect(risk.answer).toMatch(/control|yield|delivery|quality|capacity|supply/i);
+  expect(risk.citations.some(citation =>
+    citation.sectionType === "risk_factors" && /manufactur|foundr/i.test(citation.snippet)
+    && /control|yield|delivery|quality|capacity|supply/i.test(citation.snippet))).toBe(true);
+  await testInfo.attach("manufacturing-risk-answer", {
+    body: await page.getByTestId("edgar-qwen-answer").screenshot(),
+    contentType: "image/png",
+  });
+  await testInfo.attach("verified-answer-text", {
+    body: JSON.stringify([financial, risk].map(({ question, answer, citations }) => ({
+      question, answer, sources: citations.map(({ citationId, snippet, secUrl }) => ({ citationId, snippet, secUrl })),
+    })), null, 2),
+    contentType: "application/json",
+  });
+
+  const unknown = await ask("What serial number does NVIDIA’s Form 10-K for the year ended January 26, 2025 give for the first individual Blackwell GPU it shipped?");
+  expect(unknown.citations).toEqual([]);
+  await expect(page.getByTestId("edgar-qwen-answer")).toContainText("I cannot answer this from the retrieved SEC filing excerpts.");
+});
+
+test("live NVDA guidance comparison cites the outlook in two SEC earnings exhibits", async ({ page }, testInfo) => {
+  test.skip(process.env.INVESTING_PLATFORM_LIVE_SEC_QA !== "1", "Requires the local NVDA library and running inference server");
+  test.setTimeout(300_000);
+  await openEdgarWorkspace(page);
+  await openQwenIntelligenceTab(page);
+  await page.getByTestId("edgar-qwen-company-input").fill("NVDA");
+  await page.getByTestId("edgar-qwen-question-input").fill("did NVDA raise guidance?");
+  await expect(page.getByTestId("edgar-qwen-source-status")).toHaveText("Ready");
+  const pending = page.waitForResponse(r => r.request().method() === "POST" && r.url().endsWith("/edgar/intelligence/ask"), {timeout: 240_000});
+  await page.getByTestId("edgar-qwen-ask-button").click();
+  const response = await pending;
+  expect(response.status()).toBe(200);
+  const {answer, citations} = await response.json();
+  expect(new Set(citations.map(c => c.accessionNumber)).size).toBe(2);
+  for (const citation of citations) {
+    expect(citation.secUrl).toMatch(/^https:\/\/www\.sec\.gov\/Archives\/edgar\/data\/1045810\//);
+    expect(citation.secUrl).toContain(citation.accessionNumber.replaceAll("-", ""));
+    expect(citation.snippet).toMatch(/revenue/i);
+    expect(answer).toContain(`[${citation.citationId}]`);
+    await expect(page.getByTestId(`edgar-qwen-citation-${citation.citationId}`).getByRole("link")).toHaveAttribute("href", citation.secUrl);
+  }
+  await testInfo.attach("guidance-sources", {body: JSON.stringify({answer, citations}, null, 2), contentType: "application/json"});
+  await testInfo.attach("guidance-screen", {body: await page.screenshot(), contentType: "image/png"});
+});
+
 test.describe("stock intel EDGAR workspace", () => {
   test("syncs a new EDGAR workspace and renders deterministic readiness state", async ({ page }) => {
     const appleWorkspace = buildWorkspace({
@@ -44,20 +132,22 @@ test.describe("stock intel EDGAR workspace", () => {
 
     await openEdgarWorkspace(page);
 
-    await expect(page.getByRole("tab", { name: "SEC Tool", exact: true })).toHaveAttribute("aria-selected", "true");
-    await expect(page.getByRole("tab", { name: "Qwen Intelligence", exact: true })).toBeVisible();
+    await expect(page.getByRole("tab", { name: "SEC filings", exact: true })).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("tab", { name: "Ask filings", exact: true })).toBeVisible();
     await expect(page.getByTestId("edgar-workspace")).toBeVisible();
     await expect(page.getByTestId("edgar-qwen-workspace")).toBeHidden();
-    await expect(page.getByTestId("edgar-source-status")).toContainText("Ready");
+    await expect(page.getByTestId("edgar-source-status")).toContainText("Connected");
     await expect(page.getByTestId("edgar-company-input")).toHaveValue("NVDA");
     await expect(page.getByTestId("edgar-sync-button")).toContainText("Sync company filings");
     await expect(page.getByTestId("edgar-watchlist-refresh-inline-button")).toContainText("Refresh 2 symbols");
     await expect(page.getByTestId("edgar-workspace-empty")).toBeVisible();
 
+    await expect(page.getByTestId("edgar-warm-button")).toBeHidden();
+    await page.getByTestId("edgar-advanced-toggle").click();
     await page.getByTestId("edgar-warm-button").click();
     await expect.poll(() => harness.warmRequests.length, { timeout: 15_000 }).toBe(1);
     expect(harness.warmRequests[0]).toMatchObject({ mode: "metadata-only", maxIssuers: 10 });
-    await expect(page.getByText("Warmed 2 issuers.", { exact: true })).toBeVisible();
+    await expect(page.getByText("Checked 2 companies.", { exact: true })).toBeVisible();
 
     await page.getByTestId("edgar-watchlist-input").fill("IREN");
     await page.getByTestId("edgar-watchlist-add-button").click();
@@ -88,11 +178,8 @@ test.describe("stock intel EDGAR workspace", () => {
 
     await expect(page.getByTestId("edgar-sync-button")).toContainText("Refresh AAPL filings");
     await expect(page.getByTestId("edgar-sync-success-message")).toContainText(
-      "AAPL filings refreshed: 2 new accessions, 2 filing bodies downloaded",
+      "AAPL has 36 filings saved locally. 2 downloaded",
     );
-    await expect(page.getByTestId("edgar-state-metadata")).toContainText("fresh");
-    await expect(page.getByTestId("edgar-state-body-cache")).toContainText("updated");
-    await expect(page.getByTestId("edgar-state-intelligence")).toContainText("unavailable");
 
     await expectWorkspaceDetails(page, {
       ticker: "AAPL",
@@ -118,7 +205,7 @@ test.describe("stock intel EDGAR workspace", () => {
     await secCompanyInput.fill("");
     await expect(secCompanyInput).toHaveValue("");
     await expect(page.getByTestId("edgar-sync-button")).toBeDisabled();
-    await expect(page.getByText("Pending resolution", { exact: true })).toBeVisible();
+    await expect(page.getByTestId("edgar-workspace-empty")).toBeVisible();
 
     await openQwenIntelligenceTab(page);
 
@@ -126,7 +213,21 @@ test.describe("stock intel EDGAR workspace", () => {
     await expect(qwenCompanyInput).toHaveValue("NVDA");
     await qwenCompanyInput.fill("");
     await expect(qwenCompanyInput).toHaveValue("");
-    await expect(page.getByText("Pending", { exact: true })).toBeVisible();
+    await expect(page.getByText("Choose a ticker", { exact: true })).toBeVisible();
+  });
+
+  test("keeps Ask disabled when the filings are ready but the model is offline", async ({ page }) => {
+    const health = buildIntelligenceStatus({ readyForAsk: false, indexStatus: "ready" });
+    health.modelState.status = "unavailable";
+    health.modelState.message = "Connection refused on 127.0.0.1";
+    const harness = await installEdgarRoutes(page, {initialIntelligenceStatus: health});
+    await openEdgarWorkspace(page);
+    await openQwenIntelligenceTab(page);
+    await page.getByTestId("edgar-qwen-question-input").fill("did NVDA raise guidance?");
+    await expect(page.getByTestId("edgar-qwen-source-status")).toHaveText("Local AI offline");
+    await expect(page.getByTestId("edgar-qwen-ask-button")).toBeDisabled();
+    await expect(page.getByText(/127\.0\.0\.1/)).toBeHidden();
+    expect(harness.askRequests).toHaveLength(0);
   });
 
   test("keeps advanced EDGAR sync overrides behind disclosure", async ({ page }) => {
@@ -178,9 +279,10 @@ test.describe("stock intel EDGAR workspace", () => {
     });
   });
 
-  test("lets a ticker question start bounded Qwen setup before a workspace exists", async ({ page }) => {
+  test("prepares a new local filing library before enabling questions", async ({ page }) => {
     const harness = await installEdgarRoutes(page, {
       initialWorkspace: null,
+      onSync: () => ({workspace: buildWorkspace({ticker: "NVDA"})}),
       onAsk: (request) => buildQuestionResponse({
         request,
         answer: "Risk factors include competition, supply constraints, and product demand volatility [C1].",
@@ -192,8 +294,10 @@ test.describe("stock intel EDGAR workspace", () => {
     await openQwenIntelligenceTab(page);
 
     await expect(page.getByTestId("edgar-qwen-workspace")).toBeVisible();
-    await expect(page.getByText("No local EDGAR workspace exists yet for this ticker.", { exact: false })).toBeVisible();
     await page.getByTestId("edgar-qwen-question-input").fill("what are the risk factors for NVDA");
+    await expect(page.getByTestId("edgar-qwen-ask-button")).toBeDisabled();
+    await page.getByTestId("edgar-qwen-index-button").click();
+    await expect(page.getByTestId("edgar-qwen-source-status")).toHaveText("Ready");
     await expect(page.getByTestId("edgar-qwen-ask-button")).toBeEnabled();
     await page.getByTestId("edgar-qwen-ask-button").click();
 
@@ -267,8 +371,6 @@ test.describe("stock intel EDGAR workspace", () => {
     await openEdgarWorkspace(page);
 
     await expect(page.getByTestId("edgar-sync-button")).toContainText("Refresh NVDA filings");
-    await expect(page.getByTestId("edgar-state-metadata")).toContainText("No new accessions were discovered on the last refresh.");
-    await expect(page.getByTestId("edgar-state-body-cache")).toContainText("Filing bodies are already current in the local workspace.");
     await expectWorkspaceDetails(page, {
       ticker: "NVDA",
       cik: "0001045810",
@@ -287,10 +389,8 @@ test.describe("stock intel EDGAR workspace", () => {
     expect(harness.syncRequests[0]).toMatchObject({ issuerQuery: "NVDA" });
     await expect.poll(() => harness.workspaceRequests.length > workspaceRequestsBeforeRefresh, { timeout: 15_000 }).toBeTruthy();
 
-    await expect(page.getByTestId("edgar-state-metadata")).toContainText("1 new accessions discovered.");
-    await expect(page.getByTestId("edgar-state-body-cache")).toContainText("One newly discovered filing body was cached locally.");
     await expect(page.getByTestId("edgar-sync-success-message")).toContainText(
-      "NVDA filings refreshed: 1 new accession, 1 filing body downloaded",
+      "NVDA has 35 filings saved locally. 1 downloaded",
     );
     await expectWorkspaceDetails(page, {
       ticker: "NVDA",
@@ -322,8 +422,8 @@ test.describe("stock intel EDGAR workspace", () => {
       initialWorkspace: readyWorkspace,
       initialIntelligenceStatus: buildIntelligenceStatus({
         workspace: readyWorkspace,
-        readyForAsk: true,
-        indexStatus: "ready",
+        readyForAsk: false,
+        indexStatus: "missing",
         indexedChunks: 42,
       }),
       onIndex: (request) => buildIndexResponse({ request, indexedChunks: 42 }),
@@ -348,12 +448,12 @@ test.describe("stock intel EDGAR workspace", () => {
     await openQwenIntelligenceTab(page);
     await page.getByTestId("edgar-qwen-company-input").fill("AAPL");
     await expect(page.getByTestId("edgar-qwen-workspace")).toBeVisible();
-    await expect(page.getByTestId("edgar-qwen-status")).toContainText("ready");
+    await expect(page.getByTestId("edgar-qwen-source-status")).toHaveText("Prepare filings");
 
     await page.getByTestId("edgar-qwen-index-button").click();
     await expect.poll(() => harness.indexRequests.length, { timeout: 15_000 }).toBe(1);
-    expect(harness.indexRequests[0]).toMatchObject({ ticker: "AAPL", includeExhibits: false });
-    await expect(page.getByText("Index request completed.", { exact: true })).toBeVisible();
+    expect(harness.indexRequests[0]).toMatchObject({ ticker: "AAPL" });
+    await expect(page.getByTestId("edgar-qwen-source-status")).toHaveText("Ready");
 
     await page.getByTestId("edgar-qwen-question-input").fill("What changed in revenue?");
     await page.getByTestId("edgar-qwen-ask-button").click();
@@ -364,6 +464,44 @@ test.describe("stock intel EDGAR workspace", () => {
     await expect(page.getByTestId("edgar-qwen-answer")).toContainText("[C1]");
     await expect(page.getByTestId("edgar-qwen-citation-C1")).toContainText("Revenue grew because services and product demand improved");
     await expect(page.getByTestId("edgar-qwen-citation-C1")).toContainText("10-K");
+  });
+
+  test("keeps an in-flight filing question and its answer across tabs and workspaces", async ({ page }) => {
+    const question = "What changed in revenue?";
+    const workspace = buildWorkspace({ ticker: "AAPL", companyName: "Apple Inc.", cik: "0000320193" });
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    const harness = await installEdgarRoutes(page, {
+      initialWorkspace: workspace,
+      initialIntelligenceStatus: buildIntelligenceStatus({ workspace, readyForAsk: true, indexStatus: "ready" }),
+      onAsk: async request => {
+        await gate;
+        return buildQuestionResponse({ request, answer: "Revenue grew [C1]." });
+      },
+    });
+    await openEdgarWorkspace(page);
+    await openQwenIntelligenceTab(page);
+    await page.getByTestId("edgar-qwen-company-input").fill("AAPL");
+    await page.getByTestId("edgar-qwen-question-input").fill(question);
+    await page.getByTestId("edgar-qwen-ask-button").click();
+    await expect.poll(() => harness.askRequests.length).toBe(1);
+    await page.getByRole("tab", { name: "SEC filings", exact: true }).click();
+    await openQwenIntelligenceTab(page);
+    await expect(page.getByTestId("edgar-qwen-ask-button")).toBeDisabled();
+    await expect(page.getByTestId("edgar-qwen-answer")).toContainText("Reading the filings");
+
+    await openWorkspace(page, "nav-stocks-market");
+    await expect(page.getByTestId("edgar-qwen-workspace")).toBeHidden();
+    const delivered = page.waitForResponse(r => r.url().endsWith("/edgar/intelligence/ask"));
+    release();
+    await delivered;
+    await openWorkspace(page, "nav-stocks-intel");
+    await expect(page.getByRole("tab", { name: "Ask filings" })).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByTestId("edgar-qwen-company-input")).toHaveValue("AAPL");
+    await expect(page.getByTestId("edgar-qwen-question-input")).toHaveValue(question);
+    await expect(page.getByTestId("edgar-qwen-answer")).toContainText("Revenue grew [C1]");
+    await expect(page.getByTestId("edgar-qwen-citation-C1").getByRole("link")).toHaveAttribute("href", /sec\.gov\/Archives\//);
+    expect(harness.askRequests).toHaveLength(1);
   });
 
   test("surfaces Qwen index lifecycle state and job progress", async ({ page }) => {
@@ -410,10 +548,9 @@ test.describe("stock intel EDGAR workspace", () => {
     await openEdgarWorkspace(page);
     await openQwenIntelligenceTab(page);
 
-    await expect(page.getByTestId("edgar-qwen-status")).toContainText("stale");
-    await expect(page.getByTestId("edgar-qwen-status")).toContainText("indexing");
-    await expect(page.getByTestId("edgar-qwen-job-progress")).toContainText("Indexed 2 of 5 documents");
-    await expect(page.getByTestId("edgar-qwen-status")).toContainText("missing 1 selected accession");
+    await expect(page.getByTestId("edgar-qwen-source-status")).toHaveText("Preparing filings");
+    await expect(page.getByTestId("edgar-qwen-ask-button")).toBeDisabled();
+    await expect(page.getByText(/missing 1 selected accession/)).toBeHidden();
   });
 
   test("surfaces stale and degraded EDGAR state, then recovers after refresh", async ({ page }) => {
@@ -490,12 +627,7 @@ test.describe("stock intel EDGAR workspace", () => {
     await openEdgarWorkspace(page);
 
     await expect(page.getByTestId("edgar-sync-button")).toContainText("Refresh NVDA filings");
-    await expect(page.getByTestId("edgar-state-metadata")).toContainText("stale");
-    await expect(page.getByTestId("edgar-state-metadata")).toContainText("Live refresh is overdue; cached metadata may be missing newer filings.");
-    await expect(page.getByTestId("edgar-state-body-cache")).toContainText("degraded");
-    await expect(page.getByTestId("edgar-state-body-cache")).toContainText("The last body refresh failed, so the workspace is serving the previous successful cache.");
-    await expect(page.getByTestId("edgar-state-intelligence")).toContainText("not-ready");
-    await expect(page.getByTestId("edgar-state-intelligence")).toContainText("Local filing Q&A needs a fresh index build before answers can run.");
+    await expect(page.getByText("Refresh to check for newer filings.")).toBeVisible();
     await expectWorkspaceDetails(page, {
       ticker: "NVDA",
       cik: "0001045810",
@@ -510,11 +642,8 @@ test.describe("stock intel EDGAR workspace", () => {
     await expect.poll(() => harness.syncRequests.length, { timeout: 15_000 }).toBe(1);
     expect(harness.syncRequests[0]).toMatchObject({ issuerQuery: "NVDA" });
 
-    await expect(page.getByTestId("edgar-state-metadata")).toContainText("fresh");
-    await expect(page.getByTestId("edgar-state-body-cache")).toContainText("updated");
-    await expect(page.getByTestId("edgar-state-body-cache")).toContainText("Recent filing bodies were refreshed locally.");
     await expect(page.getByTestId("edgar-sync-success-message")).toContainText(
-      "NVDA filings refreshed: 2 new accessions, 2 filing bodies downloaded",
+      "NVDA has 36 filings saved locally. 2 downloaded",
     );
     await expectWorkspaceDetails(page, {
       ticker: "NVDA",
@@ -617,7 +746,7 @@ async function installEdgarRoutes(page, options = {}) {
   await page.route("**/api/sources/edgar/intelligence/ask", async (route) => {
     const request = route.request().postDataJSON();
     askRequests.push(request);
-    await fulfillJson(route, options.onAsk ? options.onAsk(request, currentWorkspace) : buildQuestionResponse({ request }));
+    await fulfillJson(route, options.onAsk ? await options.onAsk(request, currentWorkspace) : buildQuestionResponse({ request }));
   });
 
   return {
@@ -913,12 +1042,10 @@ function buildQuestionResponse({ request, answer = "The filing evidence is insuf
 }
 
 async function expectWorkspaceDetails(page, details) {
-  await expect(page.getByTestId("edgar-workspace-details")).toBeVisible();
-  await expect(page.getByTestId("edgar-stat-matched-filings")).toContainText(details.matchedFilings);
-  await expect(page.getByTestId("edgar-stat-cached-filings")).toContainText(details.cachedFilings);
-  await expect(page.getByTestId("edgar-stat-new-accessions")).toContainText(details.newAccessions);
-  await expect(page.getByText(`Ticker ${details.ticker} · CIK ${details.cik}`, { exact: true })).toBeVisible();
-  await expect(page.getByTestId("edgar-workspace-details").getByText(details.stockPath, { exact: true })).toBeVisible();
+  const summary = page.getByTestId("edgar-workspace-details");
+  await expect(summary).toContainText(details.ticker);
+  await expect(summary).toContainText(`${details.cachedFilings} filings saved locally`);
+  await expect(summary).not.toContainText(details.stockPath);
 }
 
 async function fulfillJson(route, payload) {
@@ -936,8 +1063,8 @@ async function openEdgarWorkspace(page) {
 }
 
 async function openQwenIntelligenceTab(page) {
-  await page.getByRole("tab", { name: "Qwen Intelligence", exact: true }).click();
-  await expect(page.getByRole("tab", { name: "Qwen Intelligence", exact: true })).toHaveAttribute("aria-selected", "true");
+  await page.getByRole("tab", { name: "Ask filings", exact: true }).click();
+  await expect(page.getByRole("tab", { name: "Ask filings", exact: true })).toHaveAttribute("aria-selected", "true");
 }
 
 async function openWorkspace(page, testId) {

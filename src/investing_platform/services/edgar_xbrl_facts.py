@@ -17,6 +17,7 @@ import zipfile
 from investing_platform.config import DashboardSettings
 from investing_platform.models import EdgarQuestionRequest
 from investing_platform.services.edgar_common import WorkspacePaths
+from investing_platform.services.edgar_retrieval_planner import requested_period_end
 from investing_platform.services.edgar_intelligence_terms import (
     XBRL_CONCEPT_ALIASES,
     XBRL_DURATION_ALIASES,
@@ -188,6 +189,7 @@ class EdgarXbrlFactService:
         source_path = str(sqlite_path)
         facts: list[XbrlFact] = []
         aliases = {alias for alias, _concept, _rank in matches}
+        period_end = requested_period_end(request.question)
         for row in rows:
             accession = str(row["accession_number"] or "") or None
             form = str(row["form"] or "").upper() or None
@@ -199,6 +201,8 @@ class EdgarXbrlFactService:
             if filing_date and not self._filing_date_matches(filing_date, request):
                 continue
             fact = self._fact_from_row(row, source_path=source_path)
+            if period_end and (fact.period_end or fact.instant) != period_end.isoformat():
+                continue
             fact.score = self._rank_fact(fact, concept_rank=concept_rank, active_accessions=active_accessions, aliases=aliases, request=request)
             facts.append(fact)
 

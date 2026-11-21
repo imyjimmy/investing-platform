@@ -27,6 +27,12 @@ from investing_platform.services.omlx_client import OmlxClientError, OmlxModel, 
 
 
 class FakeOmlxClient:
+    def quotes_entail_claim(self, *, model, question, claim, quotes):
+        return True
+
+    def check_claim(self, *, model, claim, evidence, question):
+        return {"supported": True, "quotes": [{"id": key, "quote": value} for key, value in evidence.items()]}
+
     def list_models(self) -> list[OmlxModel]:
         return [OmlxModel(id="nomicai-modernbert-embed-base-4bit")]
 
@@ -102,7 +108,7 @@ class RerankingFakeOmlxClient:
         return [OmlxRerankResult(index=index, relevance_score=1.0 - rank * 0.1) for rank, index in enumerate(ordered)]
 
 
-class GuardrailFakeOmlxClient:
+class GuardrailFakeOmlxClient(FakeOmlxClient):
     def __init__(self, answer_payload: dict | None = None) -> None:
         self.answer_payload = answer_payload or {
             "answer": "Revenue decreased 12% [C1].",
@@ -604,7 +610,7 @@ def test_answer_question_scopes_latest_filing_before_vector_retrieval(tmp_path) 
             "accessionNumber": "old-quarter",
             "accessionNumberNoDashes": "oldquarter",
             "primaryDocument": "old.htm",
-            "primaryDocumentUrl": "https://www.sec.gov/old.htm",
+            "primaryDocumentUrl": "https://www.sec.gov/Archives/edgar/data/320193/000032019325000001/old.htm",
         },
         {
             "ticker": "AAPL",
@@ -616,7 +622,7 @@ def test_answer_question_scopes_latest_filing_before_vector_retrieval(tmp_path) 
             "accessionNumber": "latest-quarter",
             "accessionNumberNoDashes": "latestquarter",
             "primaryDocument": "latest.htm",
-            "primaryDocumentUrl": "https://www.sec.gov/latest.htm",
+            "primaryDocumentUrl": "https://www.sec.gov/Archives/edgar/data/320193/000032019326000001/latest.htm",
         },
     ]
     (paths.exports_dir / "matched-filings.json").write_text(json.dumps(filings), encoding="utf-8")
@@ -832,6 +838,19 @@ def test_answer_question_uses_partial_stale_index_with_limitations(tmp_path) -> 
     assert response.retrievalState.chunksUsed == 1
     assert "missing 1 selected accession" in " ".join(response.limitations)
     assert "indexed subset" in " ".join(response.limitations)
+
+    # Asking about the existing accession should not trigger a bounded rebuild
+    # just because an unrelated accession is waiting to be indexed.
+    workspace.bodyCacheState = SimpleNamespace(status="ready")
+    sync = artifact_store._sync_service
+    sync._intelligence = service
+    _, maintenance = sync._run_ask_time_maintenance(
+        request=EdgarQuestionRequest(ticker="AAPL", question="What changed in revenue?",
+                                     accessionNumbers=[filings[0]["accessionNumber"]]),
+        workspace=workspace, paths=paths,
+    )
+    assert maintenance.status == "none"
+    assert maintenance.documentsIndexed == 0
 
 
 def test_answer_question_trims_prompt_evidence_to_context_budget(tmp_path) -> None:
@@ -1059,7 +1078,7 @@ def test_ask_uses_bullet_style_for_risk_factor_questions(tmp_path) -> None:
     assert response.answerStyle == "bullets"
     assert response.answer.startswith("- Supply constraints")
     assert "Use concise bullet points" in fake_client.chat_messages[0][0]["content"]
-    assert "Avoid a dense paragraph" in fake_client.chat_messages[0][0]["content"]
+    assert "one independently verifiable claim per bullet" in fake_client.chat_messages[0][0]["content"]
 
 
 def test_citation_snippet_uses_retrieved_excerpt_without_question_keyword_anchors(tmp_path) -> None:
@@ -1136,6 +1155,25 @@ def test_ask_blocks_unsupported_numbers(tmp_path) -> None:
 
     assert response.answer == "I cannot answer this from the retrieved SEC filing excerpts."
     assert response.citations == []
+
+
+def test_ask_rejects_a_real_quote_that_does_not_establish_the_claim(tmp_path, monkeypatch):
+    service, paths, workspace, client = _indexed_guardrail_service(
+        tmp_path, filing_text="Revenue decreased 12% following a security incident.",
+        answer_payload={"answer": "Revenue decreased 12% because of supply problems [C1].", "citations": ["C1"]},
+    )
+    reviews = []
+    def review(**kwargs):
+        reviews.append(kwargs)
+        return False
+    monkeypatch.setattr(client, "quotes_entail_claim", review)
+    response = service.answer_question(
+        workspace=workspace, paths=paths,
+        request=EdgarQuestionRequest(ticker="AAPL", question="How did supply problems affect revenue?"),
+    )
+    assert len(reviews) == 1
+    assert "security incident" in reviews[0]["quotes"]["C1"]
+    assert not response.citations
 
 
 def test_validator_accepts_cited_numbers_from_xbrl_fact_evidence(tmp_path) -> None:
@@ -1355,3 +1393,47 @@ def _indexed_guardrail_service(
         )
     )
     return service, paths, workspace, fake_client
+
+
+def test_revenue_outlook_comparison_checks_period_direction_and_issuer(tmp_path) -> None:
+    service = EdgarIntelligenceService(DashboardSettings(research_root=tmp_path), omlx_client=FakeOmlxClient())
+    request = EdgarQuestionRequest(ticker="ACME", question="Did ACME raise guidance?")
+
+    def outlook(key, date, amount, period):
+        return SimpleNamespace(
+            citation_id=key, section="Outlook", accession_number=f"0000000001-26-00000{key[-1]}",
+            sec_url=f"https://www.sec.gov/Archives/edgar/data/1/00000000012600000{key[-1]}/outlook.htm",
+            filing_date=date, text=f"Outlook for the {period} quarter of fiscal 2027 is as follows: "
+            f"Revenue is expected to be ${amount} million, plus or minus 2%.",
+        )
+
+    chunks = [outlook("C1", "2026-07-01", 9, "third"), outlook("C2", "2026-04-01", 10, "second")]
+    comparison = service._revenue_outlook_comparison(request, chunks, "ACME Corp")
+    assert comparison.answer.startswith("The next-quarter revenue outlook fell [C2][C1]")
+    assert comparison.support_quotes["C1"][0] in chunks[0].text
+    assert service._revenue_outlook_comparison(request, chunks[:1], "ACME Corp") is None
+    other = request.model_copy(update={"question": "Did MSFT raise guidance?"})
+    assert service._revenue_outlook_comparison(other, chunks, "ACME Corp") is None
+    chunks[1] = outlook("C2", "2026-04-01", 9, "third")
+    assert service._revenue_outlook_comparison(request, chunks, "ACME Corp").answer.startswith("Revenue guidance for the same quarter was unchanged")
+
+
+def test_question_condition_is_not_a_reported_decline(tmp_path):
+    service = EdgarIntelligenceService(DashboardSettings(research_root=tmp_path), omlx_client=FakeOmlxClient())
+    assert service._unsupported_direction_terms("If orders fall short, inventory may accumulate.", "excess inventory") == []
+    assert service._unsupported_direction_terms("Orders fell.", "excess inventory") == ["fell"]
+
+
+def test_partial_answer_only_keeps_the_independently_verified_prefix(tmp_path, monkeypatch):
+    service, paths, workspace, client = _indexed_guardrail_service(
+        tmp_path, filing_text="Revenue decreased 12% following a security incident.",
+        answer_payload={"answer": "Revenue decreased 12% [C1]. Supply problems caused that result [C1].",
+                        "citations": ["C1"]},
+    )
+    monkeypatch.setattr(client, "quotes_entail_claim", lambda **kw: "Supply" not in kw["claim"])
+    request = EdgarQuestionRequest(ticker="AAPL", question="What changed in revenue and why?")
+    chunks, _ = service._retrieve_chunks(paths, request)
+    verdict = service._validate_generated_answer(client.answer_payload, chunks, request, allow_partial=True)
+    assert verdict.answer == "- Revenue decreased 12% [C1]."
+    assert verdict.limitations == ["Some parts of the question could not be verified."]
+    assert verdict.citation_ids == ["C1"]

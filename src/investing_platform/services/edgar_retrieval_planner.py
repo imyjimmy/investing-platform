@@ -9,7 +9,7 @@ metadata operators such as SEC form names and recency scope.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 import re
 from typing import Any, Iterable, Mapping
 
@@ -35,6 +35,51 @@ BASE_FORM_FAMILIES: dict[str, tuple[str, ...]] = {
     "20-F": ("20-F", "20-F/A"),
     "40-F": ("40-F", "40-F/A"),
 }
+
+
+REPORT_PERIOD_RE = re.compile(
+    r"\b(?:year|quarter|period|months?)\s+(?:ended|ending)\s+"
+    r"([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{4}-\d{2}-\d{2})\b", re.IGNORECASE,
+)
+
+
+def asks_about_current_guidance(question: str) -> bool:
+    """An unqualified outlook question refers to the latest releases."""
+    return bool(re.search(r"\b(guidance|outlook|forecast)\b", question, re.I)) and not re.search(
+        r"\b(?:19\d{2}|20\d{2}|FY\s*\d+|Q[1-4]|historical|history|since|ago|last year)\b", question, re.I
+    )
+
+
+def asks_for_guidance_change(question: str) -> bool:
+    return bool(re.search(
+        r"\b(rais(?:e|ed)|lower(?:ed)?|cut|increas(?:e|ed)|decreas(?:e|ed)|revis(?:e|ed|ion)|"
+        r"chang(?:e|ed)|compar(?:e|ed|ison)|higher|lower|hike|boost)\b", question, re.I,
+    ))
+
+
+def earnings_release(filing: Mapping[str, Any]) -> bool:
+    return filing.get("form") == "8-K" and "2.02" in re.split(r"[,;\s]+", str(filing.get("items") or ""))
+
+
+def passage_query(question: str) -> str:
+    """Remove filing identifiers already enforced by the accession filter."""
+    topic = FORM_TOKEN_RE.sub(" ", question)
+    if requested_period_end(question):
+        topic = REPORT_PERIOD_RE.sub(" ", topic)
+    topic = re.sub(r"\b(?:in its\s+)?for the\s*(?=[,?]|$)|\bin its\s*(?=[,?]|$)", " ", topic, flags=re.I)
+    return " ".join(topic.split()).strip(" ,") or question
+
+
+def requested_period_end(question: str) -> date | None:
+    dates = REPORT_PERIOD_RE.findall(question)
+    if len(dates) != 1:
+        return None
+    for pattern in ("%B %d %Y", "%b %d %Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(dates[0].replace(",", ""), pattern).date()
+        except ValueError:
+            continue
+    return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,6 +122,24 @@ class EdgarRetrievalPlanner:
         if inferred_forms:
             reasons.append("form_scope")
 
+        period_end = requested_period_end(question)
+        if period_end and scope_forms:
+            filtered_filings = [f for f in filtered_filings if f.get("accessionNumber")
+                                and str(f.get("reportDate")) == period_end.isoformat()]
+            if not filtered_filings:
+                return EdgarRetrievalPlan(forms=inferred_forms, reasons=(*reasons, "report_period_unavailable"))
+            reasons.append("report_period")
+
+        if asks_about_current_guidance(question) and not scope_forms and not period_end:
+            reports = sorted((f for f in filtered_filings if earnings_release(f) and f.get("accessionNumber")),
+                             key=lambda f: (str(f.get("filingDate")), str(f["accessionNumber"])), reverse=True)
+            if reports:
+                count = 2 if asks_for_guidance_change(question) else 1
+                return EdgarRetrievalPlan(
+                    accession_numbers=tuple(str(f["accessionNumber"]) for f in reports[:count]),
+                    reasons=("earnings_outlook",),
+                )
+
         if self._requests_latest_scope(question):
             latest_accessions = self._latest_accessions(filtered_filings)
             if latest_accessions:
@@ -87,6 +150,9 @@ class EdgarRetrievalPlanner:
                     reasons=tuple(reasons),
                 )
 
+        if "report_period" in reasons:
+            matches = tuple(str(f["accessionNumber"]) for f in filtered_filings)
+            return EdgarRetrievalPlan(forms=inferred_forms, accession_numbers=matches, reasons=tuple(reasons))
         return EdgarRetrievalPlan(forms=inferred_forms, reasons=tuple(reasons))
 
     def _requests_latest_scope(self, question: str) -> bool:

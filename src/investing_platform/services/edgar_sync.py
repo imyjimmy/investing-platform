@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 import json
 from pathlib import Path
 import re
@@ -34,7 +34,7 @@ from investing_platform.models import (
 )
 from investing_platform.services.edgar_common import DownloadCounters, SUBMISSIONS_URL_TEMPLATE
 from investing_platform.services.edgar_intelligence import EdgarIntelligenceApiError
-from investing_platform.services.edgar_retrieval_planner import EdgarRetrievalPlanner
+from investing_platform.services.edgar_retrieval_planner import EdgarRetrievalPlanner, asks_about_current_guidance, earnings_release
 
 
 ASK_MAINTENANCE_MAX_SECONDS = 30.0
@@ -214,7 +214,7 @@ class EdgarSyncService:
                 includeExhibits=True,
                 resume=not request.forceRefresh,
             )
-            if request.includeExhibits
+            if request.includeExhibits or any(earnings_release(f) for f in selected_filings)
             else None
         )
         cached_accessions: set[str] = set()
@@ -250,7 +250,7 @@ class EdgarSyncService:
                     manifest=manifest,
                     counters=counters,
                 )
-                if exhibit_request is not None:
+                if exhibit_request is not None and (request.includeExhibits or earnings_release(filing)):
                     self._artifact_store._download_research_exhibits(
                         filing=filing,
                         request=exhibit_request,
@@ -661,6 +661,10 @@ class EdgarSyncService:
                 or workspace.bodyCacheState.status in {"missing", "partial", "degraded"}
             )
 
+            if asks_about_current_guidance(request.question):
+                checked = workspace.metadataState.lastLiveCheckedAt
+                needs_sync |= checked is None or datetime.now(UTC) - checked >= timedelta(hours=24)
+
         if needs_sync:
             try:
                 sync_response = self._sync(
@@ -673,6 +677,9 @@ class EdgarSyncService:
                 )
                 workspace = self.workspace(EdgarWorkspaceRequest(ticker=request.ticker, outputDir=request.outputDir))
             except RuntimeError as exc:
+                if asks_about_current_guidance(request.question) and not request.allowStale:
+                    raise EdgarIntelligenceApiError(status_code=503, code="freshness_unavailable",
+                        message="Could not check the latest earnings releases with the SEC.", ticker=request.ticker) from exc
                 limitations.append(f"Ask-time EDGAR sync failed: {exc}")
                 return workspace, self._maintenance_state(
                     status="failed" if workspace is None else "deferred",
@@ -736,6 +743,16 @@ class EdgarSyncService:
             sync_response.metadataState.newAccessions > 0 or sync_response.bodyCacheState.downloadedFilings > 0
         )
         needs_index = index_state.status != "ready" or sync_changed_local_inputs or hydration_changed_local_inputs
+        if index_state.status == "stale" and index_state.staleAccessions and self._intelligence._index_state_is_usable_for_answer(index_state):
+            scoped, _ = self._intelligence._planned_retrieval_request(paths, request)
+            required = set(scoped.accessionNumbers)
+            if required and required <= self._intelligence._indexed_accessions(paths.intelligence_dir / "index/retrieval.sqlite3"):
+                needs_index = False
+        if asks_about_current_guidance(request.question) and self._intelligence._index_state_is_usable_for_answer(index_state):
+            _, plan = self._intelligence._planned_retrieval_request(paths, request)
+            if "earnings_outlook" in plan.reasons:
+                # Outlook passages come directly from the two local SEC exhibits.
+                needs_index = False
         if not needs_index:
             return workspace, self._maintenance_state(
                 status=status,
@@ -887,10 +904,20 @@ class EdgarSyncService:
                         elif counters.skipped_files > before_skipped:
                             skipped_accessions.add(accession)
 
+            if asks_about_current_guidance(request.question) and earnings_release(filing):
+                self._artifact_store._download_research_exhibits(
+                    filing=filing, request=download_request, options=options,
+                    filings_dir=paths.stock_root, edgar_root=paths.edgar_root,
+                    manifest=manifest, counters=counters,
+                )
+
             if self._artifact_store._filing_is_cached(paths.stock_root, filing) and accession not in selected_accessions:
                 selected_filings.append(filing)
                 selected_accessions.add(accession)
                 added_to_selection = True
+
+        if counters.downloaded_files and not (downloaded_accessions or added_to_selection):
+            self._artifact_store._save_manifest(paths.manifest_path, manifest)
 
         if downloaded_accessions or added_to_selection:
             sorted_selection = self._sort_filings([filing for filing in selected_filings if isinstance(filing, dict)])
@@ -963,15 +990,22 @@ class EdgarSyncService:
         allowed_accessions.update(plan.accession_numbers)
         allowed_forms = {form.strip().upper() for form in request.forms if form.strip()}
         allowed_forms.update(plan.forms)
-        explicit_scope = bool(allowed_accessions or allowed_forms or request.startDate or request.endDate)
+        if "report_period_unavailable" in plan.reasons:
+            return []
+        # A form name limits the search. By itself it does not request years of backfill.
+        explicit_scope = bool(allowed_accessions or request.startDate or request.endDate)
         inferred_history_scope = bool(DEEP_HISTORY_TERMS_RE.search(request.question))
         if not explicit_scope and not inferred_history_scope:
+            if allowed_forms:
+                matching = [f for f in self._sort_filings(all_filings) if f.get("form") in allowed_forms]
+                if not any(f.get("accessionNumber") in selected_accessions for f in matching):
+                    return matching[:1]
             return []
 
         candidates: list[dict[str, Any]] = []
         for filing in self._sort_filings(all_filings):
             accession = str(filing.get("accessionNumber") or "")
-            if not accession or accession in selected_accessions:
+            if not accession or (accession in selected_accessions and "earnings_outlook" not in plan.reasons):
                 continue
             if allowed_accessions:
                 if accession in allowed_accessions:
