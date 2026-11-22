@@ -13,3 +13,5 @@ frontend/.env
 frontend/.env.local
 .env
 data/filesystem-connectors/connectors.json
+
+.impeccable/review/

@@ -1,0 +1,451 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-22T12:20:24Z",
+  "title": "Design System: Investing Platform",
+  "extensions": {
+    "colorMeta": {
+      "shell": {
+        "displayName": "Shell",
+        "tonalRamp": [
+          "oklch(15.00% 0.0000 0.00)",
+          "oklch(26.43% 0.0000 0.00)",
+          "oklch(37.86% 0.0000 0.00)",
+          "oklch(49.29% 0.0000 0.00)",
+          "oklch(60.71% 0.0000 0.00)",
+          "oklch(72.14% 0.0000 0.00)",
+          "oklch(83.57% 0.0000 0.00)",
+          "oklch(95.00% 0.0000 0.00)"
+        ],
+        "role": "neutral"
+      },
+      "sidebar": {
+        "displayName": "Sidebar",
+        "tonalRamp": [
+          "oklch(15.00% 0.0000 0.00)",
+          "oklch(26.43% 0.0000 0.00)",
+          "oklch(37.86% 0.0000 0.00)",
+          "oklch(49.29% 0.0000 0.00)",
+          "oklch(60.71% 0.0000 0.00)",
+          "oklch(72.14% 0.0000 0.00)",
+          "oklch(83.57% 0.0000 0.00)",
+          "oklch(95.00% 0.0000 0.00)"
+        ],
+        "role": "neutral"
+      },
+      "panel": {
+        "displayName": "Panel",
+        "tonalRamp": [
+          "oklch(15.00% 0.0000 0.00)",
+          "oklch(26.43% 0.0000 0.00)",
+          "oklch(37.86% 0.0000 0.00)",
+          "oklch(49.29% 0.0000 0.00)",
+          "oklch(60.71% 0.0000 0.00)",
+          "oklch(72.14% 0.0000 0.00)",
+          "oklch(83.57% 0.0000 0.00)",
+          "oklch(95.00% 0.0000 0.00)"
+        ],
+        "role": "neutral"
+      },
+      "panel-soft": {
+        "displayName": "Panel soft",
+        "tonalRamp": [
+          "oklch(15.00% 0.0000 0.00)",
+          "oklch(26.43% 0.0000 0.00)",
+          "oklch(37.86% 0.0000 0.00)",
+          "oklch(49.29% 0.0000 0.00)",
+          "oklch(60.71% 0.0000 0.00)",
+          "oklch(72.14% 0.0000 0.00)",
+          "oklch(83.57% 0.0000 0.00)",
+          "oklch(95.00% 0.0000 0.00)"
+        ],
+        "role": "neutral"
+      },
+      "line": {
+        "displayName": "Line",
+        "tonalRamp": [
+          "oklch(15.00% 0.0000 0.00)",
+          "oklch(26.43% 0.0000 0.00)",
+          "oklch(37.86% 0.0000 0.00)",
+          "oklch(49.29% 0.0000 0.00)",
+          "oklch(60.71% 0.0000 0.00)",
+          "oklch(72.14% 0.0000 0.00)",
+          "oklch(83.57% 0.0000 0.00)",
+          "oklch(95.00% 0.0000 0.00)"
+        ],
+        "role": "neutral"
+      },
+      "text": {
+        "displayName": "Text",
+        "tonalRamp": [
+          "oklch(15.00% 0.0000 0.00)",
+          "oklch(26.43% 0.0000 0.00)",
+          "oklch(37.86% 0.0000 0.00)",
+          "oklch(49.29% 0.0000 0.00)",
+          "oklch(60.71% 0.0000 0.00)",
+          "oklch(72.14% 0.0000 0.00)",
+          "oklch(83.57% 0.0000 0.00)",
+          "oklch(95.00% 0.0000 0.00)"
+        ],
+        "role": "neutral"
+      },
+      "muted": {
+        "displayName": "Muted",
+        "tonalRamp": [
+          "oklch(15.00% 0.0000 0.00)",
+          "oklch(26.43% 0.0000 0.00)",
+          "oklch(37.86% 0.0000 0.00)",
+          "oklch(49.29% 0.0000 0.00)",
+          "oklch(60.71% 0.0000 0.00)",
+          "oklch(72.14% 0.0000 0.00)",
+          "oklch(83.57% 0.0000 0.00)",
+          "oklch(95.00% 0.0000 0.00)"
+        ],
+        "role": "neutral"
+      },
+      "accent": {
+        "displayName": "Accent",
+        "tonalRamp": [
+          "oklch(15.00% 0.0000 0.00)",
+          "oklch(26.43% 0.0000 0.00)",
+          "oklch(37.86% 0.0000 0.00)",
+          "oklch(49.29% 0.0000 0.00)",
+          "oklch(60.71% 0.0000 0.00)",
+          "oklch(72.14% 0.0000 0.00)",
+          "oklch(83.57% 0.0000 0.00)",
+          "oklch(95.00% 0.0000 0.00)"
+        ],
+        "role": "primary"
+      },
+      "safe": {
+        "displayName": "Safe",
+        "tonalRamp": [
+          "oklch(15.00% 0.1421 162.02)",
+          "oklch(26.43% 0.1421 162.02)",
+          "oklch(37.86% 0.1421 162.02)",
+          "oklch(49.29% 0.1421 162.02)",
+          "oklch(60.71% 0.1421 162.02)",
+          "oklch(72.14% 0.1421 162.02)",
+          "oklch(83.57% 0.1421 162.02)",
+          "oklch(95.00% 0.1421 162.02)"
+        ]
+      },
+      "caution": {
+        "displayName": "Caution",
+        "tonalRamp": [
+          "oklch(15.00% 0.1364 85.70)",
+          "oklch(26.43% 0.1364 85.70)",
+          "oklch(37.86% 0.1364 85.70)",
+          "oklch(49.29% 0.1364 85.70)",
+          "oklch(60.71% 0.1364 85.70)",
+          "oklch(72.14% 0.1364 85.70)",
+          "oklch(83.57% 0.1364 85.70)",
+          "oklch(95.00% 0.1364 85.70)"
+        ]
+      },
+      "danger": {
+        "displayName": "Danger",
+        "tonalRamp": [
+          "oklch(15.00% 0.1649 26.22)",
+          "oklch(26.43% 0.1649 26.22)",
+          "oklch(37.86% 0.1649 26.22)",
+          "oklch(49.29% 0.1649 26.22)",
+          "oklch(60.71% 0.1649 26.22)",
+          "oklch(72.14% 0.1649 26.22)",
+          "oklch(83.57% 0.1649 26.22)",
+          "oklch(95.00% 0.1649 26.22)"
+        ]
+      },
+      "nav-text": {
+        "displayName": "Nav text",
+        "tonalRamp": [
+          "oklch(15.00% 0.0000 0.00)",
+          "oklch(26.43% 0.0000 0.00)",
+          "oklch(37.86% 0.0000 0.00)",
+          "oklch(49.29% 0.0000 0.00)",
+          "oklch(60.71% 0.0000 0.00)",
+          "oklch(72.14% 0.0000 0.00)",
+          "oklch(83.57% 0.0000 0.00)",
+          "oklch(95.00% 0.0000 0.00)"
+        ],
+        "role": "neutral"
+      },
+      "nav-hover": {
+        "displayName": "Nav hover",
+        "tonalRamp": [
+          "oklch(15.00% 0.0000 0.00)",
+          "oklch(26.43% 0.0000 0.00)",
+          "oklch(37.86% 0.0000 0.00)",
+          "oklch(49.29% 0.0000 0.00)",
+          "oklch(60.71% 0.0000 0.00)",
+          "oklch(72.14% 0.0000 0.00)",
+          "oklch(83.57% 0.0000 0.00)",
+          "oklch(95.00% 0.0000 0.00)"
+        ],
+        "role": "neutral"
+      },
+      "nav-active": {
+        "displayName": "Nav active",
+        "tonalRamp": [
+          "oklch(15.00% 0.0000 0.00)",
+          "oklch(26.43% 0.0000 0.00)",
+          "oklch(37.86% 0.0000 0.00)",
+          "oklch(49.29% 0.0000 0.00)",
+          "oklch(60.71% 0.0000 0.00)",
+          "oklch(72.14% 0.0000 0.00)",
+          "oklch(83.57% 0.0000 0.00)",
+          "oklch(95.00% 0.0000 0.00)"
+        ],
+        "role": "neutral"
+      },
+      "rail-active": {
+        "displayName": "Rail active",
+        "tonalRamp": [
+          "oklch(15.00% 0.0000 0.00)",
+          "oklch(26.43% 0.0000 0.00)",
+          "oklch(37.86% 0.0000 0.00)",
+          "oklch(49.29% 0.0000 0.00)",
+          "oklch(60.71% 0.0000 0.00)",
+          "oklch(72.14% 0.0000 0.00)",
+          "oklch(83.57% 0.0000 0.00)",
+          "oklch(95.00% 0.0000 0.00)"
+        ],
+        "role": "neutral"
+      },
+      "control-fill": {
+        "displayName": "Control fill",
+        "tonalRamp": [
+          "oklch(15.00% 0.0000 0.00)",
+          "oklch(26.43% 0.0000 0.00)",
+          "oklch(37.86% 0.0000 0.00)",
+          "oklch(49.29% 0.0000 0.00)",
+          "oklch(60.71% 0.0000 0.00)",
+          "oklch(72.14% 0.0000 0.00)",
+          "oklch(83.57% 0.0000 0.00)",
+          "oklch(95.00% 0.0000 0.00)"
+        ],
+        "role": "neutral"
+      },
+      "control-line": {
+        "displayName": "Control line",
+        "tonalRamp": [
+          "oklch(15.00% 0.0000 0.00)",
+          "oklch(26.43% 0.0000 0.00)",
+          "oklch(37.86% 0.0000 0.00)",
+          "oklch(49.29% 0.0000 0.00)",
+          "oklch(60.71% 0.0000 0.00)",
+          "oklch(72.14% 0.0000 0.00)",
+          "oklch(83.57% 0.0000 0.00)",
+          "oklch(95.00% 0.0000 0.00)"
+        ],
+        "role": "neutral"
+      },
+      "tooltip": {
+        "displayName": "Tooltip",
+        "tonalRamp": [
+          "oklch(15.00% 0.0000 0.00)",
+          "oklch(26.43% 0.0000 0.00)",
+          "oklch(37.86% 0.0000 0.00)",
+          "oklch(49.29% 0.0000 0.00)",
+          "oklch(60.71% 0.0000 0.00)",
+          "oklch(72.14% 0.0000 0.00)",
+          "oklch(83.57% 0.0000 0.00)",
+          "oklch(95.00% 0.0000 0.00)"
+        ],
+        "role": "neutral"
+      },
+      "white": {
+        "displayName": "White",
+        "tonalRamp": [
+          "oklch(15.00% 0.0000 0.00)",
+          "oklch(26.43% 0.0000 0.00)",
+          "oklch(37.86% 0.0000 0.00)",
+          "oklch(49.29% 0.0000 0.00)",
+          "oklch(60.71% 0.0000 0.00)",
+          "oklch(72.14% 0.0000 0.00)",
+          "oklch(83.57% 0.0000 0.00)",
+          "oklch(95.00% 0.0000 0.00)"
+        ],
+        "role": "neutral"
+      }
+    },
+    "typographyMeta": {
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Workspace titles."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Navigation row labels."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Group headings and search."
+      },
+      "tooltip": {
+        "displayName": "Tooltip",
+        "purpose": "Hover and keyboard-focus rail titles."
+      },
+      "mono": {
+        "displayName": "Mono",
+        "purpose": "Existing numeric and code-like content."
+      }
+    },
+    "shadows": [
+      {
+        "name": "rail-tooltip",
+        "value": "0 4px 12px #0003",
+        "purpose": "Separate light hover titles from the charcoal navigation."
+      }
+    ],
+    "motion": [
+      {
+        "name": "sidebar-slide",
+        "value": "220ms cubic-bezier(0.16, 1, 0.3, 1)",
+        "purpose": "Desktop grid width and sidebar transform; narrow-screen drawer transform."
+      },
+      {
+        "name": "control-state",
+        "value": "140ms ease",
+        "purpose": "Control color, background, and sidebar opacity transitions."
+      },
+      {
+        "name": "tooltip-state",
+        "value": "120ms ease",
+        "purpose": "Rail tooltip opacity and transform."
+      },
+      {
+        "name": "tooltip-delay",
+        "value": "180ms",
+        "purpose": "Delay hover and keyboard-focus titles."
+      },
+      {
+        "name": "group-chevron",
+        "value": "160ms ease",
+        "purpose": "Rotate collapsible group indicators."
+      },
+      {
+        "name": "reduced-motion",
+        "value": "@media (prefers-reduced-motion: reduce)",
+        "purpose": "Disable shell transitions, animation, and smooth scrolling."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "compact-workspace",
+        "value": "1100px"
+      },
+      {
+        "name": "navigation-drawer",
+        "value": "760px"
+      },
+      {
+        "name": "account-summary-two-columns-container",
+        "value": "1050px"
+      },
+      {
+        "name": "account-summary-one-column-container",
+        "value": "540px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Toolbar icon button",
+      "kind": "button",
+      "refersTo": "icon-button",
+      "description": "Sidebar toggle and search actions.",
+      "html": "<button class=\"ds-icon-button\" type=\"button\" aria-label=\"Go back\"><svg aria-hidden=\"true\" fill=\"none\" viewBox=\"0 0 24 24\" width=\"20\" height=\"20\"><path d=\"m14 6-6 6 6 6\" stroke=\"currentColor\" stroke-width=\"1.65\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg></button>",
+      "css": ".ds-icon-button{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border:0;border-radius:7px;background:transparent;color:var(--muted,#a4a4a4);cursor:pointer;transition:background 140ms ease,color 140ms ease;}.ds-icon-button:hover:not(:disabled){background:#ffffff0d;color:#fff;}.ds-icon-button:focus-visible{outline:2px solid var(--muted,#a4a4a4);outline-offset:3px;}.ds-icon-button:disabled{opacity:.3;cursor:default;}@media(prefers-reduced-motion:reduce){.ds-icon-button{transition:none!important;animation:none!important;}}"
+    },
+    {
+      "name": "Rail button with title",
+      "kind": "button",
+      "refersTo": "rail-button",
+      "description": "Persistent destination with hover and keyboard-focus title.",
+      "html": "<button class=\"ds-rail-button\" type=\"button\" aria-label=\"Dashboard\"><svg aria-hidden=\"true\" fill=\"none\" viewBox=\"0 0 24 24\" width=\"22\" height=\"22\"><path d=\"m3 10 9-7 9 7M5 9v11h5v-6h4v6h5V9\" stroke=\"currentColor\" stroke-width=\"1.65\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg><span class=\"ds-rail-tooltip\" aria-hidden=\"true\">Dashboard</span></button>",
+      "css": ".ds-rail-button{position:relative;display:flex;align-items:center;justify-content:center;width:40px;height:40px;border:0;border-radius:10px;background:transparent;color:var(--muted,#a4a4a4);cursor:pointer;transition:color 140ms ease,background 140ms ease;}.ds-rail-button:hover,.ds-rail-button[aria-current=\"page\"]{background:#363636;color:#fff;}.ds-rail-button:focus-visible{outline:2px solid var(--muted,#a4a4a4);outline-offset:3px;}.ds-rail-tooltip{position:absolute;left:calc(100% + 12px);top:50%;transform:translateY(-50%) translateX(-3px);padding:7px 10px;border-radius:6px;background:#eee;color:var(--shell,#181818);font:500 12px/1.3 -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif;white-space:nowrap;box-shadow:0 4px 12px #0003;opacity:0;visibility:hidden;pointer-events:none;transition:opacity 120ms ease,transform 120ms ease,visibility 120ms;}.ds-rail-button:hover .ds-rail-tooltip,.ds-rail-button:focus-visible .ds-rail-tooltip{opacity:1;visibility:visible;transform:translateY(-50%);transition-delay:180ms;}@media(max-width:760px){.ds-rail-tooltip{display:none;}}@media(prefers-reduced-motion:reduce){.ds-rail-button,.ds-rail-tooltip{transition:none!important;animation:none!important;}}"
+    },
+    {
+      "name": "Selected rail button",
+      "kind": "button",
+      "refersTo": "rail-button-active",
+      "description": "Persistent destination with hover and keyboard-focus title.",
+      "html": "<button class=\"ds-rail-button\" type=\"button\" aria-label=\"Dashboard\" aria-current=\"page\"><svg aria-hidden=\"true\" fill=\"none\" viewBox=\"0 0 24 24\" width=\"22\" height=\"22\"><path d=\"m3 10 9-7 9 7M5 9v11h5v-6h4v6h5V9\" stroke=\"currentColor\" stroke-width=\"1.65\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg><span class=\"ds-rail-tooltip\" aria-hidden=\"true\">Dashboard</span></button>",
+      "css": ".ds-rail-button{position:relative;display:flex;align-items:center;justify-content:center;width:40px;height:40px;border:0;border-radius:10px;background:transparent;color:var(--muted,#a4a4a4);cursor:pointer;transition:color 140ms ease,background 140ms ease;}.ds-rail-button:hover,.ds-rail-button[aria-current=\"page\"]{background:#363636;color:#fff;}.ds-rail-button:focus-visible{outline:2px solid var(--muted,#a4a4a4);outline-offset:3px;}.ds-rail-tooltip{position:absolute;left:calc(100% + 12px);top:50%;transform:translateY(-50%) translateX(-3px);padding:7px 10px;border-radius:6px;background:#eee;color:var(--shell,#181818);font:500 12px/1.3 -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif;white-space:nowrap;box-shadow:0 4px 12px #0003;opacity:0;visibility:hidden;pointer-events:none;transition:opacity 120ms ease,transform 120ms ease,visibility 120ms;}.ds-rail-button:hover .ds-rail-tooltip,.ds-rail-button:focus-visible .ds-rail-tooltip{opacity:1;visibility:visible;transform:translateY(-50%);transition-delay:180ms;}@media(max-width:760px){.ds-rail-tooltip{display:none;}}@media(prefers-reduced-motion:reduce){.ds-rail-button,.ds-rail-tooltip{transition:none!important;animation:none!important;}}"
+    },
+    {
+      "name": "Navigation row",
+      "kind": "nav",
+      "refersTo": "nav-row",
+      "description": "Left-panel destination with a distinct current state.",
+      "html": "<button class=\"ds-nav-row\" type=\"button\"><svg aria-hidden=\"true\" fill=\"none\" viewBox=\"0 0 24 24\" width=\"18\" height=\"18\"><path d=\"M4 19h16M5 15l5-6 4 3 6-8M15 4h5v5\" stroke=\"currentColor\" stroke-width=\"1.65\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg><span>Market</span></button>",
+      "css": ".ds-nav-row{display:flex;align-items:center;gap:10px;min-height:36px;width:100%;padding:7px 10px;border:0;border-radius:7px;background:transparent;color:#d1d1d1;font:400 13px/20px -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif;text-align:left;cursor:pointer;transition:background 140ms ease,color 140ms ease;}.ds-nav-row svg{flex:0 0 18px;color:#b1b1b1;}.ds-nav-row span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}.ds-nav-row:hover{color:#fff;background:#2f2f2f;}.ds-nav-row[aria-current=\"page\"]{color:#fff;background:#353535;}.ds-nav-row:focus-visible{outline:2px solid var(--muted,#a4a4a4);outline-offset:3px;}@media(max-width:760px){.ds-nav-row{min-height:42px;}}@media(prefers-reduced-motion:reduce){.ds-nav-row{transition:none!important;animation:none!important;}}"
+    },
+    {
+      "name": "Selected navigation row",
+      "kind": "nav",
+      "refersTo": "nav-row-active",
+      "description": "Left-panel destination with a distinct current state.",
+      "html": "<button class=\"ds-nav-row\" type=\"button\" aria-current=\"page\"><svg aria-hidden=\"true\" fill=\"none\" viewBox=\"0 0 24 24\" width=\"18\" height=\"18\"><path d=\"M4 19h16M5 15l5-6 4 3 6-8M15 4h5v5\" stroke=\"currentColor\" stroke-width=\"1.65\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg><span>Market</span></button>",
+      "css": ".ds-nav-row{display:flex;align-items:center;gap:10px;min-height:36px;width:100%;padding:7px 10px;border:0;border-radius:7px;background:transparent;color:#d1d1d1;font:400 13px/20px -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif;text-align:left;cursor:pointer;transition:background 140ms ease,color 140ms ease;}.ds-nav-row svg{flex:0 0 18px;color:#b1b1b1;}.ds-nav-row span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}.ds-nav-row:hover{color:#fff;background:#2f2f2f;}.ds-nav-row[aria-current=\"page\"]{color:#fff;background:#353535;}.ds-nav-row:focus-visible{outline:2px solid var(--muted,#a4a4a4);outline-offset:3px;}@media(max-width:760px){.ds-nav-row{min-height:42px;}}@media(prefers-reduced-motion:reduce){.ds-nav-row{transition:none!important;animation:none!important;}}"
+    },
+    {
+      "name": "Workspace search",
+      "kind": "input",
+      "refersTo": "search",
+      "description": "A secondary search icon beside Dashboard opens a field in place of that navigation header; Cmd/Ctrl+K also opens it.",
+      "html": "<div class=\"ds-search\"><button type=\"button\" aria-label=\"Search workspaces\"><svg aria-hidden=\"true\" fill=\"none\" viewBox=\"0 0 24 24\" width=\"15\" height=\"15\"><path d=\"M21 21l-5-5M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z\" stroke=\"currentColor\" stroke-width=\"1.65\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg></button><input aria-label=\"Search workspaces\" placeholder=\"Search workspaces\u2026\"/><button type=\"button\" aria-label=\"Close search\"><svg aria-hidden=\"true\" fill=\"none\" viewBox=\"0 0 24 24\" width=\"15\" height=\"15\"><path d=\"m6 6 12 12M6 18 18 6\" stroke=\"currentColor\" stroke-width=\"1.65\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg></button></div>",
+      "css": ".ds-search{display:flex;align-items:center;gap:7px;min-width:0;padding-left:0;border:1px solid #555;border-radius:8px;color:var(--muted,#a4a4a4);background:#303030;}.ds-search>svg{flex-shrink:0;}.ds-search input{width:100%;min-width:0;height:36px;border:0;outline:0;background:transparent;color:var(--text,#ededed);font:400 12px -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif;caret-color:var(--text,#ededed);}.ds-search input::placeholder{color:var(--muted,#a4a4a4);}.ds-search:focus-within{outline:2px solid #888;outline-offset:1px;}.ds-search button{display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;width:28px;height:34px;border:0;border-radius:7px;background:transparent;color:var(--muted,#a4a4a4);cursor:pointer;transition:background 140ms ease,color 140ms ease;}.ds-search button:hover{background:#ffffff0d;color:#fff;}.ds-search button:focus-visible{outline:2px solid var(--muted,#a4a4a4);outline-offset:3px;}@media(prefers-reduced-motion:reduce){.ds-search{transition:none!important;animation:none!important;}}"
+    },
+    {
+      "name": "Workspace tab",
+      "kind": "nav",
+      "refersTo": "workspace-tab",
+      "description": "Raised tab with rounded upper corners, attached to its main content panel.",
+      "html": "<button class=\"ds-tab\" role=\"tab\" aria-selected=\"false\" type=\"button\">Overview</button>",
+      "css": ".ds-tab{--tab-bg:var(--panel-soft,#262626);position:relative;flex:0 0 auto;display:inline-flex;align-items:center;min-width:180px;max-width:240px;height:40px;border:1px solid var(--line,#383838);border-bottom:0;border-radius:8px 8px 0 0;background:linear-gradient(180deg,rgb(255 255 255 / 5.5%),transparent),var(--tab-bg);color:var(--muted,#a4a4a4);padding:0 14px;font:500 14px -apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;text-align:left;cursor:pointer;transition:background 140ms ease,border-color 140ms ease,color 140ms ease;}.ds-tab:hover{border-color:#555;color:var(--text,#ededed);}.ds-tab[aria-selected=\"true\"]{--tab-bg:var(--panel,#202020);z-index:1;color:var(--text,#ededed);}.ds-tab:focus-visible{outline:2px solid var(--muted,#a4a4a4);outline-offset:-4px;}.ds-tab:disabled{opacity:.5;cursor:default;}@media(prefers-reduced-motion:reduce){.ds-tab{transition:none!important;animation:none!important;}}"
+    },
+    {
+      "name": "Selected workspace tab",
+      "kind": "nav",
+      "refersTo": "workspace-tab-active",
+      "description": "Raised tab with rounded upper corners, attached to its main content panel.",
+      "html": "<button class=\"ds-tab\" role=\"tab\" aria-selected=\"true\" type=\"button\">Overview</button>",
+      "css": ".ds-tab{--tab-bg:var(--panel-soft,#262626);position:relative;flex:0 0 auto;display:inline-flex;align-items:center;min-width:180px;max-width:240px;height:40px;border:1px solid var(--line,#383838);border-bottom:0;border-radius:8px 8px 0 0;background:linear-gradient(180deg,rgb(255 255 255 / 5.5%),transparent),var(--tab-bg);color:var(--muted,#a4a4a4);padding:0 14px;font:500 14px -apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;text-align:left;cursor:pointer;transition:background 140ms ease,border-color 140ms ease,color 140ms ease;}.ds-tab:hover{border-color:#555;color:var(--text,#ededed);}.ds-tab[aria-selected=\"true\"]{--tab-bg:var(--panel,#202020);z-index:1;color:var(--text,#ededed);}.ds-tab:focus-visible{outline:2px solid var(--muted,#a4a4a4);outline-offset:-4px;}.ds-tab:disabled{opacity:.5;cursor:default;}@media(prefers-reduced-motion:reduce){.ds-tab{transition:none!important;animation:none!important;}}"
+    },
+    {
+      "name": "Metric card",
+      "kind": "card",
+      "refersTo": "metric-card",
+      "description": "Existing financial data container.",
+      "html": "<div class=\"ds-metric\"><div class=\"ds-metric-label\">Portfolio value</div><div class=\"ds-metric-value\">$12,345.67</div></div>",
+      "css": ".ds-metric{padding:16px;border:1px solid var(--line,#383838);border-radius:16px;background:var(--panel-soft,#262626);color:var(--text,#ededed);font-family:-apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif;}.ds-metric-label{margin-bottom:8px;font-size:11px;line-height:1.5;letter-spacing:.22em;text-transform:uppercase;color:var(--muted,#a4a4a4);}.ds-metric-value{font-size:24px;line-height:32px;font-weight:600;}"
+    }
+  ],
+  "narrative": {
+    "northStar": "ChatGPT desktop reference",
+    "overview": "The user's ChatGPT desktop reference fixes the shell's visual direction: charcoal navigation, a near-black workspace, system typography, and restrained outline icons. Compact controls and tonal selection states keep the investing content prominent.\n\nThis record extracts the implemented system from `frontend/src/index.css`, `frontend/tailwind.config.ts`, and `frontend/src/components/shell/`. Existing financial colors retain their meaning. The left navigation behavior is defined in `.impeccable/shell-brief.md`; the right order-entry panel retains its existing interactions.",
+    "keyCharacteristics": [
+      "Persistent icon navigation with hover and keyboard-focus titles.",
+      "Compact rows, quiet separators, and rounded control states.",
+      "Flat workspace surfaces with independent scrolling.",
+      "Financial status colors distinct from neutral navigation states."
+    ],
+    "rules": [],
+    "dos": [
+      "Do preserve the supplied ChatGPT desktop reference when extending the shell.",
+      "Do keep the icon rail visible when the left navigation panel collapses.",
+      "Do preserve financial color meanings, accessible labels, and visible keyboard focus.",
+      "Do use the existing system type, compact spacing, and neutral state fills for shared navigation.",
+      "Keep Crypto within the expandable navigation, without a separate rail button.",
+      "Use a straight sidebar-to-content boundary and let existing workspace tabs occupy the top space; omit the separate history toolbar.",
+      "Use an integrated macOS title bar with real traffic lights and an adjacent sidebar toggle. Hide repeated branding; place search as a secondary icon beside Dashboard."
+    ],
+    "donts": [
+      "Don't extend left-panel interaction changes to the right order-entry panel.",
+      "Don't use financial status colors as decorative navigation accents.",
+      "Don't flatten attached workspace tabs into pills or separate the active tab from its panel.",
+      "Don't rely on hover titles as the only accessible names for icon controls."
+    ]
+  }
+}
