@@ -12,7 +12,6 @@ import { Panel } from "../../components/Panel";
 import { ErrorState } from "../../components/ui/ErrorState";
 import { InlinePill, type InlinePillTone } from "../../components/ui/InlinePill";
 import {
-  DEFAULT_DASHBOARD_ACCOUNT_KEY,
   dashboardAccountHasAttachedSource,
   getDashboardAccountByKey,
   getDashboardAccountWithAttachedSource,
@@ -65,14 +64,19 @@ type AccountSourceSummary = AccountConnectorCard & {
 const CSV_FOLDER_CONNECTOR_ID: ConnectorCatalogId = "csvFolder";
 const AVAILABLE_CONNECTOR_OPTIONS = CONNECTOR_CATALOG.filter((connector) => connector.availability === "ready");
 
-export function DashboardWorkspace() {
+export function DashboardWorkspace({
+  selectedDashboardAccountKey,
+  onSelectDashboardAccount: setSelectedDashboardAccountKey,
+}: {
+  selectedDashboardAccountKey: DashboardAccountKey;
+  onSelectDashboardAccount: (accountKey: DashboardAccountKey) => void;
+}) {
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
   const [ibkrConnectorCollapsed, setIbkrConnectorCollapsed] = useState(false);
   const [coinbaseConnectorCollapsed, setCoinbaseConnectorCollapsed] = useState(false);
   const [filesystemConnectorCollapsedBySourceId, setFilesystemConnectorCollapsedBySourceId] = useState<Record<string, boolean>>({});
   const [editingFilesystemSourceId, setEditingFilesystemSourceId] = useState<string | null>(null);
   const [editingIbkrConnector, setEditingIbkrConnector] = useState(false);
-  const [selectedDashboardAccountKey, setSelectedDashboardAccountKey] = useState<DashboardAccountKey>(DEFAULT_DASHBOARD_ACCOUNT_KEY);
 
   const {
     coinbasePortfolioError,

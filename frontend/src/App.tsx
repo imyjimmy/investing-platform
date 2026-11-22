@@ -1,8 +1,10 @@
 import { lazy, Suspense, useState, type Dispatch, type SetStateAction } from "react";
 
 import { AppShell } from "./components/shell/AppShell";
-import { AppSidebarFooter, AppSidebarNavigation, type WorkspaceSurface } from "./components/shell/AppSidebarNavigation";
+import { WORKSPACE_LINKS, type WorkspaceSurface } from "./components/shell/AppSidebarNavigation";
 import { WorkspaceRouter, type WorkspaceRoute } from "./components/shell/WorkspaceRouter";
+import { DEFAULT_DASHBOARD_ACCOUNT_KEY, type DashboardAccountKey } from "./config/dashboardAccounts";
+import { useShellPreference } from "./components/shell/useShellPreferences";
 import { WorkspaceStage } from "./components/shell/WorkspaceStage";
 import { type InlinePillTone } from "./components/ui/InlinePill";
 import { useAccountData, useConnectionStatusQuery } from "./features/account/useAccountData";
@@ -34,6 +36,23 @@ const TickerWorkspace = lazy(() => import("./components/TickerWorkspace").then((
 
 function App() {
   const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceSurface>("dashboard");
+  const [selectedAccountKey, setSelectedAccountKey] = useState<DashboardAccountKey>(DEFAULT_DASHBOARD_ACCOUNT_KEY);
+  const [recentWorkspaces, setRecentWorkspaces] = useShellPreference<WorkspaceSurface[]>(
+    "investing.shell.recents.v1",
+    [],
+    (value): value is WorkspaceSurface[] =>
+      Array.isArray(value) && value.length <= 5 && value.every((key) => WORKSPACE_LINKS.some((link) => link.key === key)),
+  );
+  function navigate(workspace: WorkspaceSurface) {
+    setActiveWorkspace(workspace);
+    if (workspace !== "dashboard" && workspace !== "globalSettings") {
+      setRecentWorkspaces((previous) => [workspace, ...previous.filter((key) => key !== workspace)].slice(0, 5));
+    }
+  }
+  function selectAccount(account: DashboardAccountKey) {
+    setSelectedAccountKey(account);
+    navigate("dashboard");
+  }
   const [selectedStockSymbol, setSelectedStockSymbol] = useState("NVDA");
 
   function openSymbolWorkspace(nextSymbol: string, nextWorkspace: "ticker" | "options") {
@@ -42,7 +61,7 @@ function App() {
       return;
     }
     setSelectedStockSymbol(normalizedSymbol);
-    setActiveWorkspace(nextWorkspace);
+    navigate(nextWorkspace);
   }
 
   function renderTickerWorkspace() {
@@ -63,14 +82,17 @@ function App() {
       <OptionsWorkspaceRoute
         activeWorkspace={activeWorkspace}
         initialSymbol={selectedStockSymbol}
-        onOpenChain={() => setActiveWorkspace("options")}
+        onOpenChain={() => navigate("options")}
         onSymbolChange={setSelectedStockSymbol}
       />
     );
   }
 
   const workspaceRoutes: Array<WorkspaceRoute<WorkspaceSurface>> = [
-    { key: "dashboard", render: () => <DashboardWorkspace /> },
+    {
+      key: "dashboard",
+      render: () => <DashboardWorkspace selectedDashboardAccountKey={selectedAccountKey} onSelectDashboardAccount={selectAccount} />,
+    },
     { key: "market", render: () => <StockMarketWorkspaceRoute onOpenSymbol={openSymbolWorkspace} /> },
     { key: "ticker", render: renderTickerWorkspace },
     { key: "options", render: renderOptionsWorkspace },
@@ -87,12 +109,11 @@ function App() {
 
   return (
     <AppShell
-      activeIsHome={activeWorkspace === "dashboard"}
-      footer={<AppSidebarFooter activeWorkspace={activeWorkspace} onSelectWorkspace={setActiveWorkspace} />}
-      onHome={() => {
-        setActiveWorkspace("dashboard");
-      }}
-      sidebar={<AppSidebarNavigation activeWorkspace={activeWorkspace} onSelectWorkspace={setActiveWorkspace} />}
+      activeWorkspace={activeWorkspace}
+      onSelectWorkspace={navigate}
+      selectedAccountKey={selectedAccountKey}
+      onSelectAccount={selectAccount}
+      recentWorkspaces={recentWorkspaces}
     >
       <WorkspaceStage>
         <Suspense fallback={<WorkspaceLoadingFallback />}>
