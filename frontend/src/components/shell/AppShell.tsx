@@ -5,6 +5,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
+import { isTauri } from "@tauri-apps/api/core";
 import {
   AppSidebarNavigation,
   type AppSidebarProps,
@@ -32,6 +33,9 @@ const railItems: {
   { key: "options", label: "Options", icon: "options" },
   { key: "stockIntel", label: "Stock intelligence", icon: "document" },
 ];
+
+// Only the macOS desktop window uses an overlay title bar.
+const nativeTitlebar = isTauri() && /Mac/.test(navigator.platform);
 
 export function AppShell({ children, ...navigation }: Props) {
   const [desktopOpen, setDesktopOpen] = useShellPreference(
@@ -157,19 +161,22 @@ export function AppShell({ children, ...navigation }: Props) {
 
   return (
     <div
-      className={`app-shell ${sidebarOpen ? "is-sidebar-open" : ""}`}
+      className={`app-shell ${sidebarOpen ? "is-sidebar-open" : ""} ${nativeTitlebar ? "has-native-titlebar" : ""}`}
       style={{ "--sidebar-open-width": `${sidebarWidth}px` } as CSSProperties}
     >
       <a href="#workspace-content" className="shell-skip-link">
         Skip to workspace
       </a>
-      <div className="shell-topbar">
+      <div
+        className="shell-topbar"
+        data-tauri-drag-region={nativeTitlebar ? true : undefined}
+      >
         <button
           ref={toggleRef}
           aria-controls="app-sidebar"
           aria-expanded={sidebarOpen}
           aria-label={sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
-          className="shell-icon-button"
+          className="shell-icon-button shell-sidebar-toggle"
           onClick={() => setOpen(!sidebarOpen)}
           title="Toggle sidebar (⌘/Ctrl B)"
           type="button"

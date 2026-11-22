@@ -99,6 +99,14 @@ button:disabled {
   padding: 0 8px;
   overflow: hidden;
 }
+.has-native-titlebar .shell-topbar {
+  grid-column: 1 / -1;
+  padding-left: 88px;
+  user-select: none;
+}
+.has-native-titlebar .shell-stage {
+  grid-row: 2;
+}
 .shell-icon-button {
   display: inline-flex;
   align-items: center;
@@ -120,6 +128,10 @@ button:disabled {
 }
 .shell-icon-button:disabled {
   opacity: 0.3;
+}
+.shell-sidebar-toggle svg {
+  width: 16px;
+  height: 16px;
 }
 .shell-icon-rail {
   grid-column: 1;

@@ -13,6 +13,9 @@
     "windows": [
       {
         "title": "Investing Platform",
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": { "x": 16, "y": 26 },
         "width": 1600,
         "height": 1040,
         "minWidth": 1280,

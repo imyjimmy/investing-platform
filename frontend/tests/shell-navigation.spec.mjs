@@ -89,6 +89,39 @@ test("search reveals collapsed sections, supports empty results, and navigates",
   );
 });
 
+test("macOS title bar keeps window controls clear while navigation collapses", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    window.isTauri = true;
+    Object.defineProperty(navigator, "platform", { value: "MacIntel" });
+  });
+  await page.reload();
+  const toggle = sidebarToggle(page);
+  const titlebar = page.locator(".shell-topbar");
+  await expect(titlebar).toHaveAttribute("data-tauri-drag-region", "true");
+  const toggleBox = await toggle.boundingBox();
+  expect(toggleBox.x).toBeGreaterThanOrEqual(88);
+  expect(toggleBox.y + toggleBox.height).toBeLessThanOrEqual(48);
+  const tabs = page.getByRole("tablist", { name: "Dashboard accounts" });
+  expect((await tabs.boundingBox()).y).toBeGreaterThanOrEqual(48);
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  expect((await toggle.boundingBox()).x).toBe(toggleBox.x);
+  expect((await tabs.boundingBox()).y).toBeGreaterThanOrEqual(48);
+  await toggle.click();
+  const searchButton = page.getByRole("button", {
+    name: "Search workspaces",
+    exact: true,
+  });
+  await expect(searchButton).toHaveText("");
+  await searchButton.click();
+  const searchInput = page.getByRole("textbox", { name: "Search workspaces" });
+  await expect(searchInput).toBeFocused();
+  await searchInput.press("Escape");
+  await expect(searchButton).toBeFocused();
+});
+
 test("account tabs use the top space and preserve account context across workspaces", async ({
   page,
 }) => {
