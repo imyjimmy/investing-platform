@@ -43,7 +43,7 @@ export function AccountSourceSummaryCards({
   const notes = [...new Set([totalPnlHint, todayPnlHint, netWorthHint].filter(Boolean))];
   return (
     <div className="grid gap-3">
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <div className="account-summary-grid grid gap-4">
         <MetricCard
           label={<span className="flex h-[34px] items-center">Total PnL</span>}
           secondaryValue={fmtSignedPct(totalPnlPct) ?? null}

@@ -411,6 +411,7 @@ button:disabled {
   overscroll-behavior: contain;
   background: var(--shell);
   padding: 8px 28px 48px;
+  container-type: inline-size;
 }
 .workspace-stage-inner {
   max-width: 1680px;
@@ -882,5 +883,20 @@ button:disabled {
 @media (prefers-reduced-motion: reduce) {
   .pnl-view-switch::before {
     transition: none;
+  }
+}
+
+/* Account summaries respond to the space left by the navigation panel. */
+.account-summary-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+@container (max-width: 1050px) {
+  .account-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@container (max-width: 540px) {
+  .account-summary-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
