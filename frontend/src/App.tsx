@@ -1,10 +1,9 @@
 import { lazy, Suspense, useState, type Dispatch, type SetStateAction } from "react";
 
 import { AppShell } from "./components/shell/AppShell";
-import { WORKSPACE_LINKS, type WorkspaceSurface } from "./components/shell/AppSidebarNavigation";
+import { type WorkspaceSurface } from "./components/shell/AppSidebarNavigation";
 import { WorkspaceRouter, type WorkspaceRoute } from "./components/shell/WorkspaceRouter";
 import { DEFAULT_DASHBOARD_ACCOUNT_KEY, type DashboardAccountKey } from "./config/dashboardAccounts";
-import { useShellPreference } from "./components/shell/useShellPreferences";
 import { WorkspaceStage } from "./components/shell/WorkspaceStage";
 import { type InlinePillTone } from "./components/ui/InlinePill";
 import { useAccountData, useConnectionStatusQuery } from "./features/account/useAccountData";
@@ -35,20 +34,8 @@ const StockMarketWorkspace = lazy(() =>
 const TickerWorkspace = lazy(() => import("./components/TickerWorkspace").then((module) => ({ default: module.TickerWorkspace })));
 
 function App() {
-  const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceSurface>("dashboard");
+  const [activeWorkspace, navigate] = useState<WorkspaceSurface>("dashboard");
   const [selectedAccountKey, setSelectedAccountKey] = useState<DashboardAccountKey>(DEFAULT_DASHBOARD_ACCOUNT_KEY);
-  const [recentWorkspaces, setRecentWorkspaces] = useShellPreference<WorkspaceSurface[]>(
-    "investing.shell.recents.v1",
-    [],
-    (value): value is WorkspaceSurface[] =>
-      Array.isArray(value) && value.length <= 5 && value.every((key) => WORKSPACE_LINKS.some((link) => link.key === key)),
-  );
-  function navigate(workspace: WorkspaceSurface) {
-    setActiveWorkspace(workspace);
-    if (workspace !== "dashboard" && workspace !== "globalSettings") {
-      setRecentWorkspaces((previous) => [workspace, ...previous.filter((key) => key !== workspace)].slice(0, 5));
-    }
-  }
   function selectAccount(account: DashboardAccountKey) {
     setSelectedAccountKey(account);
     navigate("dashboard");
@@ -113,7 +100,6 @@ function App() {
       onSelectWorkspace={navigate}
       selectedAccountKey={selectedAccountKey}
       onSelectAccount={selectAccount}
-      recentWorkspaces={recentWorkspaces}
     >
       <WorkspaceStage>
         <Suspense fallback={<WorkspaceLoadingFallback />}>

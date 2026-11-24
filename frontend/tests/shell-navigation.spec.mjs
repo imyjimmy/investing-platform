@@ -84,8 +84,9 @@ test("search reveals collapsed sections, supports empty results, and navigates",
   await expect(page.getByTestId("ticker-symbol-input")).toBeVisible();
   await input.press("Escape");
   await expect(input).toHaveCount(0);
-  await expect(page.getByTestId("shell-group-recents")).toContainText(
-    "Stocks · Ticker",
+  await expect(page.getByTestId("nav-stocks-ticker")).toHaveAttribute(
+    "aria-current",
+    "page",
   );
 });
 

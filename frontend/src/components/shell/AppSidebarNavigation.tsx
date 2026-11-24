@@ -110,19 +110,11 @@ export const WORKSPACE_LINKS: WorkspaceLink[] = [
     icon: "settings",
   },
 ];
-export const workspaceLabel = (key: WorkspaceSurface) => {
-  const item = WORKSPACE_LINKS.find((link) => link.key === key)!;
-  return item.group === "Workspace"
-    ? item.title
-    : `${item.group} · ${item.title}`;
-};
-
 export type AppSidebarProps = {
   activeWorkspace: WorkspaceSurface;
   onSelectWorkspace: (workspace: WorkspaceSurface) => void;
   selectedAccountKey: string;
   onSelectAccount: (key: string) => void;
-  recentWorkspaces: WorkspaceSurface[];
   search: string;
 };
 
@@ -131,7 +123,6 @@ export function AppSidebarNavigation({
   onSelectWorkspace,
   selectedAccountKey,
   onSelectAccount,
-  recentWorkspaces,
   search,
 }: AppSidebarProps) {
   const query = search.trim().toLowerCase();
@@ -185,21 +176,6 @@ export function AppSidebarNavigation({
           </NavGroup>
         ) : null;
       })}
-      {!query && recentWorkspaces.length ? (
-        <NavGroup title="Recents">
-          {recentWorkspaces.map((key) => (
-            <button
-              className="shell-nav-row shell-recent-row"
-              key={key}
-              onClick={() => onSelectWorkspace(key)}
-              type="button"
-            >
-              <ShellIcon name="clock" />
-              <span>{workspaceLabel(key)}</span>
-            </button>
-          ))}
-        </NavGroup>
-      ) : null}
       {query && !tools.length && !accounts.length ? (
         <p className="shell-search-empty">
           No workspaces found for “{search}”.

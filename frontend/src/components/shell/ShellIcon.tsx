@@ -13,7 +13,6 @@ export type ShellIconName =
   | "sidebar"
   | "chevron"
   | "account"
-  | "clock"
   | "close";
 
 const paths: Record<ShellIconName, string> = {
@@ -34,7 +33,6 @@ const paths: Record<ShellIconName, string> = {
   chevron: "m8 10 4 4 4-4",
   account:
     "M20 12a8 8 0 1 1-16 0 8 8 0 0 1 16 0ZM15 8H10a2 2 0 0 0 0 4h4a2 2 0 0 1 0 4H9m3-10v12",
-  clock: "M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0ZM12 7v5l-3 2",
   close: "m6 6 12 12M6 18 18 6",
 };
 

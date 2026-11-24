@@ -350,9 +350,6 @@ button:disabled {
   padding: 8px 0;
   border-top: 1px solid #ffffff0a;
 }
-.shell-recent-row {
-  color: #b8b8b8;
-}
 .shell-search {
   display: flex;
   align-items: center;
