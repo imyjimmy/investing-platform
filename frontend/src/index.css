@@ -79,17 +79,21 @@ button:disabled {
 .app-shell {
   --sidebar-open-width: 256px;
   --sidebar-width: 0px;
+  --sidebar-motion: 220ms cubic-bezier(0.16, 1, 0.3, 1);
   display: grid;
   grid-template-columns: 52px var(--sidebar-width) minmax(0, 1fr);
   grid-template-rows: 48px minmax(0, 1fr);
   height: 100vh;
   height: 100dvh;
-  background: var(--sidebar);
-  transition: grid-template-columns 220ms cubic-bezier(0.16, 1, 0.3, 1);
+  background-color: var(--shell);
+  transition:
+    grid-template-columns var(--sidebar-motion),
+    background-color var(--sidebar-motion);
   isolation: isolate;
 }
 .app-shell.is-sidebar-open {
   --sidebar-width: var(--sidebar-open-width);
+  background-color: var(--sidebar);
 }
 .shell-topbar {
   grid-column: 1;
@@ -107,7 +111,8 @@ button:disabled {
   z-index: 40;
   min-width: 136px;
   padding-left: 88px;
-  background: var(--sidebar);
+  /* Share the rail's animated surface, including behind the native window controls. */
+  background-color: inherit;
   user-select: none;
 }
 .has-native-titlebar .shell-stage:not(:has(.chrome-tabs-shell:not(.is-inline))) {
@@ -122,7 +127,7 @@ button:disabled {
   /* Reserve the travel distance so the translated strip stays inside the workspace. */
   margin-right: calc(var(--workspace-stage-x) + var(--titlebar-tab-clearance));
   transform: translateX(max(0px, calc(var(--titlebar-tab-clearance) - var(--sidebar-width))));
-  transition: transform 220ms cubic-bezier(0.16, 1, 0.3, 1);
+  transition: transform var(--sidebar-motion);
 }
 .shell-icon-button {
   display: inline-flex;
@@ -159,7 +164,11 @@ button:disabled {
   gap: 8px;
   padding: 10px 5px 12px;
   z-index: 50;
-  border-right: 1px solid #ffffff08;
+  border-right: 1px solid transparent;
+  transition: border-color var(--sidebar-motion);
+}
+.app-shell.is-sidebar-open .shell-icon-rail {
+  border-right-color: #ffffff08;
 }
 .shell-rail-button {
   position: relative;
@@ -234,8 +243,8 @@ button:disabled {
   min-height: 0;
   padding: 0 8px;
   transition:
-    opacity 140ms ease,
-    transform 220ms cubic-bezier(0.16, 1, 0.3, 1);
+    opacity var(--sidebar-motion),
+    transform var(--sidebar-motion);
 }
 .app-shell:not(.is-sidebar-open) .shell-sidebar {
   opacity: 0;
@@ -484,7 +493,7 @@ button:disabled {
     transform: translateX(-115%);
     visibility: hidden;
     transition:
-      transform 220ms cubic-bezier(0.16, 1, 0.3, 1),
+      transform var(--sidebar-motion),
       visibility 220ms;
     border-radius: 0 10px 10px 0;
   }

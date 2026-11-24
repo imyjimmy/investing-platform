@@ -21,3 +21,5 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
 User correction: Crypto stays within the expandable sidebar and has no dedicated icon-rail button. Main-content switching preserves raised, attached tabs with rounded upper corners, as shown in the supplied Van Aken / Personal reference.
 
 User correction: Omit Recents and stop recording recent workspaces. The Crypto market icon shows a Bitcoin-marked front coin with two offset coin outlines behind it, matching the monochrome icon family.
+
+User correction: Match the reference's two states: collapsed navigation, including the native title bar, blends into the black workspace background; expanded navigation is gray across the icon rail, contents, and native title bar. Coordinate the surface fade with the contents slide and tab clearance using one 220ms decelerating transition. Preserve immediate state changes with reduced motion and allow smooth reversal during rapid toggles.

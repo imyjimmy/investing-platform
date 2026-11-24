@@ -133,6 +133,21 @@ test("tabs share the macOS title bar and stay clear of window controls when navi
   await intelTabs.getByRole("tab").last().click();
   await expect(intelTabs.getByRole("tab").last()).toHaveAttribute("aria-selected", "true");
   expect((await intelTabs.boundingBox()).x).toBeGreaterThanOrEqual(toggleBox.x + toggleBox.width + 8);
+
+  // Reversing a transition must still settle with clear, clickable tabs.
+  const collapsedTabsX = (await intelTabs.boundingBox()).x;
+  await toggle.click();
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect.poll(async () => (await intelTabs.boundingBox()).x).toBe(collapsedTabsX);
+  await intelTabs.getByRole("tab").first().click();
+  await expect(intelTabs.getByRole("tab").first()).toHaveAttribute("aria-selected", "true");
+
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await toggle.click();
+  expect((await intelTabs.boundingBox()).x).toBe(collapsedTabsX);
 });
 
 test("account tabs use the top space and preserve account context across workspaces", async ({

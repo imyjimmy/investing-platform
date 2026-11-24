@@ -446,7 +446,7 @@
       "Do preserve financial color meanings, accessible labels, and visible keyboard focus.",
       "Do use the existing system type, compact spacing, and neutral state fills for shared navigation.",
       "Keep Crypto within the expandable navigation, without a separate rail button.",
-      "Use a straight sidebar-to-content boundary and let existing workspace tabs occupy the top space; omit the separate history toolbar.",
+      "Use a straight sidebar-to-content boundary and let existing workspace tabs occupy the top space; omit the separate history toolbar. Collapsed navigation blends into the black workspace background; expanded navigation is gray across the rail, contents, and native title bar. Coordinate the surface fade, contents slide, and tab clearance with one 220ms decelerating transition, respecting reduced motion and interrupted toggles.",
       "Use an integrated macOS title bar with real traffic lights and an adjacent sidebar toggle. Put existing attached workspace tabs in the same top strip, preserving 136px of clearance for window controls when navigation collapses. Hide repeated branding; place search as a secondary icon beside Dashboard.",
       "Use shared neutral surface, text, and control-state tokens for menus and chart tooltips. Period menu options use normal title-case text; reserve financial colors for their existing semantic roles.",
       "Keep navigation focused on accounts and grouped tools without Recents. Represent Crypto with a Bitcoin-marked front coin and two coin outlines stacked behind it."
