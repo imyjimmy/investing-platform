@@ -90,7 +90,7 @@ test("search reveals collapsed sections, supports empty results, and navigates",
   );
 });
 
-test("macOS title bar keeps window controls clear while navigation collapses", async ({
+test("tabs share the macOS title bar and stay clear of window controls when navigation collapses", async ({
   page,
 }) => {
   await page.addInitScript(() => {
@@ -105,11 +105,15 @@ test("macOS title bar keeps window controls clear while navigation collapses", a
   expect(toggleBox.x).toBeGreaterThanOrEqual(88);
   expect(toggleBox.y + toggleBox.height).toBeLessThanOrEqual(48);
   const tabs = page.getByRole("tablist", { name: "Dashboard accounts" });
-  expect((await tabs.boundingBox()).y).toBeGreaterThanOrEqual(48);
+  expect((await tabs.boundingBox()).y).toBe(8);
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-expanded", "false");
   expect((await toggle.boundingBox()).x).toBe(toggleBox.x);
-  expect((await tabs.boundingBox()).y).toBeGreaterThanOrEqual(48);
+  expect((await tabs.boundingBox()).y).toBe(8);
+  const secondTab = tabs.getByRole("tab").nth(1);
+  await secondTab.click();
+  await expect(secondTab).toHaveAttribute("aria-selected", "true");
+  expect((await tabs.boundingBox()).x).toBeGreaterThanOrEqual(toggleBox.x + toggleBox.width + 8);
   await toggle.click();
   const searchButton = page.getByRole("button", {
     name: "Search workspaces",
@@ -121,6 +125,14 @@ test("macOS title bar keeps window controls clear while navigation collapses", a
   await expect(searchInput).toBeFocused();
   await searchInput.press("Escape");
   await expect(searchButton).toBeFocused();
+  await page.getByTestId("nav-stocks-intel").click();
+  const intelTabs = page.getByRole("tablist", { name: "Stock Intel tools" });
+  await expect(intelTabs).toBeVisible();
+  expect((await intelTabs.boundingBox()).y).toBe(8);
+  await toggle.click();
+  await intelTabs.getByRole("tab").last().click();
+  await expect(intelTabs.getByRole("tab").last()).toHaveAttribute("aria-selected", "true");
+  expect((await intelTabs.boundingBox()).x).toBeGreaterThanOrEqual(toggleBox.x + toggleBox.width + 8);
 });
 
 test("account tabs use the top space and preserve account context across workspaces", async ({

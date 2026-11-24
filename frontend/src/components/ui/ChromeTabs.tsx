@@ -14,8 +14,8 @@ type ChromeTabsProps<T extends string> = {
 
 export function ChromeTabs<T extends string>({ activeKey, ariaLabel, onSelect, tabs, variant = "attached" }: ChromeTabsProps<T>) {
   return (
-    <div className={`chrome-tabs-shell ${variant === "inline" ? "is-inline" : ""}`}>
-      <div aria-label={ariaLabel} className="chrome-tab-strip" role="tablist">
+    <div className={`chrome-tabs-shell ${variant === "inline" ? "is-inline" : ""}`} data-tauri-drag-region>
+      <div aria-label={ariaLabel} className="chrome-tab-strip" data-tauri-drag-region role="tablist">
         {tabs.map((tab) => {
           const active = tab.key === activeKey;
           return (
