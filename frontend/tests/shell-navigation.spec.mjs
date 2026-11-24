@@ -49,21 +49,33 @@ test("icon labels appear on hover and focus; rail remains usable with the sideba
 test("navigation resizes with pointer and keyboard and remembers width", async ({
   page,
 }) => {
+  await page.evaluate(() => {
+    localStorage.setItem("investing.shell.width.v1", "256");
+    localStorage.removeItem("investing.shell.width.v2");
+  });
+  await page.reload();
   const separator = page.getByRole("separator", { name: "Resize navigation" });
+  await expect(separator).toHaveAttribute("aria-valuenow", "208");
   const box = await separator.boundingBox();
   await page.mouse.move(box.x + box.width / 2, box.y + 120);
   await page.mouse.down();
   await page.mouse.move(box.x + box.width / 2 + 60, box.y + 120, { steps: 8 });
   await page.mouse.up();
-  await expect(separator).toHaveAttribute("aria-valuenow", "316");
+  await expect(separator).toHaveAttribute("aria-valuenow", "268");
   await page.reload();
-  await expect(separator).toHaveAttribute("aria-valuenow", "316");
+  await expect(separator).toHaveAttribute("aria-valuenow", "268");
   await separator.press("ArrowLeft");
-  await expect(separator).toHaveAttribute("aria-valuenow", "300");
+  await expect(separator).toHaveAttribute("aria-valuenow", "252");
+  await separator.press("Home");
+  await expect(separator).toHaveAttribute("aria-valuenow", "184");
   await separator.press("End");
   await expect(separator).toHaveAttribute("aria-valuenow", "380");
+  // Let the resize finish before aiming both clicks at the narrow handle.
+  await expect
+    .poll(async () => (await page.locator(".shell-sidebar-wrap").boundingBox()).width)
+    .toBe(380);
   await separator.dblclick();
-  await expect(separator).toHaveAttribute("aria-valuenow", "256");
+  await expect(separator).toHaveAttribute("aria-valuenow", "208");
 });
 
 test("search reveals collapsed sections, supports empty results, and navigates", async ({

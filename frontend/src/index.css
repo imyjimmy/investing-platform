@@ -77,7 +77,7 @@ button:disabled {
 }
 
 .app-shell {
-  --sidebar-open-width: 256px;
+  --sidebar-open-width: 208px;
   --sidebar-width: 0px;
   --sidebar-motion: 220ms cubic-bezier(0.16, 1, 0.3, 1);
   display: grid;

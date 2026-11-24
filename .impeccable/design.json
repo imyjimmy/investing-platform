@@ -442,7 +442,7 @@
     "rules": [],
     "dos": [
       "Do preserve the supplied ChatGPT desktop reference when extending the shell.",
-      "Do keep the icon rail visible when the left navigation panel collapses.",
+      "Do keep the 52px icon rail visible when the left navigation panel collapses. Use a compact 208px default contents panel (260px total), with resizing down to 184px and persistent custom widths.",
       "Do preserve financial color meanings, accessible labels, and visible keyboard focus.",
       "Do use the existing system type, compact spacing, and neutral state fills for shared navigation.",
       "Keep Crypto within the expandable navigation, without a separate rail button.",

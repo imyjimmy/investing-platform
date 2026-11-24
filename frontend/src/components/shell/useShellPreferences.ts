@@ -28,5 +28,5 @@ export const isBoolean = (value: unknown): value is boolean =>
 export const isPanelWidth = (value: unknown): value is number =>
   typeof value === "number" &&
   Number.isFinite(value) &&
-  value >= 220 &&
+  value >= 184 &&
   value <= 380;

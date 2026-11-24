@@ -44,8 +44,8 @@ export function AppShell({ children, ...navigation }: Props) {
     isBoolean,
   );
   const [sidebarWidth, setSidebarWidth] = useShellPreference(
-    "investing.shell.width.v1",
-    256,
+    "investing.shell.width.v2",
+    208,
     isPanelWidth,
   );
   const [narrow, setNarrow] = useState(
@@ -319,9 +319,9 @@ export function AppShell({ children, ...navigation }: Props) {
             label="Resize navigation"
             controls="app-sidebar"
             width={sidebarWidth}
-            min={220}
+            min={184}
             max={380}
-            defaultWidth={256}
+            defaultWidth={208}
             onResize={setSidebarWidth}
           />
         ) : null}
