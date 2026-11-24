@@ -171,7 +171,7 @@ The shell uses tonal layering and fine dividers for depth. Untabbed workspace fr
 
 ## Shapes
 
-Controls use the modest curves recorded in `rounded`: icon buttons and navigation rows share the control radius; attached tabs have 8px upper corners and square lower corners; search uses the input radius; rail controls and the drawer's outer corners use the rail radius. Metric cards retain the larger card radius. The sidebar-to-workspace boundary is straight. Attached content panels retain their rounded corners. Outline icons use rounded stroke caps and joins, with a 1.65px stroke on a 24-unit view box. The Options icon is a call-payoff shape: a horizontal segment followed by a straight rising diagonal at the strike, with simple chart axes.
+Controls use the modest curves recorded in `rounded`: icon buttons and navigation rows share the control radius; attached tabs have 8px upper corners and square lower corners; search uses the input radius; rail controls and the drawer's outer corners use the rail radius. Metric cards retain the larger card radius. The sidebar-to-workspace boundary is straight. Attached content panels retain their rounded corners. Outline icons use rounded stroke caps and joins, with a 1.65px stroke on a 24-unit view box. The Options icon is a call-payoff shape: a horizontal segment followed by a straight rising diagonal at the strike, with simple chart axes. The Crypto icon uses three overlapping coins, with a Bitcoin B on the front coin and two offset coin outlines behind it.
 
 ## Components
 

@@ -20,4 +20,4 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
 
 User correction: Crypto stays within the expandable sidebar and has no dedicated icon-rail button. Main-content switching preserves raised, attached tabs with rounded upper corners, as shown in the supplied Van Aken / Personal reference.
 
-User correction: Omit Recents and stop recording recent workspaces.
+User correction: Omit Recents and stop recording recent workspaces. The Crypto market icon shows a Bitcoin-marked front coin with two offset coin outlines behind it, matching the monochrome icon family.

@@ -449,7 +449,7 @@
       "Use a straight sidebar-to-content boundary and let existing workspace tabs occupy the top space; omit the separate history toolbar.",
       "Use an integrated macOS title bar with real traffic lights and an adjacent sidebar toggle. Hide repeated branding; place search as a secondary icon beside Dashboard.",
       "Use shared neutral surface, text, and control-state tokens for menus and chart tooltips. Period menu options use normal title-case text; reserve financial colors for their existing semantic roles.",
-      "Keep navigation focused on accounts and grouped tools without Recents."
+      "Keep navigation focused on accounts and grouped tools without Recents. Represent Crypto with a Bitcoin-marked front coin and two coin outlines stacked behind it."
     ],
     "donts": [
       "Don't extend left-panel interaction changes to the right order-entry panel.",
