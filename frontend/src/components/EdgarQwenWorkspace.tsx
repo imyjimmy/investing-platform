@@ -113,7 +113,7 @@ export function EdgarQwenWorkspace({
               : <button className="text-accent underline" onClick={() => void healthQuery.refetch()}>Check connection again</button>)}
             {busy && "Preparing your local filing library…"}
           </div>
-          <button type="button" className="rounded-full bg-accent px-6 py-2.5 font-semibold text-[#061512] disabled:opacity-45"
+          <button type="button" className="rounded-full bg-accent px-6 py-2.5 font-semibold text-shell disabled:opacity-45"
             data-testid="edgar-qwen-ask-button" disabled={!canAsk} onClick={() => void ask()}>{edgarQuestioning ? "Asking…" : "Ask question"}</button>
         </div>
         {prepareError && <InlineMessage tone="danger" message="The filings could not be prepared. Check the SEC connection and retry." />}

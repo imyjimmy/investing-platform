@@ -18,6 +18,8 @@
   --caution: #f7c85b;
   --danger: #ef6b62;
   --accent: #dedede;
+  --control-hover: #2f2f2f;
+  --control-active: #353535;
 }
 
 html,
@@ -254,7 +256,7 @@ button:disabled {
     color 140ms ease;
 }
 .shell-sidebar-home:hover {
-  background: #2f2f2f;
+  background: var(--control-hover);
   color: var(--text);
 }
 .shell-sidebar-scroll {
@@ -338,11 +340,11 @@ button:disabled {
 }
 .shell-nav-row:hover {
   color: #fff;
-  background: #2f2f2f;
+  background: var(--control-hover);
 }
 .shell-nav-row.is-active {
   color: #fff;
-  background: #353535;
+  background: var(--control-active);
 }
 .shell-sidebar-footer {
   padding: 8px 0;
@@ -598,7 +600,7 @@ button:disabled {
 
 .chrome-header-body {
   position: relative;
-  border-bottom: 1px solid rgba(95, 144, 146, 0.14);
+  border-bottom: 1px solid var(--line);
 }
 
 .workspace-frame-header {
@@ -632,7 +634,7 @@ button:disabled {
 
 .workspace-section {
   padding-top: 1.5rem;
-  border-top: 1px solid rgba(95, 144, 146, 0.1);
+  border-top: 1px solid var(--line);
 }
 
 .workspace-section--flush {
@@ -736,7 +738,8 @@ button:disabled {
 }
 
 .chrome-tab-dot.is-muted {
-  background: rgba(216, 231, 229, 0.34);
+  background: var(--muted);
+  opacity: 0.5;
 }
 
 .chrome-tab-badge {
@@ -744,7 +747,7 @@ button:disabled {
   font-size: 9px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: rgba(216, 231, 229, 0.52);
+  color: var(--muted);
   white-space: nowrap;
 }
 
@@ -796,7 +799,13 @@ button:disabled {
   padding: 5px;
   border: 1px solid var(--line);
   border-radius: 10px;
-  background: #102126;
+  background: var(--panel-soft);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 20px;
+  letter-spacing: normal;
+  text-transform: none;
   box-shadow: 0 8px 24px rgb(0 0 0 / 24%);
 }
 .pnl-period-option {
@@ -804,17 +813,17 @@ button:disabled {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 10px;
+  min-height: 36px;
+  padding: 8px 10px;
   border-radius: 6px;
   color: var(--text);
-  letter-spacing: 0.14em;
   cursor: pointer;
 }
 .pnl-period-option.is-active {
-  background: rgb(102 208 191 / 12%);
+  background: var(--control-active);
 }
 .pnl-period-option[aria-selected="true"] {
-  color: var(--accent);
+  color: var(--text);
 }
 .pnl-period-word:hover {
   color: var(--accent);

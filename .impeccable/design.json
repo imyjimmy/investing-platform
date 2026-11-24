@@ -266,6 +266,14 @@
           "oklch(95.00% 0.0000 0.00)"
         ],
         "role": "neutral"
+      },
+      "control-hover": {
+        "displayName": "Control hover",
+        "role": "neutral"
+      },
+      "control-active": {
+        "displayName": "Control active",
+        "role": "neutral"
       }
     },
     "typographyMeta": {
@@ -439,7 +447,8 @@
       "Do use the existing system type, compact spacing, and neutral state fills for shared navigation.",
       "Keep Crypto within the expandable navigation, without a separate rail button.",
       "Use a straight sidebar-to-content boundary and let existing workspace tabs occupy the top space; omit the separate history toolbar.",
-      "Use an integrated macOS title bar with real traffic lights and an adjacent sidebar toggle. Hide repeated branding; place search as a secondary icon beside Dashboard."
+      "Use an integrated macOS title bar with real traffic lights and an adjacent sidebar toggle. Hide repeated branding; place search as a secondary icon beside Dashboard.",
+      "Use shared neutral surface, text, and control-state tokens for menus and chart tooltips. Period menu options use normal title-case text; reserve financial colors for their existing semantic roles."
     ],
     "donts": [
       "Don't extend left-panel interaction changes to the right order-entry panel.",

@@ -440,20 +440,23 @@ export function StockMarketWorkspace({ gatewayPill, onOpenSymbol }: StockMarketW
                 <div className="h-[320px] rounded-2xl border border-line/80 bg-panelSoft px-3 py-3">
                   <ResponsiveContainer height="100%" width="100%">
                     <BarChart data={marketChartRows} layout="vertical" margin={{ top: 8, right: 12, left: 4, bottom: 8 }}>
-                      <CartesianGrid horizontal={false} stroke="rgba(133,155,149,0.14)" />
-                      <XAxis domain={[1, 3]} tick={{ fill: "#8f9f98", fontSize: 11 }} tickLine={false} type="number" />
-                      <YAxis dataKey="symbol" tick={{ fill: "#d5dfdb", fontSize: 12 }} tickLine={false} type="category" width={52} />
+                      <CartesianGrid horizontal={false} stroke="var(--line)" />
+                      <XAxis domain={[1, 3]} tick={{ fill: "var(--muted)", fontSize: 11 }} axisLine={{ stroke: "var(--line)" }} tickLine={false} type="number" />
+                      <YAxis dataKey="symbol" tick={{ fill: "var(--text)", fontSize: 12 }} axisLine={{ stroke: "var(--line)" }} tickLine={false} type="category" width={52} />
                       <Tooltip
                         contentStyle={{
-                          background: "#101a1e",
-                          border: "1px solid rgba(104, 144, 129, 0.22)",
-                          borderRadius: "14px",
-                          color: "#e8f1ed",
+                          background: "var(--panel-soft)",
+                          border: "1px solid var(--line)",
+                          borderRadius: "10px",
+                          color: "var(--text)",
+                          fontSize: "13px",
                         }}
-                        cursor={{ fill: "rgba(84, 138, 119, 0.08)" }}
+                        itemStyle={{ color: "var(--text)" }}
+                        labelStyle={{ color: "var(--muted)" }}
+                        cursor={{ fill: "var(--control-hover)" }}
                         formatter={(value: number) => [fmtNumber(value), "Beta"]}
                       />
-                      <Bar dataKey="beta" fill="#4f8e78" radius={[0, 8, 8, 0]} />
+                      <Bar dataKey="beta" fill="var(--accent)" radius={[0, 8, 8, 0]} />
                     </BarChart>
                   </ResponsiveContainer>
                 </div>

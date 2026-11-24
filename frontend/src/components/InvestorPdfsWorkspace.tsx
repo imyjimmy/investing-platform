@@ -374,7 +374,7 @@ export function InvestorPdfsWorkspace({
                   />
                   <p className="mt-3 text-sm text-muted">
                     Use <span className="mono text-text">[ticker]</span>. This run lands in{" "}
-                    <span className="mono text-[#9cead8]">{activeSyncResult?.stockPath || predictedStockRoot}</span>.
+                    <span className="mono text-accent">{activeSyncResult?.stockPath || predictedStockRoot}</span>.
                   </p>
                   {!stockTemplateValid ? (
                     <p className="mt-2 text-sm text-danger">

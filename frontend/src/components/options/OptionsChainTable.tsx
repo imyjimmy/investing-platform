@@ -155,7 +155,7 @@ function ChainFetchChevronRow({
   const capped = loadedPct >= maxRangePct;
   const label = direction === "lower" ? "Load lower strikes" : "Load higher strikes";
   const separatorClass =
-    direction === "lower" ? "shadow-[inset_0_-1px_0_rgba(95,144,146,0.14)]" : "shadow-[inset_0_1px_0_rgba(95,144,146,0.14)]";
+    direction === "lower" ? "shadow-[inset_0_-1px_0_var(--line)]" : "shadow-[inset_0_1px_0_var(--line)]";
   const chevronStack = (
     <span className="grid h-4 w-5 place-items-center text-[15px] leading-[0.35]">
       <span>⌃</span>
@@ -249,10 +249,10 @@ export function OptionsChainTable({
     const baseToneClass =
       tone === "call"
         ? selected
-          ? "border-accent/55 bg-accent/18 text-accent shadow-[0_0_0_1px_rgba(123,243,214,0.16)]"
+          ? "border-accent/55 bg-accent/18 text-accent ring-1 ring-accent/15"
           : "border-accent/25 bg-accent/8 text-accent hover:border-accent/45 hover:bg-accent/14"
         : selected
-          ? "border-caution/55 bg-caution/18 text-caution shadow-[0_0_0_1px_rgba(255,207,92,0.14)]"
+          ? "border-caution/55 bg-caution/18 text-caution ring-1 ring-caution/15"
           : "border-caution/25 bg-caution/8 text-caution hover:border-caution/45 hover:bg-caution/14";
     return (
       <button
@@ -273,12 +273,8 @@ export function OptionsChainTable({
     return (
       <tr key={key} className="border-t border-line/70" data-testid="chain-spot-row">
         <td
-          className="px-2.5 py-2"
+          className="bg-accent/[0.04] px-2.5 py-2"
           colSpan={chainTableColumnCount}
-          style={{
-            backgroundImage:
-              "repeating-linear-gradient(135deg, rgba(123, 243, 214, 0.08) 0, rgba(123, 243, 214, 0.08) 10px, transparent 10px, transparent 20px)",
-          }}
         >
           <div className="flex items-center justify-center gap-3 text-[11px] uppercase tracking-[0.18em] text-accent">
             <span>Spot</span>

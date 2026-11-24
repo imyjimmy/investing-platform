@@ -19,6 +19,8 @@ colors:
   rail-active: "#363636"
   control-fill: "#303030"
   control-line: "#555"
+  control-hover: "#2f2f2f"
+  control-active: "#353535"
   tooltip: "#eee"
   white: "#fff"
 typography:
@@ -147,6 +149,7 @@ The palette uses charcoal surface layers and silver text; semantic financial col
 - **Dividers** (`line`) and **control borders** (`control-line`) delineate containers and search.
 - **Navigation hover and selection** (`nav-hover`, `nav-active`, `rail-active`) brighten the surface and use `white` text.
 - **Control fill** (`control-fill`) fills search. Workspace tabs use `panel-soft`, with `panel` for the selected tab. **Tooltip light** (`tooltip`) inverts the rail label against the dark shell.
+- **Control states** (`control-hover`, `control-active`) provide shared neutral hover and active fills for navigation and menus. Floating menus and chart tooltips use `panel-soft`, `line`, `text`, and `muted`; avoid hardcoded colors from older themes.
 
 ## Typography
 
@@ -178,6 +181,8 @@ Controls use the modest curves recorded in `rounded`: icon buttons and navigatio
 - **Search:** an icon beside Dashboard opens workspace search, also available through Cmd/Ctrl+K. Opening search replaces that navigation header in place with a bordered, filled field, a 36px input, search icon, and close control. Focus outlines the whole field. Search filters the configured accounts and workspace names, including an explicit empty result message.
 - **Workspace tabs:** preserve the user's raised, attached tab reference. Tabs are 40px tall, at least 180px wide, spaced 6px apart, with rounded upper corners and square lower corners. A 1px outline and subtle top highlight provide depth. The selected tab shares the content-panel background and overlaps its top border by 1px. Tab strips scroll horizontally on narrow screens. Focus stays inside the tab so it is not clipped; disabled tabs use 0.5 opacity.
 - **Metric cards:** soft panel fill, a single divider-colored border, and standard padding. The compact uppercase label sits above a semibold value; existing tone variants color financial values.
+- **Period menu:** retain the compact uppercase trigger within the metric heading, but use ordinary title-case 13px/20px text inside the popup. The menu uses the shared charcoal surface and active-control fill, 36px rows, and a checkmark for the selected period. Hover and keyboard navigation share the same active treatment. Each card retains its own period selection.
+- **Chart overlays:** use the same neutral surface, divider, and text tokens as menus. The beta chart uses silver for magnitude; financial gain/loss and warning colors retain their semantic meanings elsewhere.
 - **Left panel:** Toggle Sidebar or Cmd/Ctrl+B slides the navigation panel while retaining the rail. Cmd/Ctrl+K opens search. Desktop width and open state persist. Its separator supports pointer dragging, 16px arrow-key steps, Home/End limits, and double-click reset. Narrow-screen selection, backdrop click, and Escape dismiss the drawer; keyboard focus is contained while open and returns to the toggle on dismissal.
 
 The sidebar slides over 220ms with `cubic-bezier(0.16, 1, 0.3, 1)`; ordinary color and opacity states use 140ms easing. Resizing suppresses the grid transition. Reduced-motion preferences disable shell transitions and animation. These timings, focus treatments, and responsive conditions live in the sidecar extensions rather than the frontmatter token schema.
